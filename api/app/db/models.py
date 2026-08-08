@@ -201,11 +201,15 @@ class RenderAttempt(TimestampMixin, Base):
     workflow_snapshot: Mapped[dict[str, object]] = mapped_column(
         JSON, default=dict, nullable=False
     )
+    binding_snapshot: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
     effective_values: Mapped[dict[str, object]] = mapped_column(
         JSON, default=dict, nullable=False
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    submission_claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     job: Mapped[TopicJob] = relationship(back_populates="render_attempts")

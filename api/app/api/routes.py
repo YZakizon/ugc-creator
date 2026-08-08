@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from app.core.statuses import JobStatus
+from app.core.urls import validate_render_node_url
 from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
@@ -129,15 +130,13 @@ def create_render_node(
     payload: RenderNodeCreate,
     repo: RenderExecutionRepository = Depends(render_repository),
 ) -> RenderNodeRead:
-    if (
-        not payload.base_url.startswith(("http://", "https://"))
-        or "@" in payload.base_url
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="Render node URL must be an HTTP URL without credentials",
-        )
-    return render_node_read(repo.create_node(payload))
+    try:
+        validated_url = validate_render_node_url(payload.base_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return render_node_read(
+        repo.create_node(payload.model_copy(update={"base_url": validated_url}))
+    )
 
 
 @router.get("/render-nodes", response_model=RenderNodeList)

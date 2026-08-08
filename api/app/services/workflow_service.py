@@ -5,20 +5,6 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-SUPPORTED_SEMANTIC_KEYS = frozenset(
-    {
-        "source_image",
-        "audio",
-        "script",
-        "video_prompt",
-        "seed",
-        "fps",
-        "duration",
-        "frame_count",
-        "width",
-        "height",
-    }
-)
 SUPPORTED_VALUE_TYPES = frozenset(
     {"string", "template", "integer", "number", "boolean"}
 )
@@ -35,6 +21,7 @@ ALLOWED_PLACEHOLDERS = frozenset(
     }
 )
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
+SEMANTIC_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 
 
 class WorkflowValidationError(ValueError):
@@ -77,9 +64,9 @@ def validate_bindings(
         node_id = _required_string(binding, "node_id")
         input_name = _required_string(binding, "input_name")
         value_type = _required_string(binding, "value_type")
-        if semantic_key not in SUPPORTED_SEMANTIC_KEYS:
+        if not SEMANTIC_KEY_PATTERN.fullmatch(semantic_key):
             raise WorkflowValidationError(
-                f"Unsupported workflow semantic key: {semantic_key}"
+                f"Invalid workflow semantic key: {semantic_key}"
             )
         if value_type not in SUPPORTED_VALUE_TYPES:
             raise WorkflowValidationError(

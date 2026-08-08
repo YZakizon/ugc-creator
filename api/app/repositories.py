@@ -1,9 +1,11 @@
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.core.statuses import BatchStatus, JobStatus
@@ -751,6 +753,25 @@ class SqlAlchemyConfigurationRepository:
 
     def get_voice_preview(self, preview_id: UUID) -> VoicePreview | None:
         with self.factory() as session:
+            return session.get(VoicePreview, preview_id)
+
+    def claim_voice_preview(self, preview_id: UUID) -> VoicePreview | None:
+        with self.factory() as session:
+            claimed = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(VoicePreview)
+                    .where(
+                        VoicePreview.id == preview_id,
+                        VoicePreview.status == "queued",
+                    )
+                    .values(status="generating", updated_at=utc_now())
+                ),
+            )
+            if claimed.rowcount != 1:
+                session.rollback()
+                return None
+            session.commit()
             return session.get(VoicePreview, preview_id)
 
     def update_voice_preview(

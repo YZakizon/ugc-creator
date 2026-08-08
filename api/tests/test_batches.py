@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Barrier
 
 import httpx
 import pytest
@@ -385,6 +387,36 @@ def test_sql_repository_requeues_stale_generating_voice_preview() -> None:
     assert recovered.status == "queued"
     assert recovered.error_message is None
     assert should_enqueue is True
+
+
+def test_voice_preview_claim_allows_only_one_concurrent_worker(tmp_path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'voice-claim.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    repository = SqlAlchemyConfigurationRepository(factory)
+    profile = repository.create_voice_profile(
+        VoiceProfileCreate(
+            name="Claimed voice",
+            provider="elevenlabs",
+            provider_voice_id="voice-claim",
+        )
+    )
+    preview, _ = repository.create_voice_preview(
+        profile.id, "Charge only once", "concurrent-claim"
+    )
+    barrier = Barrier(2)
+
+    def claim() -> bool:
+        barrier.wait()
+        return repository.claim_voice_preview(preview.id) is not None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claims = list(executor.map(lambda _index: claim(), range(2)))
+
+    assert sorted(claims) == [False, True]
 
 
 @pytest.mark.asyncio

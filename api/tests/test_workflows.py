@@ -72,6 +72,25 @@ def test_prepare_workflow_rejects_unknown_placeholder() -> None:
         prepare_workflow(invalid_workflow, binding_fixture(), {})
 
 
+def test_prepare_workflow_accepts_custom_provider_semantic_key() -> None:
+    workflow = {"1": {"class_type": "Camera", "inputs": {"strength": 0.5}}}
+    prepared = prepare_workflow(
+        workflow,
+        [
+            {
+                "semantic_key": "kling.camera_strength",
+                "node_id": "1",
+                "input_name": "strength",
+                "value_type": "number",
+                "required": True,
+            }
+        ],
+        {"kling.camera_strength": 0.8},
+    )
+
+    assert prepared["1"]["inputs"]["strength"] == 0.8  # type: ignore[index]
+
+
 @pytest.mark.asyncio
 async def test_workflow_template_endpoint_validates_and_persists_bindings() -> None:
     app.state.batch_repository = InMemoryBatchRepository()

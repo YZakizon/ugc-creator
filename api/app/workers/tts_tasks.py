@@ -30,7 +30,9 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
         raise RuntimeError("Voice preview not found")
     if preview.status == "completed" and preview.asset_key:
         return {"preview_id": preview_id, "status": preview.status}
-    repository.update_voice_preview(preview_uuid, status="generating")
+    preview = repository.claim_voice_preview(preview_uuid)
+    if preview is None:
+        return {"preview_id": preview_id, "status": "already_claimed"}
     settings = dict(preview.settings_json)
     output_format = str(settings.pop("output_format", "mp3_44100_128"))
     language_code = settings.pop("language_code", None)

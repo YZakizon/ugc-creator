@@ -57,6 +57,8 @@ services:
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_MODEL: ${ELEVENLABS_DEFAULT_MODEL:-eleven_multilingual_v2}
       COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+      COMFYUI_ALLOWED_HOSTS: ${COMFYUI_ALLOWED_HOSTS:-host.docker.internal}
+      RENDER_TIMEOUT_SECONDS: ${RENDER_TIMEOUT_SECONDS:-3600}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -84,6 +86,8 @@ services:
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_DEFAULT_MODEL: ${ELEVENLABS_DEFAULT_MODEL:-eleven_multilingual_v2}
       COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+      COMFYUI_ALLOWED_HOSTS: ${COMFYUI_ALLOWED_HOSTS:-host.docker.internal}
+      RENDER_TIMEOUT_SECONDS: ${RENDER_TIMEOUT_SECONDS:-3600}
       MEDIA_STORAGE_ROOT: /var/lib/ugc-creator/media
     extra_hosts:
       - "host.docker.internal:host-gateway"

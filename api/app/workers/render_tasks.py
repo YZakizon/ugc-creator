@@ -1,4 +1,6 @@
 import asyncio
+import os
+from datetime import UTC, datetime
 from pathlib import PurePath
 from uuid import UUID
 
@@ -9,6 +11,18 @@ from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
 from app.services.workflow_service import WorkflowValidationError, prepare_workflow
 from app.workers.celery_app import celery_app
+
+
+def render_has_timed_out(
+    submitted_at: datetime,
+    timeout_seconds: int,
+    *,
+    current_time: datetime | None = None,
+) -> bool:
+    checked_at = current_time or datetime.now(UTC)
+    if submitted_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=None)
+    return (checked_at - submitted_at).total_seconds() >= timeout_seconds
 
 
 def repository() -> RenderExecutionRepository:
@@ -40,6 +54,17 @@ async def apply_default_workflow_media(
 
 async def _prepare_and_submit(attempt_id: UUID) -> None:
     repo = repository()
+    existing = repo.get_attempt(attempt_id)
+    if existing is None:
+        raise LookupError("Render attempt not found")
+    if existing.external_job_id:
+        monitor_render.apply_async(args=[str(attempt_id)], countdown=1)
+        return
+    claimed, retry_after = repo.claim_submission(attempt_id)
+    if not claimed:
+        if retry_after:
+            submit_render.apply_async(args=[str(attempt_id)], countdown=retry_after)
+        return
     attempt, job, profile, node, template = repo.execution_context(attempt_id)
     renderer = ComfyUIRenderer(base_url=node.base_url, client_id=attempt.client_id)
     if attempt.external_job_id:
@@ -59,18 +84,9 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     await apply_default_workflow_media(
         values, template.metadata_json, renderer, LocalStorageProvider()
     )
-    bindings = [
-        {
-            "semantic_key": item.semantic_key,
-            "node_id": item.node_id,
-            "input_name": item.input_name,
-            "value_type": item.value_type,
-            "transform": item.transform,
-            "required": item.required,
-        }
-        for item in template.bindings
-    ]
-    workflow = prepare_workflow(template.workflow_json, bindings, values)
+    workflow = prepare_workflow(
+        attempt.workflow_snapshot, attempt.binding_snapshot, values
+    )
     repo.save_prepared(attempt_id, workflow, values)
     submission = await renderer.submit(
         RenderRequest(workflow=workflow, client_id=attempt.client_id)
@@ -101,10 +117,25 @@ async def _monitor(attempt_id: UUID) -> str:
     attempt, _job, _profile, node, _template = repo.execution_context(attempt_id)
     if not attempt.external_job_id:
         raise ValueError("Render attempt has no ComfyUI prompt ID")
+    timeout_seconds = max(60, int(os.getenv("RENDER_TIMEOUT_SECONDS", "3600")))
+    if attempt.submitted_at is not None and render_has_timed_out(
+        attempt.submitted_at, timeout_seconds
+    ):
+        repo.update_progress(
+            attempt_id,
+            "failed",
+            attempt.progress,
+            f"Render timed out after {timeout_seconds} seconds",
+        )
+        return "failed"
     renderer = ComfyUIRenderer(base_url=node.base_url, client_id=attempt.client_id)
     status = await renderer.get_status(attempt.external_job_id)
     if status.state in {"queued", "running"}:
-        repo.update_progress(attempt_id, "rendering", max(1, int(status.progress)))
+        repo.update_progress(
+            attempt_id,
+            "rendering",
+            max(attempt.progress, 1, int(status.progress)),
+        )
         monitor_render.apply_async(args=[str(attempt_id)], countdown=5)
         return "rendering"
     if status.state != "completed":

@@ -4,6 +4,15 @@ import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { generateJobContent, getDashboardSummary, getRenderAttempts, getRenderNodes, queueJobRender } from "@/lib/api";
+import type { Job, RenderAttempt } from "@/lib/api";
+
+export function failedJobRetryKind(
+  job: Pick<Job, "status" | "speech_script">,
+  attempt?: Pick<RenderAttempt, "status">,
+): "content" | "render" | null {
+  if (job.status !== "failed") return null;
+  return attempt?.status === "failed" && Boolean(job.speech_script) ? "render" : "content";
+}
 
 function StatCard({ label, value, hint, icon, tone }: {
   label: string;
@@ -95,12 +104,15 @@ export function RecentJobs() {
 
   return (
     <div className="jobs-list">
-      {jobs.map((job) => (
-        <div className="job-row" key={job.id}>
+      {jobs.map((job) => {
+        const attempt = attempts.data?.items.find((item) => item.job_id === job.id);
+        const failedRender = failedJobRetryKind(job, attempt) === "render";
+        const canRender = job.status === "content_ready" || job.status === "ready_to_render" || failedRender;
+        return <div className="job-row" key={job.id}>
           <span className="job-status-dot" />
           <span><strong>{job.topic}</strong><small>{job.status.replaceAll("_", " ")}</small></span>
           <b>{job.target_duration_seconds}s</b>
-          {(job.status === "draft" || job.status === "failed") && (
+          {(job.status === "draft" || (job.status === "failed" && !failedRender)) && (
             <button
               className="job-action"
               type="button"
@@ -110,12 +122,12 @@ export function RecentJobs() {
               {contentMutation.isPending && contentMutation.variables === job.id ? "Queuing…" : "Generate content"}
             </button>
           )}
-          {(job.status === "content_ready" || job.status === "ready_to_render") && (
-            <button className="job-action" type="button" disabled={renderMutation.isPending || !nodes.data?.items.some((node) => node.is_active)} onClick={() => { const node = nodes.data?.items.find((item) => item.health_status === "healthy") ?? nodes.data?.items.find((item) => item.is_active); if (node) renderMutation.mutate({ jobId: job.id, nodeId: node.id }); }}>{renderMutation.isPending && renderMutation.variables?.jobId === job.id ? "Queuing render…" : "Render with ComfyUI"}</button>
+          {canRender && (
+            <button className="job-action" type="button" disabled={renderMutation.isPending || !nodes.data?.items.some((node) => node.is_active)} onClick={() => { const node = nodes.data?.items.find((item) => item.health_status === "healthy") ?? nodes.data?.items.find((item) => item.is_active); if (node) renderMutation.mutate({ jobId: job.id, nodeId: node.id }); }}>{renderMutation.isPending && renderMutation.variables?.jobId === job.id ? "Queuing render…" : failedRender ? "Retry render" : "Render with ComfyUI"}</button>
           )}
-          {attempts.data?.items.find((attempt) => attempt.job_id === job.id) && <small className="job-render-progress">{attempts.data.items.find((attempt) => attempt.job_id === job.id)?.status.replaceAll("_", " ")} · {attempts.data.items.find((attempt) => attempt.job_id === job.id)?.progress}%</small>}
+          {attempt && <small className="job-render-progress">{attempt.status.replaceAll("_", " ")} · {attempt.progress}%</small>}
         </div>
-      ))}
+      })}
       {contentMutation.isError && <p className="form-error" role="alert">{contentMutation.error.message}</p>}
       {renderMutation.isError && <p className="form-error" role="alert">{renderMutation.error.message}</p>}
       {!nodes.isLoading && nodes.data?.items.length === 0 && <p className="field-hint">Add a ComfyUI render node in Settings before rendering.</p>}

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import HomePage from "../app/page";
 import { Providers } from "../app/providers";
+import { failedJobRetryKind } from "../components/dashboard-live-data";
 
 describe("home page", () => {
   afterEach(() => {
@@ -23,5 +24,20 @@ describe("home page", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "API connected",
     );
+  });
+
+  it("retries the failed pipeline stage instead of overwriting valid content", () => {
+    expect(
+      failedJobRetryKind(
+        { status: "failed", speech_script: "Existing valid speech" },
+        { status: "failed" },
+      ),
+    ).toBe("render");
+    expect(
+      failedJobRetryKind(
+        { status: "failed", speech_script: null },
+        undefined,
+      ),
+    ).toBe("content");
   });
 });

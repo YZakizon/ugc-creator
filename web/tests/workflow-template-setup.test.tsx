@@ -41,7 +41,7 @@ describe("workflow template setup", () => {
       },
       version: 1,
       checksum: "checksum",
-      bindings: [{ id: "binding-1", semantic_key: "seed", node_id: "27", input_name: "seed", value_type: "integer", required: true }],
+      bindings: [{ id: "binding-1", semantic_key: "kling.camera_strength", node_id: "27", input_name: "seed", value_type: "integer", required: true }],
       created_at: "2026-08-07T12:00:00Z",
       updated_at: "2026-08-07T12:00:00Z",
     }));
@@ -58,7 +58,7 @@ describe("workflow template setup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Update workflow" }));
 
     await waitFor(() => expect(submitted).not.toBeNull());
-    expect(submitted).toMatchObject({ bindings: [{ semantic_key: "seed", node_id: "27", input_name: "seed", value_type: "integer", required: true }] });
+    expect(submitted).toMatchObject({ bindings: [{ semantic_key: "kling.camera_strength", node_id: "27", input_name: "seed", value_type: "integer", required: true }] });
     expect(screen.getByRole("button", { name: "Update workflow" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Import workflow" })).not.toBeInTheDocument();
   });

@@ -1183,6 +1183,7 @@ Import arbitrary ComfyUI API workflows and bind UGC Creator parameters without h
 - [x] Support `duration` and/or `frame_count`.
 - [x] Support width/height.
 - [x] Support `video_prompt`.
+- [x] Support validated provider-defined semantic keys without a fixed core allowlist.
 - [x] Validate node/input existence at save time.
 - [x] Define binding value types/transforms.
 - [x] Add prompt placeholder validation.
@@ -1192,6 +1193,7 @@ Import arbitrary ComfyUI API workflows and bind UGC Creator parameters without h
 - [x] Test missing/broken mappings.
 - [x] Test placeholder replacement.
 - [x] Update configured workflows in place while RenderAttempt snapshots preserve historical execution inputs.
+- [x] Snapshot workflow JSON and bindings when an attempt is queued so later edits affect only future attempts.
 - [x] Block deletion while a render profile references the workflow.
 - [x] Persist workflow media outside PostgreSQL and store semantic media placeholders.
 
@@ -1227,10 +1229,12 @@ Complete the first real end-to-end video render using LTX 2.3 through generic Co
 - [x] Cancellation if supported.
 - [x] Normalize errors/status.
 - [x] Guard duplicate submit after worker retry.
+- [x] Atomically claim render submission before external calls and recover expired claims.
+- [x] Bound render monitoring with a configurable timeout.
 - [x] Create RenderAttempt records.
 - [x] Implement render submission/monitor/finalize Celery tasks.
 - [ ] Configure an LTX 2.3 RenderProfile.
-- [ ] End-to-end integration test against fake ComfyUI.
+- [x] End-to-end integration test against fake ComfyUI.
 - [ ] Optional real ComfyUI integration test.
 - [x] Add final video to MediaAsset.
 
@@ -1513,7 +1517,7 @@ Prepare for real multi-user or internet-exposed deployment.
 - [ ] Per-user quota/budget model if needed.
 - [ ] Provider key encryption if user-managed.
 - [ ] Upload scanning/limits.
-- [ ] SSRF protections for render-node config.
+- [x] SSRF protections for render-node config.
 - [ ] CSRF/session protections as applicable.
 - [ ] Secure signed asset delivery.
 - [ ] Structured request/job logging.
@@ -1851,6 +1855,34 @@ a recovery path after worker crashes.
 **Consequences:** Permanent and exhausted failures are persisted as failed; transient
 TTS attempts return to queued while waiting for retry. Identical active previews remain
 deduplicated until the stale timeout expires.
+
+### 2026-08-08 — External provider calls require durable claims
+**Status: accepted**
+
+**Decision:** Workers atomically claim voice-preview synthesis and ComfyUI
+submission in PostgreSQL before making an external call. Render claims use a
+bounded lease, and attempts snapshot workflow JSON and bindings when queued.
+
+**Reason:** A read-then-call check permits concurrent workers to duplicate paid
+TTS or render submissions, while editing a workflow after queueing can otherwise
+change the payload of an already accepted attempt.
+
+**Consequences:** Only the claim winner calls the provider. Expired and legacy
+stuck render claims are recoverable, and workflow edits apply only to attempts
+queued after the edit.
+
+### 2026-08-08 — Render-node URLs are deny-by-default
+**Status: accepted**
+
+**Decision:** Render-node URLs are restricted to HTTP(S), reject credentials and
+private/reserved destinations after DNS resolution, and permit intentional local
+development hosts only through `COMFYUI_ALLOWED_HOSTS`.
+
+**Reason:** Server-side render health and submission requests must not provide an
+SSRF path to loopback, metadata, or internal network services.
+
+**Consequences:** Operators must explicitly allow each trusted private ComfyUI
+hostname. The adapter revalidates immediately before real outbound requests.
 
 ### 2026-08-06 — PostgreSQL
 **Status: accepted**

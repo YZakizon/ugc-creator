@@ -40,19 +40,6 @@ const supportedTemplateVariables = [
 type MediaKey = "source_image" | "audio";
 type WorkflowBinding = WorkflowTemplateInput["bindings"][number];
 
-const semanticKeys = [
-  "script",
-  "video_prompt",
-  "source_image",
-  "audio",
-  "seed",
-  "fps",
-  "duration",
-  "frame_count",
-  "width",
-  "height",
-] as const;
-
 const workflowValueTypes = ["string", "template", "integer", "number", "boolean"] as const;
 
 export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-editor" }: { initialTemplate?: WorkflowTemplate; formId?: string } = {}) {
@@ -657,9 +644,7 @@ function parseBindings(value: string): WorkflowBinding[] {
 function validateBindingTargets(workflow: Record<string, unknown>, bindings: WorkflowBinding[]) {
   const seenKeys = new Set<string>();
   for (const binding of bindings) {
-    if (!semanticKeys.includes(binding.semantic_key as (typeof semanticKeys)[number])) {
-      throw new Error(`Unsupported semantic parameter: ${binding.semantic_key}.`);
-    }
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(binding.semantic_key)) throw new Error(`Invalid semantic parameter: ${binding.semantic_key}.`);
     if (seenKeys.has(binding.semantic_key)) throw new Error(`Only one ${binding.semantic_key} binding can be configured.`);
     seenKeys.add(binding.semantic_key);
     const node = workflow[binding.node_id];

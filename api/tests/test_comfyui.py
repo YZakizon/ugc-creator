@@ -73,3 +73,27 @@ async def test_comfyui_upload_returns_server_filename() -> None:
         filename = await renderer.upload("audio.mp3", b"audio-bytes", "audio")
 
     assert filename == "audio.mp3"
+
+
+@pytest.mark.asyncio
+async def test_comfyui_status_reads_execution_progress() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "prompt-1": {
+                    "status": {
+                        "status_str": "running",
+                        "messages": [["progress", {"value": 7, "max": 10}]],
+                    }
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        status = await ComfyUIRenderer(
+            base_url="http://comfyui.test", client=client
+        ).get_status("prompt-1")
+
+    assert status.state == "running"
+    assert status.progress == 70

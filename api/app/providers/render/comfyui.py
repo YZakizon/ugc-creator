@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import httpx
 
+from app.core.urls import validate_render_node_url
 from app.providers.render.contracts import (
     RenderOutput,
     RenderRequest,
@@ -24,9 +25,10 @@ class ComfyUIRenderer(VideoRenderer):
         client: httpx.AsyncClient | None = None,
         client_id: str | None = None,
     ) -> None:
-        self.base_url = (
-            base_url or os.getenv("COMFYUI_BASE_URL") or "http://localhost:8188"
-        ).rstrip("/")
+        self.base_url = validate_render_node_url(
+            base_url or os.getenv("COMFYUI_BASE_URL") or "http://localhost:8188",
+            resolve_dns=False,
+        )
         self.client = client
         self.client_id = client_id or str(uuid4())
 
@@ -61,6 +63,7 @@ class ComfyUIRenderer(VideoRenderer):
             return RenderStatus(external_job_id=external_job_id, state="queued")
 
         status = history.get("status")
+        progress = _extract_progress(history)
         if isinstance(status, dict):
             status_string = status.get("status_str")
             if status_string == "success":
@@ -73,9 +76,14 @@ class ComfyUIRenderer(VideoRenderer):
                 return RenderStatus(
                     external_job_id=external_job_id,
                     state="failed",
+                    progress=progress,
                     message="ComfyUI reported a workflow error",
                 )
-        return RenderStatus(external_job_id=external_job_id, state="running")
+        return RenderStatus(
+            external_job_id=external_job_id,
+            state="running",
+            progress=progress,
+        )
 
     async def cancel(self, external_job_id: str) -> None:
         del external_job_id  # ComfyUI's interrupt endpoint is process-wide.
@@ -137,6 +145,7 @@ class ComfyUIRenderer(VideoRenderer):
     ) -> httpx.Response:
         try:
             if self.client is None:
+                validate_render_node_url(self.base_url)
                 async with httpx.AsyncClient(timeout=60) as client:
                     response = await client.request(
                         method,
@@ -199,3 +208,38 @@ def _extract_outputs(outputs: Mapping[str, object]) -> list[RenderOutput]:
                     )
                 )
     return discovered
+
+
+def _extract_progress(history: Mapping[str, object]) -> float:
+    direct = history.get("progress")
+    if isinstance(direct, (int, float)) and not isinstance(direct, bool):
+        return max(0, min(100, float(direct)))
+    status = history.get("status")
+    if not isinstance(status, dict):
+        return 0
+    status_progress = status.get("progress")
+    if isinstance(status_progress, (int, float)) and not isinstance(
+        status_progress, bool
+    ):
+        return max(0, min(100, float(status_progress)))
+    messages = status.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    for message in reversed(messages):
+        if (
+            isinstance(message, list)
+            and len(message) >= 2
+            and message[0] == "progress"
+            and isinstance(message[1], dict)
+        ):
+            value = message[1].get("value")
+            maximum = message[1].get("max")
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and isinstance(maximum, (int, float))
+                and not isinstance(maximum, bool)
+                and maximum > 0
+            ):
+                return max(0, min(100, float(value) / float(maximum) * 100))
+    return 0

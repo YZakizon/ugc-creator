@@ -21,7 +21,15 @@ def submit_prompt() -> dict[str, str]:
 def prompt_history(prompt_id: str) -> dict[str, object]:
     history_requests[prompt_id] += 1
     if history_requests[prompt_id] == 1:
-        return {prompt_id: {"status": {"status_str": "running"}, "outputs": {}}}
+        return {
+            prompt_id: {
+                "status": {
+                    "status_str": "running",
+                    "messages": [["progress", {"value": 3, "max": 10}]],
+                },
+                "outputs": {},
+            }
+        }
     return {
         prompt_id: {
             "status": {"status_str": "success"},

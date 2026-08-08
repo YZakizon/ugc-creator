@@ -1,7 +1,10 @@
-from datetime import UTC, datetime
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.core.statuses import JobStatus
@@ -18,6 +21,9 @@ from app.schemas import RenderNodeCreate
 
 def now() -> datetime:
     return datetime.now(UTC)
+
+
+SUBMISSION_CLAIM_DURATION = timedelta(minutes=5)
 
 
 class RenderExecutionRepository:
@@ -90,6 +96,13 @@ class RenderExecutionRepository:
             profile = session.get(RenderProfile, job.render_profile_id)
             if profile is None or profile.workflow_template_id is None:
                 raise ValueError("Render profile has no workflow template")
+            workflow = session.scalar(
+                select(WorkflowTemplate)
+                .options(selectinload(WorkflowTemplate.bindings))
+                .where(WorkflowTemplate.id == profile.workflow_template_id)
+            )
+            if workflow is None:
+                raise ValueError("Render profile workflow template is unavailable")
             node = session.get(RenderNode, node_id)
             if node is None or not node.is_active:
                 raise ValueError("Choose an active render node")
@@ -118,7 +131,18 @@ class RenderExecutionRepository:
                 provider=node.provider,
                 status="queued",
                 progress=0,
-                workflow_snapshot={},
+                workflow_snapshot=deepcopy(workflow.workflow_json),
+                binding_snapshot=[
+                    {
+                        "semantic_key": binding.semantic_key,
+                        "node_id": binding.node_id,
+                        "input_name": binding.input_name,
+                        "value_type": binding.value_type,
+                        "transform": deepcopy(binding.transform),
+                        "required": binding.required,
+                    }
+                    for binding in workflow.bindings
+                ],
                 effective_values={},
             )
             job.status = JobStatus.QUEUED.value
@@ -127,6 +151,61 @@ class RenderExecutionRepository:
             session.commit()
             session.refresh(attempt)
             return attempt
+
+    def claim_submission(self, attempt_id: UUID) -> tuple[bool, int]:
+        claimed_at = now()
+        claim_expires_at = claimed_at + SUBMISSION_CLAIM_DURATION
+        stale_without_lease = claimed_at - SUBMISSION_CLAIM_DURATION
+        with self.factory() as session:
+            claimed = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.external_job_id.is_(None),
+                        or_(
+                            RenderAttempt.status == "queued",
+                            and_(
+                                RenderAttempt.status == "submitting_render",
+                                or_(
+                                    RenderAttempt.submission_claim_expires_at
+                                    <= claimed_at,
+                                    and_(
+                                        RenderAttempt.submission_claim_expires_at.is_(
+                                            None
+                                        ),
+                                        RenderAttempt.updated_at <= stale_without_lease,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    )
+                    .values(
+                        status="submitting_render",
+                        submission_claim_expires_at=claim_expires_at,
+                        updated_at=claimed_at,
+                    )
+                ),
+            )
+            if claimed.rowcount == 1:
+                attempt = session.get(RenderAttempt, attempt_id)
+                if attempt is not None:
+                    attempt.job.status = JobStatus.SUBMITTING_RENDER.value
+                session.commit()
+                return True, 0
+            session.rollback()
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None or attempt.external_job_id:
+                return False, 0
+            expires_at = attempt.submission_claim_expires_at
+            if expires_at is None:
+                return False, int(SUBMISSION_CLAIM_DURATION.total_seconds())
+            comparable_now = claimed_at
+            if expires_at.tzinfo is None:
+                comparable_now = claimed_at.replace(tzinfo=None)
+            remaining = max(1, int((expires_at - comparable_now).total_seconds()))
+            return False, remaining
 
     def get_attempt(self, attempt_id: UUID) -> RenderAttempt | None:
         with self.factory() as session:
@@ -193,6 +272,7 @@ class RenderExecutionRepository:
                 attempt.external_job_id = external_job_id
                 attempt.client_id = client_id
                 attempt.submitted_at = now()
+            attempt.submission_claim_expires_at = None
             attempt.status = "rendering"
             attempt.progress = max(attempt.progress, 1)
             attempt.job.status = JobStatus.RENDERING.value
@@ -210,6 +290,8 @@ class RenderExecutionRepository:
             attempt.status = status
             attempt.progress = progress
             attempt.error_message = error
+            if status in {"failed", "completed", "cancelled"}:
+                attempt.submission_claim_expires_at = None
             attempt.job.status = (
                 status
                 if status in {item.value for item in JobStatus}
@@ -243,6 +325,7 @@ class RenderExecutionRepository:
             attempt.status = "completed"
             attempt.progress = 100
             attempt.completed_at = now()
+            attempt.submission_claim_expires_at = None
             attempt.job.status = JobStatus.COMPLETED.value
             session.commit()
 

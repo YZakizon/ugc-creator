@@ -22,6 +22,7 @@ services:
       DATABASE_URL: postgresql+psycopg://ugc_test:ugc_test@postgres-test:5432/ugc_creator_test
       REDIS_URL: redis://redis-test:6379/0
       UGC_FAKE_PROVIDERS: "1"
+      COMFYUI_ALLOWED_HOSTS: fake-comfyui-test
     ports:
       - "18011:8000"
     depends_on:
@@ -48,6 +49,7 @@ services:
       DATABASE_URL: postgresql+psycopg://ugc_test:ugc_test@postgres-test:5432/ugc_creator_test
       REDIS_URL: redis://redis-test:6379/0
       UGC_FAKE_PROVIDERS: "1"
+      COMFYUI_ALLOWED_HOSTS: fake-comfyui-test
       MEDIA_STORAGE_ROOT: /var/lib/ugc-creator/media
     depends_on:
       postgres-test:
