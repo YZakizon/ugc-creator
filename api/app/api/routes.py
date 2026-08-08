@@ -1,0 +1,519 @@
+import base64
+import binascii
+import hashlib
+import json
+from pathlib import PurePath
+from typing import cast
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
+
+from app.core.statuses import JobStatus
+from app.providers.storage.local import LocalStorageProvider, StorageError
+from app.repositories import (
+    BatchRepository,
+    ConfigurationRepository,
+    VoiceProfileInUseError,
+    batch_to_dict,
+    character_to_dict,
+    job_to_dict,
+    render_profile_to_dict,
+    voice_preview_to_dict,
+    voice_profile_to_dict,
+    workflow_template_to_dict,
+)
+from app.schemas import (
+    BatchCreate,
+    BatchList,
+    BatchRead,
+    CharacterCreate,
+    CharacterList,
+    CharacterRead,
+    DashboardSummary,
+    JobRead,
+    RenderProfileCreate,
+    RenderProfileList,
+    RenderProfileRead,
+    RenderProfileSetupCreate,
+    RenderProfileUpdate,
+    VoicePreviewCreate,
+    VoicePreviewRead,
+    VoiceProfileCreate,
+    VoiceProfileList,
+    VoiceProfileRead,
+    VoiceProfileUpdate,
+    WorkflowMediaUpload,
+    WorkflowMediaUploadRead,
+    WorkflowTemplateCreate,
+    WorkflowTemplateList,
+    WorkflowTemplateRead,
+)
+from app.services.workflow_service import (
+    WorkflowValidationError,
+    validate_bindings,
+    workflow_checksum,
+)
+from app.workers.content_tasks import generate_job_content
+from app.workers.tts_tasks import generate_voice_preview
+
+router = APIRouter(prefix="/api/v1")
+
+
+def repository(request: Request) -> BatchRepository:
+    return cast(BatchRepository, request.app.state.batch_repository)
+
+
+def configuration_repository(request: Request) -> ConfigurationRepository:
+    return cast(ConfigurationRepository, request.app.state.configuration_repository)
+
+
+@router.post("/batches", response_model=BatchRead, status_code=status.HTTP_201_CREATED)
+def create_batch(
+    payload: BatchCreate,
+    repo: BatchRepository = Depends(repository),
+    configuration_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> BatchRead:
+    if payload.default_render_profile_id is not None:
+        profile = configuration_repo.get_render_profile(
+            payload.default_render_profile_id
+        )
+        if profile is None:
+            raise HTTPException(status_code=422, detail="Render profile not found")
+        if profile.voice_profile_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Render profile requires a connected voice profile",
+            )
+    return BatchRead.model_validate(batch_to_dict(repo.create_batch(payload)))
+
+
+@router.get("/batches", response_model=BatchList)
+def list_batches(
+    repo: BatchRepository = Depends(repository),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> BatchList:
+    batches, total = repo.list_batches(limit, offset)
+    return BatchList(
+        items=[BatchRead.model_validate(batch_to_dict(batch)) for batch in batches],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/batches/{batch_id}", response_model=BatchRead)
+def get_batch(batch_id: UUID, repo: BatchRepository = Depends(repository)) -> BatchRead:
+    batch = repo.get_batch(batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return BatchRead.model_validate(batch_to_dict(batch))
+
+
+@router.get("/jobs/{job_id}", response_model=JobRead)
+def get_job(job_id: UUID, repo: BatchRepository = Depends(repository)) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(job))
+
+
+@router.post(
+    "/jobs/{job_id}/generate-content",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_content_generation(
+    job_id: UUID, repo: BatchRepository = Depends(repository)
+) -> JobRead:
+    job = repo.queue_job_for_content(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    generate_job_content.delay(str(job_id))
+    return JobRead.model_validate(job_to_dict(job))
+
+
+@router.post(
+    "/characters", response_model=CharacterRead, status_code=status.HTTP_201_CREATED
+)
+def create_character(
+    payload: CharacterCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> CharacterRead:
+    try:
+        character = repo.create_character(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return CharacterRead.model_validate(character_to_dict(character))
+
+
+@router.get("/characters", response_model=CharacterList)
+def list_characters(
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> CharacterList:
+    items, total = repo.list_characters()
+    return CharacterList(
+        items=[CharacterRead.model_validate(character_to_dict(item)) for item in items],
+        total=total,
+    )
+
+
+@router.post(
+    "/voice-profiles",
+    response_model=VoiceProfileRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_voice_profile(
+    payload: VoiceProfileCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoiceProfileRead:
+    profile = repo.create_voice_profile(payload)
+    return VoiceProfileRead.model_validate(voice_profile_to_dict(profile))
+
+
+@router.get("/voice-profiles", response_model=VoiceProfileList)
+def list_voice_profiles(
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoiceProfileList:
+    items, total = repo.list_voice_profiles()
+    return VoiceProfileList(
+        items=[
+            VoiceProfileRead.model_validate(voice_profile_to_dict(item))
+            for item in items
+        ],
+        total=total,
+    )
+
+
+@router.patch("/voice-profiles/{profile_id}", response_model=VoiceProfileRead)
+def update_voice_profile(
+    profile_id: UUID,
+    payload: VoiceProfileUpdate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoiceProfileRead:
+    profile = repo.update_voice_profile(profile_id, payload)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Voice profile not found")
+    return VoiceProfileRead.model_validate(voice_profile_to_dict(profile))
+
+
+@router.delete("/voice-profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_voice_profile(
+    profile_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> None:
+    try:
+        deleted = repo.delete_voice_profile(profile_id)
+    except VoiceProfileInUseError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "voice_profile_in_use",
+                "message": str(exc),
+                "render_profiles": exc.render_profiles,
+                "characters": exc.characters,
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Voice profile not found")
+
+
+@router.post(
+    "/voice-profiles/{profile_id}/previews",
+    response_model=VoicePreviewRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_voice_preview(
+    profile_id: UUID,
+    payload: VoicePreviewCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoicePreviewRead:
+    profile = repo.get_voice_profile(profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Voice profile not found")
+    if profile.provider != "elevenlabs":
+        raise HTTPException(
+            status_code=422, detail="Voice preview requires an ElevenLabs voice profile"
+        )
+    text = payload.text.strip()
+    fingerprint_payload = {
+        "voice_profile_id": str(profile.id),
+        "voice_updated_at": profile.updated_at.isoformat(),
+        "text": text,
+        "voice": voice_profile_to_dict(profile),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    preview, created = repo.create_voice_preview(profile_id, text, fingerprint)
+    if created:
+        generate_voice_preview.delay(str(preview.id))
+    return VoicePreviewRead.model_validate(voice_preview_to_dict(preview))
+
+
+@router.get("/voice-previews/{preview_id}", response_model=VoicePreviewRead)
+def get_voice_preview(
+    preview_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoicePreviewRead:
+    preview = repo.get_voice_preview(preview_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="Voice preview not found")
+    return VoicePreviewRead.model_validate(voice_preview_to_dict(preview))
+
+
+@router.get("/voice-previews/{preview_id}/audio")
+def download_voice_preview(
+    preview_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> Response:
+    preview = repo.get_voice_preview(preview_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="Voice preview not found")
+    if preview.status != "completed" or not preview.asset_key:
+        raise HTTPException(status_code=409, detail="Voice preview audio is not ready")
+    try:
+        content = LocalStorageProvider().get(preview.asset_key)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Voice preview audio is unavailable"
+        ) from exc
+    filename = preview.filename or "voice-preview.mp3"
+    return Response(
+        content=content,
+        media_type=preview.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/render-profiles",
+    response_model=RenderProfileRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_render_profile(
+    payload: RenderProfileCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> RenderProfileRead:
+    try:
+        profile = repo.create_render_profile(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RenderProfileRead.model_validate(render_profile_to_dict(profile))
+
+
+@router.post(
+    "/render-profiles/setup",
+    response_model=RenderProfileRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_render_profile_setup(
+    payload: RenderProfileSetupCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> RenderProfileRead:
+    try:
+        profile = repo.create_render_profile_setup(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return RenderProfileRead.model_validate(render_profile_to_dict(profile))
+
+
+@router.get("/render-profiles", response_model=RenderProfileList)
+def list_render_profiles(
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> RenderProfileList:
+    items, total = repo.list_render_profiles()
+    return RenderProfileList(
+        items=[
+            RenderProfileRead.model_validate(render_profile_to_dict(item))
+            for item in items
+        ],
+        total=total,
+    )
+
+
+@router.patch("/render-profiles/{profile_id}", response_model=RenderProfileRead)
+def update_render_profile(
+    profile_id: UUID,
+    payload: RenderProfileUpdate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> RenderProfileRead:
+    try:
+        profile = repo.update_render_profile(profile_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Render profile not found")
+    return RenderProfileRead.model_validate(render_profile_to_dict(profile))
+
+
+@router.delete("/render-profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_render_profile(
+    profile_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> None:
+    if not repo.delete_render_profile(profile_id):
+        raise HTTPException(status_code=404, detail="Render profile not found")
+
+
+@router.post(
+    "/workflow-templates",
+    response_model=WorkflowTemplateRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_workflow_template(
+    payload: WorkflowTemplateCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> WorkflowTemplateRead:
+    try:
+        validate_bindings(
+            payload.workflow_json,
+            [binding.model_dump() for binding in payload.bindings],
+        )
+        template = repo.create_workflow_template(
+            payload, workflow_checksum(payload.workflow_json)
+        )
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return WorkflowTemplateRead.model_validate(workflow_template_to_dict(template))
+
+
+@router.get("/workflow-templates", response_model=WorkflowTemplateList)
+def list_workflow_templates(
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> WorkflowTemplateList:
+    items, total = repo.list_workflow_templates()
+    return WorkflowTemplateList(
+        items=[
+            WorkflowTemplateRead.model_validate(workflow_template_to_dict(item))
+            for item in items
+        ],
+        total=total,
+    )
+
+
+@router.get("/workflow-templates/{template_id}", response_model=WorkflowTemplateRead)
+def get_workflow_template(
+    template_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> WorkflowTemplateRead:
+    template = repo.get_workflow_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    return WorkflowTemplateRead.model_validate(workflow_template_to_dict(template))
+
+
+@router.delete(
+    "/workflow-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_workflow_template(
+    template_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> None:
+    dependent_count = repo.count_render_profiles_for_workflow(template_id)
+    if dependent_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Workflow template is connected to {dependent_count} render profile"
+                f"{'s' if dependent_count != 1 else ''}; disconnect it before deleting."
+            ),
+        )
+    try:
+        deleted = repo.delete_workflow_template(template_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+
+
+@router.post(
+    "/workflow-templates/{template_id}/versions",
+    response_model=WorkflowTemplateRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_workflow_template_version(
+    template_id: UUID,
+    payload: WorkflowTemplateCreate,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> WorkflowTemplateRead:
+    try:
+        validate_bindings(
+            payload.workflow_json,
+            [binding.model_dump() for binding in payload.bindings],
+        )
+        template = repo.create_workflow_template_version(
+            template_id, payload, workflow_checksum(payload.workflow_json)
+        )
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if template is None:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    return WorkflowTemplateRead.model_validate(workflow_template_to_dict(template))
+
+
+@router.post(
+    "/workflow-media",
+    response_model=WorkflowMediaUploadRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_workflow_media(
+    payload: WorkflowMediaUpload,
+) -> WorkflowMediaUploadRead:
+    filename = PurePath(payload.filename).name
+    if not filename or filename in {".", ".."}:
+        raise HTTPException(status_code=422, detail="A safe media filename is required")
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Media content is not valid base64"
+        ) from exc
+    if not content:
+        raise HTTPException(status_code=422, detail="Media file cannot be empty")
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413, detail="Media file must be 25 MB or smaller"
+        )
+    asset_key = f"workflow-media/{uuid4()}-{filename}"
+    try:
+        LocalStorageProvider().put(asset_key, content)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media storage is unavailable"
+        ) from exc
+    return WorkflowMediaUploadRead(
+        asset_key=asset_key,
+        filename=filename,
+        input_type=payload.input_type,
+    )
+
+
+@router.get("/dashboard/summary", response_model=DashboardSummary)
+def dashboard_summary(
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> DashboardSummary:
+    return DashboardSummary(
+        in_progress=repo.count_jobs(
+            {
+                JobStatus.GENERATING_CONTENT,
+                JobStatus.GENERATING_TTS,
+                JobStatus.FITTING_DURATION,
+                JobStatus.SUBMITTING_RENDER,
+                JobStatus.RENDERING,
+                JobStatus.DOWNLOADING_OUTPUT,
+            }
+        ),
+        ready_to_render=repo.count_jobs({JobStatus.READY_TO_RENDER}),
+        completed_videos=repo.count_jobs({JobStatus.COMPLETED}),
+        render_profiles=config_repo.count_render_profiles(),
+        recent_jobs=[
+            JobRead.model_validate(job_to_dict(job)) for job in repo.list_jobs()
+        ],
+    )

@@ -1,0 +1,113 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ugc_creator
+      POSTGRES_USER: ugc
+      POSTGRES_PASSWORD: ugc
+    ports:
+      - "0:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ugc -d ugc_creator"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "0:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "0:9000"
+      - "0:9001"
+    volumes:
+      - minio-data:/data
+
+  api:
+    build:
+      context: ./api
+    environment:
+      DATABASE_URL: postgresql+psycopg://ugc:ugc@postgres:5432/ugc_creator
+      REDIS_URL: redis://redis:6379/0
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_BUCKET: ugc-creator
+      OBJECT_STORAGE_ACCESS_KEY: minioadmin
+      OBJECT_STORAGE_SECRET_KEY: minioadmin
+      MEDIA_STORAGE_ROOT: /var/lib/ugc-creator/media
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
+      OPENAI_PROMPT_TEMPLATE: ${OPENAI_PROMPT_TEMPLATE:-}
+      OPENAI_PROMPT_VERSION: ${OPENAI_PROMPT_VERSION:-ugc-v1}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_DEFAULT_MODEL: ${ELEVENLABS_DEFAULT_MODEL:-eleven_multilingual_v2}
+      COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "0:8000"
+    volumes:
+      - ./api:/app
+      - workflow-media:/var/lib/ugc-creator/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker:
+    build:
+      context: ./api
+    environment:
+      DATABASE_URL: postgresql+psycopg://ugc:ugc@postgres:5432/ugc_creator
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6}
+      OPENAI_PROMPT_TEMPLATE: ${OPENAI_PROMPT_TEMPLATE:-}
+      OPENAI_PROMPT_VERSION: ${OPENAI_PROMPT_VERSION:-ugc-v1}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_DEFAULT_MODEL: ${ELEVENLABS_DEFAULT_MODEL:-eleven_multilingual_v2}
+      COMFYUI_BASE_URL: ${COMFYUI_BASE_URL:-http://host.docker.internal:8188}
+      MEDIA_STORAGE_ROOT: /var/lib/ugc-creator/media
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./api:/app
+      - workflow-media:/var/lib/ugc-creator/media
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uv run celery -A app.workers.celery_app.celery_app worker --loglevel=info
+
+  web:
+    build:
+      context: ./web
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "3010:3010"
+    depends_on:
+      - api
+    command: node node_modules/next/dist/bin/next dev --hostname 0.0.0.0 --port 3010
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  workflow-media:

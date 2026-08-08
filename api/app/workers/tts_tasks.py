@@ -1,0 +1,77 @@
+import asyncio
+import os
+from uuid import UUID
+
+from app.db.session import create_database_engine, session_factory
+from app.providers.storage.local import LocalStorageProvider
+from app.providers.tts.contracts import TTSProviderError, TTSRequest
+from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
+from app.providers.tts.fake import FakeTTSProvider
+from app.repositories import SqlAlchemyConfigurationRepository
+from app.workers.celery_app import celery_app
+
+
+@celery_app.task(name="ugc_creator.generate_voice_preview")  # type: ignore[untyped-decorator]
+def generate_voice_preview(preview_id: str) -> dict[str, str]:
+    engine = create_database_engine()
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is required for voice previews")
+    repository = SqlAlchemyConfigurationRepository(session_factory(engine))
+    preview_uuid = UUID(preview_id)
+    preview = repository.get_voice_preview(preview_uuid)
+    if preview is None:
+        raise RuntimeError("Voice preview not found")
+    if preview.status == "completed" and preview.asset_key:
+        return {"preview_id": preview_id, "status": preview.status}
+    repository.update_voice_preview(preview_uuid, status="generating")
+    settings = dict(preview.settings_json)
+    output_format = str(settings.pop("output_format", "mp3_44100_128"))
+    language_code = settings.pop("language_code", None)
+    voice_settings = {
+        key: value for key, value in settings.items() if value is not None
+    }
+    provider = (
+        FakeTTSProvider()
+        if os.getenv("UGC_FAKE_PROVIDERS") == "1"
+        else ElevenLabsTTSProvider()
+    )
+    try:
+        result = asyncio.run(
+            provider.synthesize(
+                TTSRequest(
+                    text=preview.text,
+                    voice_id=preview.provider_voice_id,
+                    model_id=preview.provider_model
+                    or os.getenv("ELEVENLABS_DEFAULT_MODEL")
+                    or "eleven_multilingual_v2",
+                    output_format=output_format,
+                    language_code=str(language_code) if language_code else None,
+                    voice_settings=voice_settings,
+                )
+            )
+        )
+        asset_key = f"voice-previews/{preview.id}/speech.{result.extension}"
+        LocalStorageProvider().put(asset_key, result.audio)
+        completed = repository.update_voice_preview(
+            preview_uuid,
+            status="completed",
+            provider_request_id=result.provider_request_id,
+            asset_key=asset_key,
+            content_type=result.content_type,
+            filename=f"voice-preview-{preview.id}.{result.extension}",
+        )
+        return {"preview_id": preview_id, "status": completed.status}
+    except TTSProviderError as exc:
+        repository.update_voice_preview(
+            preview_uuid,
+            status="failed",
+            error_message=str(exc),
+        )
+        return {"preview_id": preview_id, "status": "failed"}
+    except Exception:
+        repository.update_voice_preview(
+            preview_uuid,
+            status="failed",
+            error_message="Speech generation failed unexpectedly.",
+        )
+        raise

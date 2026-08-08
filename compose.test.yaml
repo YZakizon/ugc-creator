@@ -1,0 +1,57 @@
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ugc_creator_test
+      POSTGRES_USER: ugc_test
+      POSTGRES_PASSWORD: ugc_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ugc_test -d ugc_creator_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - ugc-creator-test-postgres:/var/lib/postgresql/data
+
+  api-test:
+    build:
+      context: ./api
+    environment:
+      DATABASE_URL: postgresql+psycopg://ugc_test:ugc_test@postgres-test:5432/ugc_creator_test
+      REDIS_URL: redis://redis-test:6379/0
+      UGC_FAKE_PROVIDERS: "1"
+    ports:
+      - "18011:8000"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  redis-test:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  worker-test:
+    build:
+      context: ./api
+    environment:
+      DATABASE_URL: postgresql+psycopg://ugc_test:ugc_test@postgres-test:5432/ugc_creator_test
+      REDIS_URL: redis://redis-test:6379/0
+      UGC_FAKE_PROVIDERS: "1"
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    command: uv run celery -A app.workers.celery_app.celery_app worker --loglevel=warning --concurrency=1
+
+volumes:
+  ugc-creator-test-postgres:
