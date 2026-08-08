@@ -39,3 +39,7 @@ class TTSProviderError(RuntimeError):
         self.retriable = retriable
         self.provider_request_id = provider_request_id
         self.upstream_code = upstream_code
+
+
+class TTSProviderOutcomeUnknown(TTSProviderError):
+    """The paid synthesis may have been accepted and must not auto-retry."""

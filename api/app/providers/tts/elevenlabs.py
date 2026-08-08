@@ -2,7 +2,12 @@ import os
 
 import httpx
 
-from app.providers.tts.contracts import TTSProviderError, TTSRequest, TTSResult
+from app.providers.tts.contracts import (
+    TTSProviderError,
+    TTSProviderOutcomeUnknown,
+    TTSRequest,
+    TTSResult,
+)
 
 SUPPORTED_OUTPUT_FORMATS = {
     "mp3_44100_128": ("audio/mpeg", "mp3"),
@@ -56,15 +61,22 @@ class ElevenLabsTTSProvider:
                     headers={"xi-api-key": self.api_key},
                     json=payload,
                 )
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             raise TTSProviderError(
                 "ElevenLabs is temporarily unreachable.",
-                category=(
-                    "provider_timeout"
-                    if isinstance(exc, httpx.TimeoutException)
-                    else "provider_unavailable"
-                ),
+                category="provider_timeout"
+                if isinstance(exc, httpx.ConnectTimeout)
+                else "provider_unavailable",
                 retriable=True,
+            ) from exc
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise TTSProviderOutcomeUnknown(
+                "ElevenLabs may have accepted the speech request, but its response "
+                "was lost. It was not retried automatically.",
+                category="provider_timeout"
+                if isinstance(exc, httpx.TimeoutException)
+                else "provider_unavailable",
+                retriable=False,
             ) from exc
         if response.is_error:
             request_id = response.headers.get("request-id")

@@ -4,7 +4,7 @@ from uuid import uuid4
 import pytest
 
 from app.providers.llm.contracts import LLMProviderError
-from app.providers.tts.contracts import TTSProviderError
+from app.providers.tts.contracts import TTSProviderError, TTSProviderOutcomeUnknown
 from app.workers import content_tasks, tts_tasks
 from app.workers.celery_app import celery_app
 from app.workers.retry import retry_provider_error
@@ -190,3 +190,60 @@ def test_redelivered_tts_task_schedules_claim_expiry_reconciliation(
 
     assert result == {"preview_id": str(preview_id), "status": "generating"}
     assert scheduled == [([str(preview_id)], 42)]
+
+
+def test_tts_lost_response_fails_without_paid_call_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview_id = uuid4()
+    updates: list[dict[str, object]] = []
+    preview = SimpleNamespace(
+        id=preview_id,
+        status="queued",
+        asset_key=None,
+        settings_json={},
+        text="Do not synthesize this twice.",
+        provider_voice_id="voice-id",
+        provider_model=None,
+    )
+
+    class FakeRepository:
+        def get_voice_preview(self, _preview_id: object) -> object:
+            return preview
+
+        def claim_voice_preview(self, _preview_id: object) -> object:
+            return preview, uuid4()
+
+        def update_voice_preview(self, _preview_id: object, **values: object) -> object:
+            updates.append(values)
+            return SimpleNamespace(status=values["status"])
+
+    class LostResponseProvider:
+        async def synthesize(self, _request: object) -> object:
+            raise TTSProviderOutcomeUnknown(
+                "ElevenLabs response was lost.",
+                category="provider_timeout",
+                retriable=False,
+            )
+
+    monkeypatch.delenv("UGC_FAKE_PROVIDERS", raising=False)
+    monkeypatch.setattr(tts_tasks, "create_database_engine", object)
+    monkeypatch.setattr(tts_tasks, "session_factory", lambda _engine: object())
+    monkeypatch.setattr(
+        tts_tasks,
+        "SqlAlchemyConfigurationRepository",
+        lambda _factory: FakeRepository(),
+    )
+    monkeypatch.setattr(tts_tasks, "ElevenLabsTTSProvider", LostResponseProvider)
+    monkeypatch.setattr(
+        tts_tasks.generate_voice_preview,
+        "retry",
+        lambda **_values: (_ for _ in ()).throw(
+            AssertionError("An unknown paid-call outcome must not retry")
+        ),
+    )
+
+    result = tts_tasks.generate_voice_preview.run(str(preview_id))
+
+    assert result == {"preview_id": str(preview_id), "status": "failed"}
+    assert [update["status"] for update in updates] == ["failed"]

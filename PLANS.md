@@ -1899,6 +1899,8 @@ ComfyUI `/prompt` keeps the attempt in `submitting_render` and schedules
 client-ID reconciliation instead of marking the attempt failed. Redelivered TTS
 tasks schedule a check at claim expiry; expired claims become an explicit
 unknown-outcome failure without automatically repeating the paid call.
+ElevenLabs connect failures and definite retriable HTTP responses may retry, but
+read/write/ambiguous network failures become non-retriable unknown outcomes.
 
 ### 2026-08-08 — Render-node URLs are deny-by-default
 **Status: accepted**
