@@ -1035,12 +1035,12 @@ Establish the database schema and CRUD foundations without provider logic.
 - [x] VoiceProfile model/schema/service/routes.
 - [ ] WorkflowTemplate model.
 - [ ] WorkflowParameterBinding model.
-- [ ] RenderNode model.
+- [x] RenderNode model.
 - [x] RenderProfile model.
 - [x] Batch model.
 - [x] TopicJob model.
-- [ ] RenderAttempt model.
-- [ ] MediaAsset model.
+- [x] RenderAttempt model.
+- [x] MediaAsset model.
 - [x] Define enums/state constants centrally.
 - [ ] Add pagination pattern.
 - [ ] Add consistent API error format.
@@ -1064,13 +1064,13 @@ Establish the database schema and CRUD foundations without provider logic.
 Create a durable media layer before adding paid/provider integrations.
 
 ## Tasks
-- [ ] Define `StorageProvider`.
-- [ ] Implement local filesystem storage for tests/dev or S3 first.
+- [x] Define `StorageProvider`.
+- [x] Implement local filesystem storage for tests/dev or S3 first.
 - [ ] Implement S3-compatible provider.
 - [ ] Configure MinIO locally if used.
 - [ ] Create MediaAsset service.
 - [ ] Add upload validation.
-- [ ] Add safe object-key generation.
+- [x] Add safe object-key generation.
 - [ ] Add `ffprobe` wrapper.
 - [ ] Read audio/video duration.
 - [ ] Read video width/height/FPS when needed.
@@ -1189,7 +1189,7 @@ Import arbitrary ComfyUI API workflows and bind UGC Creator parameters without h
 - [x] Test original workflow remains byte/structurally unchanged after render preparation.
 - [x] Test missing/broken mappings.
 - [x] Test placeholder replacement.
-- [x] Create immutable workflow versions through a server-assigned version endpoint.
+- [x] Update configured workflows in place while RenderAttempt snapshots preserve historical execution inputs.
 - [x] Block deletion while a render profile references the workflow.
 - [x] Persist workflow media outside PostgreSQL and store semantic media placeholders.
 
@@ -1213,24 +1213,24 @@ Complete the first real end-to-end video render using LTX 2.3 through generic Co
 - [x] Define RendererCapabilities.
 - [ ] Implement renderer registry/factory.
 - [x] Implement `ComfyUIRenderer`.
-- [ ] RenderNode CRUD + health check.
+- [x] RenderNode CRUD + health check.
 - [x] ComfyUI asset upload/reference support.
 - [x] Submit workflow.
-- [ ] Persist `prompt_id` immediately.
+- [x] Persist `prompt_id` immediately.
 - [x] Track queue/execution progress.
 - [ ] WebSocket integration when available.
 - [x] History/status fallback.
 - [x] Output discovery.
-- [ ] Output download/copy into StorageProvider.
+- [x] Output download/copy into StorageProvider.
 - [x] Cancellation if supported.
 - [x] Normalize errors/status.
-- [ ] Guard duplicate submit after worker retry.
-- [ ] Create RenderAttempt records.
-- [ ] Implement render submission/monitor/finalize Celery tasks.
+- [x] Guard duplicate submit after worker retry.
+- [x] Create RenderAttempt records.
+- [x] Implement render submission/monitor/finalize Celery tasks.
 - [ ] Configure an LTX 2.3 RenderProfile.
 - [ ] End-to-end integration test against fake ComfyUI.
 - [ ] Optional real ComfyUI integration test.
-- [ ] Add final video to MediaAsset.
+- [x] Add final video to MediaAsset.
 
 ## Acceptance criteria
 Given:
@@ -1619,13 +1619,13 @@ Record enough effective parameters to reproduce the configuration, not to promis
 
 ---
 
-# 37. Workflow versioning policy
+# 37. Workflow update policy
 
 When a workflow template already used by jobs is edited:
-- prefer create/new version rather than silently rewriting historical meaning;
-- existing attempts retain workflow version/checksum;
-- render profile may point to latest version after explicit update;
-- old attempts remain inspectable.
+- update the configured workflow record in place;
+- existing attempts retain their workflow snapshot/version/checksum;
+- render profiles keep referencing the same workflow ID;
+- old attempts remain inspectable without exposing workflow edit history.
 
 A small V1 may store workflow snapshots on RenderAttempt instead, but historical reproducibility must remain possible.
 
@@ -1726,6 +1726,11 @@ Append decisions here as implementation clarifies unknowns.
 
 - ComfyUI workflows are stored as API-format JSON with explicit semantic
   bindings; generic services never assume universal node IDs.
+- A RenderAttempt is persisted before queueing, snapshots the prepared workflow
+  and effective values, and stores the ComfyUI prompt ID before monitoring.
+- Render retries reuse active attempts and never resubmit after a prompt ID has
+  been persisted. Completed outputs are copied into application storage and
+  exposed through MediaAsset download routes.
 - Workflow preparation validates the complete binding set, deep-copies the
   template, applies typed values, and rejects unknown placeholders before any
   renderer call.
@@ -1737,9 +1742,9 @@ Append decisions here as implementation clarifies unknowns.
 
 ## 40.5 Configuration and media safety
 
-- Editing a workflow creates a new immutable template record with the next
-  server-assigned version number; the original remains available for existing
-  render profiles and history.
+- Editing a workflow updates the same configured WorkflowTemplate record and ID.
+  Existing RenderAttempts remain reproducible from their persisted workflow
+  snapshot, version, checksum, and effective values.
 - Workflow deletion is rejected when a render profile still references the
   template, with a database foreign key enforcing the same invariant.
 - Development workflow media is stored through a local StorageProvider-backed
@@ -1786,6 +1791,34 @@ Initial decisions:
 **Reason:** Batch jobs must not leak values into each other.
 
 **Consequences:** Render preparation tests must prove the source template remains unchanged.
+
+### 2026-08-08 — Logical workflows own immutable revisions
+**Status: superseded**
+
+**Decision:** WorkflowTemplate revisions share a stable logical workflow ID. The
+main workflow list returns only the latest revision; older revisions remain
+available through version history. Saving an edit advances connected render
+profiles to the new revision while existing RenderAttempts retain their stored
+workflow revision and snapshot.
+
+**Reason:** Immutable records are required for reproducibility, but exposing every
+revision as a separate workflow makes a normal save behave like a misleading
+Save As operation.
+
+**Consequences:** Revision creation, profile reassignment, list grouping, history,
+and logical-workflow deletion are transactional backend responsibilities.
+
+### 2026-08-08 — Workflow edits update in place
+**Status: accepted**
+
+**Decision:** The Update workflow action modifies the same WorkflowTemplate record
+and keeps its ID. The product does not expose workflow revision history.
+
+**Reason:** Users expect Update to change the selected workflow, not create a copy
+or a hidden Save As revision.
+
+**Consequences:** RenderAttempt snapshots and checksums preserve historical render
+inputs. Editing a configured workflow affects future renders using that profile.
 
 ### 2026-08-06 — Frontend/backend split
 **Status: accepted**

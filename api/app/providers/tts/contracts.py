@@ -25,7 +25,17 @@ class TTSProvider(Protocol):
 
 
 class TTSProviderError(RuntimeError):
-    def __init__(self, message: str, *, category: str, retriable: bool) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        retriable: bool,
+        provider_request_id: str | None = None,
+        upstream_code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.category = category
         self.retriable = retriable
+        self.provider_request_id = provider_request_id
+        self.upstream_code = upstream_code

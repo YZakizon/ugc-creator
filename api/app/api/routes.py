@@ -10,7 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
 from app.core.statuses import JobStatus
+from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
 from app.providers.storage.local import LocalStorageProvider, StorageError
+from app.render_repository import RenderExecutionRepository
 from app.repositories import (
     BatchRepository,
     ConfigurationRepository,
@@ -32,6 +34,11 @@ from app.schemas import (
     CharacterRead,
     DashboardSummary,
     JobRead,
+    RenderAttemptList,
+    RenderAttemptRead,
+    RenderNodeCreate,
+    RenderNodeList,
+    RenderNodeRead,
     RenderProfileCreate,
     RenderProfileList,
     RenderProfileRead,
@@ -55,6 +62,7 @@ from app.services.workflow_service import (
     workflow_checksum,
 )
 from app.workers.content_tasks import generate_job_content
+from app.workers.render_tasks import submit_render
 from app.workers.tts_tasks import generate_voice_preview
 
 router = APIRouter(prefix="/api/v1")
@@ -66,6 +74,161 @@ def repository(request: Request) -> BatchRepository:
 
 def configuration_repository(request: Request) -> ConfigurationRepository:
     return cast(ConfigurationRepository, request.app.state.configuration_repository)
+
+
+def render_repository(request: Request) -> RenderExecutionRepository:
+    repo = getattr(request.app.state, "render_repository", None)
+    if not isinstance(repo, RenderExecutionRepository):
+        raise HTTPException(status_code=503, detail="Render persistence is unavailable")
+    return repo
+
+
+def render_node_read(node: object) -> RenderNodeRead:
+    return RenderNodeRead.model_validate(node, from_attributes=True)
+
+
+def render_attempt_read(attempt: object) -> RenderAttemptRead:
+    data = {
+        key: getattr(attempt, key)
+        for key in (
+            "id",
+            "job_id",
+            "render_profile_id",
+            "render_node_id",
+            "workflow_template_id",
+            "provider",
+            "status",
+            "progress",
+            "external_job_id",
+            "error_message",
+            "created_at",
+            "updated_at",
+        )
+    }
+    data["assets"] = [
+        {
+            "id": asset.id,
+            "job_id": asset.job_id,
+            "render_attempt_id": asset.render_attempt_id,
+            "kind": asset.kind,
+            "filename": asset.filename,
+            "content_type": asset.content_type,
+            "size_bytes": asset.size_bytes,
+            "download_url": f"/api/v1/assets/{asset.id}/download",
+            "created_at": asset.created_at,
+        }
+        for asset in getattr(attempt, "assets", [])
+    ]
+    return RenderAttemptRead.model_validate(data)
+
+
+@router.post(
+    "/render-nodes", response_model=RenderNodeRead, status_code=status.HTTP_201_CREATED
+)
+def create_render_node(
+    payload: RenderNodeCreate,
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> RenderNodeRead:
+    if (
+        not payload.base_url.startswith(("http://", "https://"))
+        or "@" in payload.base_url
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Render node URL must be an HTTP URL without credentials",
+        )
+    return render_node_read(repo.create_node(payload))
+
+
+@router.get("/render-nodes", response_model=RenderNodeList)
+def list_render_nodes(
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> RenderNodeList:
+    items = repo.list_nodes()
+    return RenderNodeList(
+        items=[render_node_read(item) for item in items], total=len(items)
+    )
+
+
+@router.post("/render-nodes/{node_id}/health", response_model=RenderNodeRead)
+async def check_render_node(
+    node_id: UUID, repo: RenderExecutionRepository = Depends(render_repository)
+) -> RenderNodeRead:
+    node = repo.get_node(node_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Render node not found")
+    try:
+        healthy = await ComfyUIRenderer(base_url=node.base_url).health_check()
+        updated = repo.update_node_health(
+            node_id, healthy, None if healthy else "ComfyUI health check failed"
+        )
+    except ComfyUIProviderError as exc:
+        updated = repo.update_node_health(node_id, False, str(exc))
+    return render_node_read(updated)
+
+
+@router.delete("/render-nodes/{node_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_render_node(
+    node_id: UUID, repo: RenderExecutionRepository = Depends(render_repository)
+) -> None:
+    try:
+        deleted = repo.delete_node(node_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Render node not found")
+
+
+@router.post(
+    "/jobs/{job_id}/render",
+    response_model=RenderAttemptRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_render(
+    job_id: UUID,
+    node_id: UUID,
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> RenderAttemptRead:
+    try:
+        attempt = repo.queue_attempt(job_id, node_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    submit_render.delay(str(attempt.id))
+    loaded = repo.get_attempt(attempt.id)
+    return render_attempt_read(loaded or attempt)
+
+
+@router.get("/render-attempts", response_model=RenderAttemptList)
+def list_render_attempts(
+    job_id: UUID | None = None,
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> RenderAttemptList:
+    items = repo.list_attempts(job_id)
+    return RenderAttemptList(
+        items=[render_attempt_read(item) for item in items], total=len(items)
+    )
+
+
+@router.get("/assets/{asset_id}/download")
+def download_asset(
+    asset_id: UUID, repo: RenderExecutionRepository = Depends(render_repository)
+) -> Response:
+    asset = repo.get_asset(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Media asset not found")
+    try:
+        content = LocalStorageProvider().get(asset.object_key)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media asset is unavailable"
+        ) from exc
+    return Response(
+        content=content,
+        media_type=asset.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{asset.filename}"'},
+    )
 
 
 @router.post("/batches", response_model=BatchRead, status_code=status.HTTP_201_CREATED)
@@ -432,12 +595,11 @@ def delete_workflow_template(
         raise HTTPException(status_code=404, detail="Workflow template not found")
 
 
-@router.post(
-    "/workflow-templates/{template_id}/versions",
+@router.put(
+    "/workflow-templates/{template_id}",
     response_model=WorkflowTemplateRead,
-    status_code=status.HTTP_201_CREATED,
 )
-def create_workflow_template_version(
+def update_workflow_template(
     template_id: UUID,
     payload: WorkflowTemplateCreate,
     repo: ConfigurationRepository = Depends(configuration_repository),
@@ -447,7 +609,7 @@ def create_workflow_template_version(
             payload.workflow_json,
             [binding.model_dump() for binding in payload.bindings],
         )
-        template = repo.create_workflow_template_version(
+        template = repo.update_workflow_template(
             template_id, payload, workflow_checksum(payload.workflow_json)
         )
     except WorkflowValidationError as exc:

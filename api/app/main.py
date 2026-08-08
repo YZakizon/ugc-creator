@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.routes import router
 from app.db.session import create_database_engine, initialize_database, session_factory
+from app.render_repository import RenderExecutionRepository
 from app.repositories import (
     InMemoryBatchRepository,
     InMemoryConfigurationRepository,
@@ -20,11 +21,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if engine is None:
         app.state.batch_repository = InMemoryBatchRepository()
         app.state.configuration_repository = InMemoryConfigurationRepository()
+        app.state.render_repository = None
     else:
         app.state.batch_repository = SqlAlchemyBatchRepository(session_factory(engine))
         app.state.configuration_repository = SqlAlchemyConfigurationRepository(
             session_factory(engine)
         )
+        app.state.render_repository = RenderExecutionRepository(session_factory(engine))
     yield
 
 
@@ -36,6 +39,7 @@ app = FastAPI(
 )
 app.state.batch_repository = InMemoryBatchRepository()
 app.state.configuration_repository = InMemoryConfigurationRepository()
+app.state.render_repository = None
 
 app.include_router(router)
 

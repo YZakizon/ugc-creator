@@ -10,6 +10,7 @@ from app.core.statuses import BatchStatus, JobStatus
 from app.db.models import (
     Batch,
     Character,
+    RenderAttempt,
     RenderProfile,
     TopicJob,
     VoicePreview,
@@ -482,8 +483,16 @@ class InMemoryConfigurationRepository:
         return sum(profile.is_active for profile in self.render_profiles.values())
 
     def count_render_profiles_for_workflow(self, template_id: UUID) -> int:
+        source = self.workflow_templates.get(template_id)
+        if source is None:
+            return 0
+        lineage_ids = {
+            template.id
+            for template in self.workflow_templates.values()
+            if template.logical_id == source.logical_id
+        }
         return sum(
-            profile.workflow_template_id == template_id
+            profile.workflow_template_id in lineage_ids
             for profile in self.render_profiles.values()
         )
 
@@ -491,8 +500,10 @@ class InMemoryConfigurationRepository:
         self, payload: WorkflowTemplateCreate, checksum: str
     ) -> WorkflowTemplate:
         now = utc_now()
+        template_id = uuid4()
         template = WorkflowTemplate(
-            id=uuid4(),
+            id=template_id,
+            logical_id=template_id,
             name=payload.name,
             description=payload.description,
             renderer_provider=payload.renderer_provider,
@@ -519,33 +530,67 @@ class InMemoryConfigurationRepository:
         self.workflow_templates[template.id] = template
         return template
 
-    def create_workflow_template_version(
+    def update_workflow_template(
         self, template_id: UUID, payload: WorkflowTemplateCreate, checksum: str
     ) -> WorkflowTemplate | None:
-        source = self.workflow_templates.get(template_id)
-        if source is None:
+        template = self.workflow_templates.get(template_id)
+        if template is None:
             return None
-        return self.create_workflow_template(
-            payload.model_copy(update={"version": source.version + 1}), checksum
-        )
+        template.name = payload.name
+        template.description = payload.description
+        template.renderer_provider = payload.renderer_provider
+        template.workflow_json = payload.workflow_json
+        template.metadata_json = payload.metadata_json
+        template.version += 1
+        template.checksum = checksum
+        template.updated_at = utc_now()
+        template.bindings = [
+            WorkflowParameterBinding(
+                id=uuid4(),
+                workflow_template_id=template.id,
+                semantic_key=binding.semantic_key,
+                node_id=binding.node_id,
+                input_name=binding.input_name,
+                value_type=binding.value_type,
+                transform=binding.transform,
+                required=binding.required,
+            )
+            for binding in payload.bindings
+        ]
+        return template
 
     def list_workflow_templates(self) -> tuple[list[WorkflowTemplate], int]:
-        items = sorted(
+        versions = sorted(
             self.workflow_templates.values(),
-            key=lambda item: item.created_at,
+            key=lambda item: (item.version, item.created_at),
             reverse=True,
         )
+        latest: dict[UUID, WorkflowTemplate] = {}
+        for item in versions:
+            latest.setdefault(item.logical_id, item)
+        items = list(latest.values())
+        items.sort(key=lambda item: item.updated_at, reverse=True)
         return items, len(items)
 
     def get_workflow_template(self, template_id: UUID) -> WorkflowTemplate | None:
         return self.workflow_templates.get(template_id)
 
     def delete_workflow_template(self, template_id: UUID) -> bool:
+        source = self.workflow_templates.get(template_id)
+        if source is None:
+            return False
         if self.count_render_profiles_for_workflow(template_id):
             raise ValueError(
                 "Workflow template is connected to one or more render profiles"
             )
-        return self.workflow_templates.pop(template_id, None) is not None
+        lineage_ids = [
+            template.id
+            for template in self.workflow_templates.values()
+            if template.logical_id == source.logical_id
+        ]
+        for lineage_id in lineage_ids:
+            self.workflow_templates.pop(lineage_id)
+        return True
 
 
 class SqlAlchemyConfigurationRepository:
@@ -849,10 +894,16 @@ class SqlAlchemyConfigurationRepository:
 
     def count_render_profiles_for_workflow(self, template_id: UUID) -> int:
         with self.factory() as session:
+            source = session.get(WorkflowTemplate, template_id)
+            if source is None:
+                return 0
+            lineage_ids = select(WorkflowTemplate.id).where(
+                WorkflowTemplate.logical_id == source.logical_id
+            )
             return int(
                 session.scalar(
                     select(func.count(RenderProfile.id)).where(
-                        RenderProfile.workflow_template_id == template_id
+                        RenderProfile.workflow_template_id.in_(lineage_ids)
                     )
                 )
                 or 0
@@ -863,6 +914,8 @@ class SqlAlchemyConfigurationRepository:
     ) -> WorkflowTemplate:
         with self.factory() as session:
             template = WorkflowTemplate(
+                id=(template_id := uuid4()),
+                logical_id=template_id,
                 name=payload.name,
                 description=payload.description,
                 renderer_provider=payload.renderer_provider,
@@ -888,38 +941,38 @@ class SqlAlchemyConfigurationRepository:
             _ = template.bindings
             return template
 
-    def create_workflow_template_version(
+    def update_workflow_template(
         self, template_id: UUID, payload: WorkflowTemplateCreate, checksum: str
     ) -> WorkflowTemplate | None:
         with self.factory() as session:
-            source = session.scalar(
+            template = session.scalar(
                 select(WorkflowTemplate)
+                .options(selectinload(WorkflowTemplate.bindings))
                 .where(WorkflowTemplate.id == template_id)
                 .with_for_update()
             )
-            if source is None:
+            if template is None:
                 return None
-            template = WorkflowTemplate(
-                name=payload.name,
-                description=payload.description,
-                renderer_provider=payload.renderer_provider,
-                workflow_json=payload.workflow_json,
-                metadata_json=payload.metadata_json,
-                version=source.version + 1,
-                checksum=checksum,
-                bindings=[
-                    WorkflowParameterBinding(
-                        semantic_key=binding.semantic_key,
-                        node_id=binding.node_id,
-                        input_name=binding.input_name,
-                        value_type=binding.value_type,
-                        transform=binding.transform,
-                        required=binding.required,
-                    )
-                    for binding in payload.bindings
-                ],
-            )
-            session.add(template)
+            template.name = payload.name
+            template.description = payload.description
+            template.renderer_provider = payload.renderer_provider
+            template.workflow_json = payload.workflow_json
+            template.metadata_json = payload.metadata_json
+            template.version += 1
+            template.checksum = checksum
+            template.bindings.clear()
+            session.flush()
+            template.bindings = [
+                WorkflowParameterBinding(
+                    semantic_key=binding.semantic_key,
+                    node_id=binding.node_id,
+                    input_name=binding.input_name,
+                    value_type=binding.value_type,
+                    transform=binding.transform,
+                    required=binding.required,
+                )
+                for binding in payload.bindings
+            ]
             session.commit()
             session.refresh(template)
             _ = template.bindings
@@ -927,15 +980,23 @@ class SqlAlchemyConfigurationRepository:
 
     def list_workflow_templates(self) -> tuple[list[WorkflowTemplate], int]:
         with self.factory() as session:
-            items = list(
+            versions = list(
                 session.scalars(
                     select(WorkflowTemplate)
                     .options(selectinload(WorkflowTemplate.bindings))
-                    .order_by(WorkflowTemplate.created_at.desc())
+                    .order_by(
+                        WorkflowTemplate.version.desc(),
+                        WorkflowTemplate.created_at.desc(),
+                    )
                 )
                 .unique()
                 .all()
             )
+            latest: dict[UUID, WorkflowTemplate] = {}
+            for item in versions:
+                latest.setdefault(item.logical_id, item)
+            items = list(latest.values())
+            items.sort(key=lambda item: item.updated_at, reverse=True)
             return items, len(items)
 
     def get_workflow_template(self, template_id: UUID) -> WorkflowTemplate | None:
@@ -951,15 +1012,34 @@ class SqlAlchemyConfigurationRepository:
             template = session.get(WorkflowTemplate, template_id)
             if template is None:
                 return False
+            lineage_ids = select(WorkflowTemplate.id).where(
+                WorkflowTemplate.logical_id == template.logical_id
+            )
             if session.scalar(
                 select(func.count(RenderProfile.id)).where(
-                    RenderProfile.workflow_template_id == template_id
+                    RenderProfile.workflow_template_id.in_(lineage_ids)
                 )
             ):
                 raise ValueError(
                     "Workflow template is connected to one or more render profiles"
                 )
-            session.delete(template)
+            if session.scalar(
+                select(func.count(RenderAttempt.id)).where(
+                    RenderAttempt.workflow_template_id.in_(lineage_ids)
+                )
+            ):
+                raise ValueError(
+                    "Workflow has historical render attempts and cannot be deleted"
+                )
+            versions = list(
+                session.scalars(
+                    select(WorkflowTemplate).where(
+                        WorkflowTemplate.logical_id == template.logical_id
+                    )
+                ).all()
+            )
+            for version in versions:
+                session.delete(version)
             session.commit()
             return True
 
@@ -1097,6 +1177,7 @@ def render_profile_to_dict(profile: RenderProfile) -> dict[str, object]:
 def workflow_template_to_dict(template: WorkflowTemplate) -> dict[str, object]:
     return {
         "id": template.id,
+        "logical_id": template.logical_id,
         "name": template.name,
         "description": template.description,
         "renderer_provider": template.renderer_provider,

@@ -59,12 +59,30 @@ class ElevenLabsTTSProvider:
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise TTSProviderError(
                 "ElevenLabs is temporarily unreachable.",
-                category="provider_unavailable",
+                category=(
+                    "provider_timeout"
+                    if isinstance(exc, httpx.TimeoutException)
+                    else "provider_unavailable"
+                ),
                 retriable=True,
             ) from exc
         if response.is_error:
+            request_id = response.headers.get("request-id")
+            upstream_code: str | None = None
+            try:
+                detail = response.json().get("detail")
+                if isinstance(detail, dict):
+                    code = detail.get("code")
+                    upstream_code = code if isinstance(code, str) else None
+                    detail_request_id = detail.get("request_id")
+                    if request_id is None and isinstance(detail_request_id, str):
+                        request_id = detail_request_id
+            except (ValueError, AttributeError):
+                pass
             category = {
                 401: "provider_auth_error",
+                402: "provider_quota_exceeded",
+                408: "provider_timeout",
                 429: "provider_rate_limited",
             }.get(
                 response.status_code,
@@ -75,7 +93,10 @@ class ElevenLabsTTSProvider:
             raise TTSProviderError(
                 f"ElevenLabs speech generation failed ({response.status_code}).",
                 category=category,
-                retriable=response.status_code == 429 or response.status_code >= 500,
+                retriable=response.status_code in {408, 429}
+                or response.status_code >= 500,
+                provider_request_id=request_id,
+                upstream_code=upstream_code,
             )
         content_type, extension = output
         return TTSResult(

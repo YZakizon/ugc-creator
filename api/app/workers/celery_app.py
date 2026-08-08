@@ -26,4 +26,4 @@ def ping() -> str:
 celery_app.task(name="ugc_creator.ping")(ping)
 
 # Import task modules after the app is configured so Celery registers them.
-from app.workers import content_tasks, tts_tasks  # noqa: E402,F401
+from app.workers import content_tasks, render_tasks, tts_tasks  # noqa: E402,F401

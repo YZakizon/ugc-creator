@@ -6,10 +6,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   createWorkflowTemplate,
-  createWorkflowTemplateVersion,
   deleteWorkflowTemplate,
   getWorkflowTemplates,
   getRenderProfiles,
+  updateWorkflowTemplate,
   uploadWorkflowMedia,
 } from "@/lib/api";
 import type { WorkflowTemplate, WorkflowTemplateInput } from "@/lib/api";
@@ -55,9 +55,10 @@ const semanticKeys = [
 
 const workflowValueTypes = ["string", "template", "integer", "number", "boolean"] as const;
 
-export function WorkflowTemplateSetup() {
+export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-editor" }: { initialTemplate?: WorkflowTemplate; formId?: string } = {}) {
   const queryClient = useQueryClient();
   const formRef = useRef<HTMLFormElement>(null);
+  const loadedTemplateIdRef = useRef<string | null>(null);
   const [name, setName] = useState("");
   const [workflow, setWorkflow] = useState(emptyWorkflow);
   const [workflowKind, setWorkflowKind] = useState<WorkflowKind>("unknown");
@@ -69,12 +70,14 @@ export function WorkflowTemplateSetup() {
   const [mediaUploadPending, setMediaUploadPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: ToastVariant } | null>(null);
+  const currentDefaultImage = selectedImage ?? mediaAssets.source_image;
+  const currentDefaultAudio = selectedAudio ?? mediaAssets.audio;
   const mutation = useMutation<WorkflowTemplate, Error, { templateId: string | null; payload: WorkflowTemplateInput }>({
-    mutationFn: ({ templateId, payload }) => templateId ? createWorkflowTemplateVersion(templateId, payload) : createWorkflowTemplate(payload),
+    mutationFn: ({ templateId, payload }) => templateId ? updateWorkflowTemplate(templateId, payload) : createWorkflowTemplate(payload),
     onSuccess: (template) => {
       void queryClient.invalidateQueries({ queryKey: ["workflow-templates"] });
-      setEditingTemplateId(null);
-      setToast({ message: `Workflow version ${template.version} saved successfully.`, variant: "success" });
+      setEditingTemplateId(template.id);
+      setToast({ message: "Workflow updated successfully.", variant: "success" });
     },
   });
 
@@ -143,8 +146,15 @@ export function WorkflowTemplateSetup() {
     setMediaAssets(workflowMediaFromMetadata(template.metadata_json));
     setLocalError(null);
     mutation.reset();
-    document.getElementById("workflow-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    formRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   }, [mutation]);
+
+  useEffect(() => {
+    if (initialTemplate && loadedTemplateIdRef.current !== initialTemplate.id) {
+      loadedTemplateIdRef.current = initialTemplate.id;
+      editTemplate(initialTemplate);
+    }
+  }, [editTemplate, initialTemplate]);
 
   useEffect(() => {
     const pendingTemplate = window.sessionStorage.getItem("workflow-template-edit");
@@ -247,7 +257,7 @@ export function WorkflowTemplateSetup() {
         templateId: editingTemplateId,
         payload: {
         name: name.trim() || "ComfyUI workflow",
-        metadata_json: { workflow_media: mediaAssets },
+        metadata_json: { default_workflow_media: mediaAssets },
         workflow_json: workflowJson,
         bindings: bindingJson,
         },
@@ -260,8 +270,8 @@ export function WorkflowTemplateSetup() {
 
   return (
     <div className="workflow-setup">
-      <form ref={formRef} id="workflow-editor" className="workflow-form" onSubmit={submit}>
-        {editingTemplateId && <p className="workflow-editing" role="status">Editing a saved workflow. Saving creates a new template version.</p>}
+      <form ref={formRef} id={formId} className="workflow-form" onSubmit={submit}>
+        {editingTemplateId && <p className="workflow-editing" role="status">Editing saved workflow.</p>}
         <label>
           Template name
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Shelf — LTX 2.3" />
@@ -272,25 +282,24 @@ export function WorkflowTemplateSetup() {
           <small className="field-hint">Choose the JSON exported with Save (API Format).</small>
         </label>
         <label>
-          Source image
+          Default source image
           <input type="file" accept="image/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "source_image")} />
-          <small className="field-hint">{selectedImage ? `Saved asset: ${selectedImage}` : "Requires a source_image binding."}</small>
+          {currentDefaultImage ? <><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><small className="field-hint">Batch media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the batch does not provide an image.</small>}
         </label>
         <label>
-          Audio
+          Default audio
           <input type="file" accept="audio/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "audio")} />
-          <small className="field-hint">{selectedAudio ? `Saved asset: ${selectedAudio}` : "Requires an audio binding."}</small>
+          {currentDefaultAudio ? <><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><small className="field-hint">Batch audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the batch does not provide audio.</small>}
         </label>
         <div className="workflow-json-editor">
-          <label>
-            ComfyUI API workflow JSON
-            <textarea value={workflow} onChange={(event) => updateWorkflowJson(event.target.value)} rows={10} spellCheck={false} placeholder="Paste or choose a ComfyUI API Format workflow JSON file." />
-          </label>
           <WorkflowFieldTree workflow={workflow} workflowKind={workflowKind} onUpdateField={updatePromptInput} />
-          <SemanticBindingEditor workflow={workflow} bindings={bindings} onChange={setBindings} />
+          <details className="workflow-json-source">
+            <summary>ComfyUI API workflow JSON</summary>
+            <textarea aria-label="ComfyUI API workflow JSON" value={workflow} onChange={(event) => updateWorkflowJson(event.target.value)} rows={10} spellCheck={false} placeholder="Paste or choose a ComfyUI API Format workflow JSON file." />
+          </details>
         </div>
         <div className="workflow-actions">
-          <button className="button button-primary" type="submit" disabled={mutation.isPending || mediaUploadPending}>{mutation.isPending ? "Saving…" : editingTemplateId ? "Save updated workflow" : "Import workflow"}</button>
+          <button className="button button-primary" type="submit" disabled={mutation.isPending || mediaUploadPending}>{mutation.isPending ? "Updating…" : editingTemplateId ? "Update workflow" : "Import workflow"}</button>
           <button className="button button-secondary" type="button" onClick={resetWorkflow}>Reset workflow</button>
           <button className="button button-secondary" type="button" onClick={downloadWorkflow} disabled={!workflow.trim()}>Download updated JSON</button>
         </div>
@@ -301,92 +310,7 @@ export function WorkflowTemplateSetup() {
   );
 }
 
-type SemanticBindingEditorProps = {
-  workflow: string;
-  bindings: string;
-  onChange: (value: string) => void;
-};
-
-function SemanticBindingEditor({ workflow, bindings, onChange }: SemanticBindingEditorProps) {
-  const inputs = parseWorkflowInputs(workflow);
-  let parsedBindings: WorkflowBinding[] = [];
-  let bindingError: string | null = null;
-  try {
-    parsedBindings = parseBindings(bindings);
-  } catch (error) {
-    bindingError = error instanceof Error ? error.message : "Bindings could not be read.";
-  }
-  const usedKeys = new Set(parsedBindings.map((binding) => binding.semantic_key));
-
-  function commit(next: WorkflowBinding[]) {
-    onChange(JSON.stringify(next, null, 2));
-  }
-
-  function updateBinding(index: number, patch: Partial<WorkflowBinding>) {
-    commit(parsedBindings.map((binding, bindingIndex) => bindingIndex === index ? { ...binding, ...patch } : binding));
-  }
-
-  function selectTarget(index: number, value: string) {
-    const separator = value.indexOf("::");
-    if (separator < 0) return;
-    updateBinding(index, { node_id: value.slice(0, separator), input_name: value.slice(separator + 2) });
-  }
-
-  function addBinding() {
-    const semanticKey = semanticKeys.find((key) => !usedKeys.has(key));
-    const input = inputs[0];
-    if (!semanticKey || !input) return;
-    commit([...parsedBindings, {
-      semantic_key: semanticKey,
-      node_id: input.nodeId,
-      input_name: input.inputName,
-      value_type: defaultValueType(semanticKey),
-      required: true,
-    }]);
-  }
-
-  return (
-    <section className="semantic-binding-editor" aria-labelledby="semantic-bindings-title">
-      <div className="semantic-binding-heading">
-        <div><strong id="semantic-bindings-title">Semantic bindings</strong><small>Map job values to any input in this workflow. Bindings are preserved when you edit the workflow JSON.</small></div>
-        <button className="button button-secondary button-small" type="button" disabled={Boolean(bindingError) || inputs.length === 0 || usedKeys.size >= semanticKeys.length} onClick={addBinding}>＋ Add binding</button>
-      </div>
-      {bindingError ? <p className="form-error" role="alert">{bindingError}</p> : parsedBindings.length === 0 ? <p className="field-hint">No bindings configured. Add one to connect batch values such as script, seed, FPS, or duration.</p> : (
-        <div className="semantic-binding-list">
-          {parsedBindings.map((binding, index) => {
-            const targetValue = `${binding.node_id}::${binding.input_name}`;
-            const targetExists = inputs.some((input) => `${input.nodeId}::${input.inputName}` === targetValue);
-            return <div className={`semantic-binding-row${targetExists ? "" : " invalid"}`} key={`${binding.semantic_key}-${index}`}>
-              <label>Parameter
-                <select aria-label={`Binding ${index + 1} parameter`} value={binding.semantic_key} onChange={(event) => updateBinding(index, { semantic_key: event.target.value })}>
-                  {semanticKeys.map((key) => <option key={key} value={key} disabled={key !== binding.semantic_key && usedKeys.has(key)}>{semanticKeyLabel(key)}</option>)}
-                </select>
-              </label>
-              <label>Workflow node input
-                <select aria-label={`Binding ${index + 1} workflow node input`} value={targetValue} onChange={(event) => selectTarget(index, event.target.value)}>
-                  {!targetExists && <option value={targetValue}>Missing: {binding.node_id}.{binding.input_name}</option>}
-                  {inputs.map((input) => <option key={`${input.nodeId}::${input.inputName}`} value={`${input.nodeId}::${input.inputName}`}>{input.title ? `${input.title} · ` : ""}{input.nodeId}.{input.inputName} ({input.classType})</option>)}
-                </select>
-              </label>
-              <label>Value type
-                <select aria-label={`Binding ${index + 1} value type`} value={binding.value_type} onChange={(event) => updateBinding(index, { value_type: event.target.value as WorkflowBinding["value_type"] })}>
-                  {workflowValueTypes.map((valueType) => <option key={valueType} value={valueType}>{valueType}</option>)}
-                </select>
-              </label>
-              <label className="semantic-binding-required"><input type="checkbox" checked={binding.required} onChange={(event) => updateBinding(index, { required: event.target.checked })} /> Required</label>
-              <button className="icon-button workflow-icon-button danger" type="button" aria-label={`Remove ${binding.semantic_key} binding`} title="Remove binding" onClick={() => commit(parsedBindings.filter((_, bindingIndex) => bindingIndex !== index))}>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg>
-              </button>
-              {!targetExists && <small className="semantic-binding-error">This binding points to an input that is not present in the current workflow JSON.</small>}
-            </div>;
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-type WorkflowField = WorkflowInput & { value: string | number | boolean | null; editable: boolean; label?: string };
+type WorkflowField = WorkflowInput & { value: string | number | boolean | null; rawValue: unknown; editable: boolean; label?: string };
 
 type WorkflowFieldTreeProps = {
   workflow: string;
@@ -430,7 +354,14 @@ function WorkflowFieldTree({ workflow, workflowKind, onUpdateField }: WorkflowFi
       </div>
       {nodes.length === 0 ? <p className="field-hint">No workflow nodes available. Load valid ComfyUI API JSON above.</p> : (
         <div className="workflow-tree">
-          {nodes.map((node) => (
+          {isLtxWorkflow ? nodes.map((node) => {
+            const field = node.inputs[0];
+            if (!field) return null;
+            const isSelected = selectedField !== undefined && workflowFieldKey(selectedField) === workflowFieldKey(field);
+            return <div className="workflow-tree-field-container" key={workflowFieldKey(field)}>
+              {isSelected && field.editable ? <div className="workflow-tree-field workflow-tree-field-editing workflow-ltx-control"><span>{field.label ?? field.inputName}</span><InlineWorkflowFieldEditor field={field} fieldTextareaRef={fieldTextareaRef} fieldSelectionRef={fieldSelectionRef} onUpdateField={onUpdateField} onInsertVariable={replaceSelectionWithVariable} /></div> : <button className={`workflow-tree-field workflow-ltx-control${isSelected ? " selected" : ""}`} type="button" disabled={!field.editable} onClick={() => setSelectedKey(workflowFieldKey(field))}><span>{field.label ?? field.inputName}</span><code>{formatWorkflowValue(field.value)}</code></button>}
+            </div>;
+          }) : nodes.map((node) => (
             <details className="workflow-tree-node" key={node.nodeId}>
               <summary><span>{node.title ? `${node.title} · ` : ""}{node.nodeId}</span><small>{node.classType}</small></summary>
               <div className="workflow-tree-fields">
@@ -490,12 +421,8 @@ export function SavedWorkflowTemplates() {
     onError: (error) => setToast({ message: error.message, variant: "danger" }),
   });
   const [pendingDelete, setPendingDelete] = useState<WorkflowTemplate | null>(null);
+  const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: ToastVariant } | null>(null);
-
-  function editTemplate(template: WorkflowTemplate) {
-    window.sessionStorage.setItem("workflow-template-edit", JSON.stringify(template));
-    window.location.assign("/#workflows");
-  }
 
   function deleteTemplate(template: WorkflowTemplate) {
     setPendingDelete(template);
@@ -510,28 +437,39 @@ export function SavedWorkflowTemplates() {
       <div className="saved-workflows-heading"><strong>Workflows</strong><small>{templatesQuery.data?.total ?? 0} template{templatesQuery.data?.total === 1 ? "" : "s"}</small></div>
       {templatesQuery.isLoading && <p className="field-hint">Loading saved workflows…</p>}
       {templatesQuery.isError && <p className="form-error" role="alert">Saved workflows are unavailable: {templatesQuery.error.message}</p>}
-      {!templatesQuery.isLoading && !templatesQuery.isError && templatesQuery.data?.items.length === 0 && <p className="field-hint">No workflows yet. <Link className="text-link" href="/#workflows">Import workflow</Link>.</p>}
-      {templatesQuery.data?.items.map((template) => (
-        <article className="saved-workflow" key={template.id}>
-          <div>
-            <strong>{template.name}</strong>
-            <small>{template.renderer_provider} · v{template.version} · {template.bindings.length} binding{template.bindings.length === 1 ? "" : "s"} · created <HumanDate value={template.created_at} /></small>
-            {profilesQuery.isError ? <small className="workflow-used-by workflow-used-by-warning">Profile usage could not be checked.</small> : profilesUsing(template.id).length > 0 ? <small className="workflow-used-by">Used by: {profilesUsing(template.id).map((profile) => profile.name).join(", ")}. Disconnect these profiles before deleting.</small> : null}
-          </div>
-          <div className="saved-workflow-actions">
-            <button className="icon-button workflow-icon-button" type="button" aria-label={`Edit ${template.name}`} title="Edit workflow" onClick={() => editTemplate(template)}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16.5-.8 3.3 3.3-.8L18.2 7.3a2.1 2.1 0 0 0 0-3l-.5-.5a2.1 2.1 0 0 0-3 0L4 16.5Zm9.5-10.8 5.3 5.3M4 21h16" /></svg>
+      {!templatesQuery.isLoading && !templatesQuery.isError && templatesQuery.data?.items.length === 0 && <p className="field-hint">No workflows yet. <Link className="text-link" href="/workflows#workflow-editor">Import workflow</Link>.</p>}
+      {templatesQuery.data?.items.map((template) => {
+        const isExpanded = expandedTemplateId === template.logical_id;
+        return <article className={`saved-workflow saved-workflow-collapsible${isExpanded ? " expanded" : ""}`} key={template.logical_id}>
+          <div className="saved-workflow-header">
+            <button className="saved-workflow-toggle" type="button" aria-label={`${isExpanded ? "Hide" : "Show"} ${template.name} details`} aria-expanded={isExpanded} aria-controls={`workflow-details-${template.logical_id}`} onClick={() => setExpandedTemplateId(isExpanded ? null : template.logical_id)}>
+              <span className="profile-list-icon">⌘</span>
+              <span className="saved-workflow-summary"><strong>{template.name}</strong><small>{template.renderer_provider} · updated <HumanDate value={template.updated_at} /></small>{profilesQuery.isError ? <small className="workflow-used-by workflow-used-by-warning">Profile usage could not be checked.</small> : profilesUsing(template.id).length > 0 ? <small className="workflow-used-by">Used by: {profilesUsing(template.id).map((profile) => profile.name).join(", ")}</small> : null}</span>
+              <svg className="profile-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
             </button>
             <button className="icon-button workflow-icon-button danger" type="button" aria-label={`Delete ${template.name}`} title={profilesQuery.isLoading ? "Checking profile usage" : profilesQuery.isError ? "Profile usage unavailable" : profilesUsing(template.id).length > 0 ? "Disconnect connected profiles before deleting" : "Delete workflow"} disabled={deleteMutation.isPending || profilesQuery.isLoading || profilesQuery.isError || profilesUsing(template.id).length > 0} onClick={() => deleteTemplate(template)}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg>
             </button>
           </div>
-        </article>
-      ))}
+          {isExpanded && <div id={`workflow-details-${template.logical_id}`} className="saved-workflow-details"><WorkflowTemplateSetup initialTemplate={template} formId={`workflow-editor-${template.logical_id}`} /></div>}
+        </article>;
+      })}
       <ConfirmDialog open={pendingDelete !== null} title="Delete workflow?" message={pendingDelete ? `“${pendingDelete.name}” will be permanently removed. Any render profile connected to it must be disconnected first; deletion will be blocked while it is in use.` : ""} confirmLabel="Delete" onCancel={() => setPendingDelete(null)} onConfirm={() => { if (pendingDelete) deleteMutation.mutate(pendingDelete.id); setPendingDelete(null); }} />
       {toast && <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} />}
     </div>
   );
+}
+
+export function WorkflowWorkspace() {
+  const [activeTab, setActiveTab] = useState<"create" | "list">("list");
+  return <div className="workflow-workspace">
+    <div className="profile-tabs" role="tablist" aria-label="Workflow sections">
+      <button id="workflow-tab-create-button" className={`profile-tab${activeTab === "create" ? " active" : ""}`} type="button" role="tab" aria-selected={activeTab === "create"} aria-controls="workflow-tab-create" onClick={() => setActiveTab("create")}>Create workflow</button>
+      <button id="workflow-tab-list-button" className={`profile-tab${activeTab === "list" ? " active" : ""}`} type="button" role="tab" aria-selected={activeTab === "list"} aria-controls="workflow-tab-list" onClick={() => setActiveTab("list")}>Workflows</button>
+    </div>
+    <div id="workflow-tab-create" className="profile-tab-panel" role="tabpanel" aria-labelledby="workflow-tab-create-button" hidden={activeTab !== "create"}><WorkflowTemplateSetup formId="workflow-create-editor" /></div>
+    <div id="workflow-tab-list" className="profile-tab-panel" role="tabpanel" aria-labelledby="workflow-tab-list-button" hidden={activeTab !== "list"}><SavedWorkflowTemplates /></div>
+  </div>;
 }
 
 function extractInputs(workflow: Record<string, unknown>): WorkflowInput[] {
@@ -570,6 +508,7 @@ function parseWorkflowNodes(value: string): WorkflowTreeNode[] {
         classType: rawNode.class_type as string,
         inputName,
         title,
+        rawValue,
         editable: isEditableWorkflowValue(rawValue),
         value: isEditableWorkflowValue(rawValue) ? rawValue : null,
       }));
@@ -608,8 +547,7 @@ function ltxWorkflowNodes(nodes: WorkflowTreeNode[]): WorkflowTreeNode[] {
     },
     {
       label: "Seed",
-      field: fields.find((field) => field.editable && typeof field.value === "number" && (/^seed$/i.test(field.inputName) || /\.seed$/i.test(field.inputName)))
-        ?? fields.find((field) => field.editable && typeof field.value === "number" && /noise.?seed/i.test(field.inputName)),
+      field: primaryLtxSeedField(nodes),
     },
   ];
 
@@ -622,6 +560,25 @@ function ltxWorkflowNodes(nodes: WorkflowTreeNode[]): WorkflowTreeNode[] {
       inputs: [{ ...field, label }],
     }];
   });
+}
+
+function primaryLtxSeedField(nodes: WorkflowTreeNode[]): WorkflowField | undefined {
+  const noiseSeeds = nodes.flatMap((node) => node.inputs)
+    .filter((field) => field.editable && typeof field.value === "number" && /randomnoise/i.test(field.classType) && /noise.?seed/i.test(field.inputName));
+
+  const basePassSeed = noiseSeeds.find((seed) => {
+    const sampler = nodes.find((node) => /samplercustomadvanced/i.test(node.classType)
+      && node.inputs.some((input) => input.inputName === "noise" && linkedNodeId(input.rawValue) === seed.nodeId));
+    const sigmasNodeId = linkedNodeId(sampler?.inputs.find((input) => input.inputName === "sigmas")?.rawValue);
+    const sigmas = nodes.find((node) => node.nodeId === sigmasNodeId)?.inputs.find((input) => input.inputName === "sigmas")?.rawValue;
+    return typeof sigmas === "string" && /^\s*1(?:\.0+)?(?:\s*,|\s*$)/.test(sigmas);
+  });
+
+  return basePassSeed ?? noiseSeeds.at(-1);
+}
+
+function linkedNodeId(value: unknown): string | undefined {
+  return Array.isArray(value) && typeof value[0] === "string" ? value[0] : undefined;
 }
 
 function workflowFieldKey(field: WorkflowField): string {
@@ -639,12 +596,17 @@ function formatWorkflowValue(value: string | number | boolean | null): string {
 }
 
 function workflowMediaFromMetadata(metadata: Record<string, unknown>): Partial<Record<MediaKey, string>> {
-  const rawMedia = metadata.workflow_media;
+  const rawMedia = metadata.default_workflow_media ?? metadata.workflow_media;
   if (!isRecord(rawMedia)) return {};
   return {
     source_image: typeof rawMedia.source_image === "string" ? rawMedia.source_image : undefined,
     audio: typeof rawMedia.audio === "string" ? rawMedia.audio : undefined,
   };
+}
+
+function workflowMediaFilename(assetKey: string): string {
+  const storedName = assetKey.split("/").at(-1) ?? assetKey;
+  return storedName.replace(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-/i, "");
 }
 
 function isPromptInput(classType: string, inputName: string, title?: string): boolean {
@@ -667,15 +629,6 @@ function suggestBindings(workflow: Record<string, unknown>): WorkflowBinding[] {
     ["source_image", image, "string"],
     ["audio", audio, "string"],
   ] as const).flatMap(([semanticKey, input, valueType]) => input ? [{ semantic_key: semanticKey, node_id: input.nodeId, input_name: input.inputName, value_type: valueType, required: true }] : []);
-}
-
-function parseWorkflowInputs(value: string): WorkflowInput[] {
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    return extractInputs(parsed);
-  } catch {
-    return [];
-  }
 }
 
 function parseBindings(value: string): WorkflowBinding[] {
@@ -714,13 +667,6 @@ function validateBindingTargets(workflow: Record<string, unknown>, bindings: Wor
       throw new Error(`${semanticKeyLabel(binding.semantic_key)} points to missing input ${binding.node_id}.${binding.input_name}.`);
     }
   }
-}
-
-function defaultValueType(semanticKey: string): WorkflowBinding["value_type"] {
-  if (["seed", "fps", "frame_count", "width", "height"].includes(semanticKey)) return "integer";
-  if (semanticKey === "duration") return "number";
-  if (["script", "video_prompt"].includes(semanticKey)) return "template";
-  return "string";
 }
 
 function semanticKeyLabel(value: string): string {

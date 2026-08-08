@@ -1,6 +1,16 @@
-from uuid import UUID
+from datetime import datetime
+from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.statuses import BatchStatus, JobStatus
@@ -54,6 +64,9 @@ class TopicJob(TimestampMixin, Base):
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="jobs")
+    render_attempts: Mapped[list["RenderAttempt"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
 
 
 class VoiceProfile(TimestampMixin, Base):
@@ -145,11 +158,91 @@ class RenderProfile(TimestampMixin, Base):
     voice_profile: Mapped[VoiceProfile | None] = relationship()
 
 
-class WorkflowTemplate(TimestampMixin, Base):
-    __tablename__ = "workflow_templates"
-    __table_args__ = (Index("ix_workflow_templates_provider", "renderer_provider"),)
+class RenderNode(TimestampMixin, Base):
+    __tablename__ = "render_nodes"
 
     id: Mapped[UUIDPrimaryKey]
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), default="comfyui", nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    health_status: Mapped[str] = mapped_column(
+        String(32), default="unknown", nullable=False
+    )
+    health_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    health_checked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class RenderAttempt(TimestampMixin, Base):
+    __tablename__ = "render_attempts"
+    __table_args__ = (
+        Index("ix_render_attempts_job_created", "job_id", "created_at"),
+        Index("ix_render_attempts_external_job", "provider", "external_job_id"),
+    )
+
+    id: Mapped[UUIDPrimaryKey]
+    job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("topic_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    render_profile_id: Mapped[UUID] = mapped_column(
+        ForeignKey("render_profiles.id", ondelete="RESTRICT"), nullable=False
+    )
+    render_node_id: Mapped[UUID] = mapped_column(
+        ForeignKey("render_nodes.id", ondelete="RESTRICT"), nullable=False
+    )
+    workflow_template_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workflow_templates.id", ondelete="RESTRICT"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="queued", nullable=False)
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    external_job_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    workflow_snapshot: Mapped[dict[str, object]] = mapped_column(
+        JSON, default=dict, nullable=False
+    )
+    effective_values: Mapped[dict[str, object]] = mapped_column(
+        JSON, default=dict, nullable=False
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    job: Mapped[TopicJob] = relationship(back_populates="render_attempts")
+    assets: Mapped[list["MediaAsset"]] = relationship(
+        back_populates="render_attempt", cascade="all, delete-orphan"
+    )
+
+
+class MediaAsset(TimestampMixin, Base):
+    __tablename__ = "media_assets"
+    __table_args__ = (Index("ix_media_assets_job_kind", "job_id", "kind"),)
+
+    id: Mapped[UUIDPrimaryKey]
+    job_id: Mapped[UUID] = mapped_column(
+        ForeignKey("topic_jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    render_attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("render_attempts.id", ondelete="CASCADE"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    object_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    render_attempt: Mapped[RenderAttempt | None] = relationship(back_populates="assets")
+
+
+class WorkflowTemplate(TimestampMixin, Base):
+    __tablename__ = "workflow_templates"
+    __table_args__ = (
+        Index("ix_workflow_templates_provider", "renderer_provider"),
+        Index("ix_workflow_templates_logical_version", "logical_id", "version"),
+    )
+
+    id: Mapped[UUIDPrimaryKey]
+    logical_id: Mapped[UUID] = mapped_column(nullable=False)
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     renderer_provider: Mapped[str] = mapped_column(
@@ -167,6 +260,16 @@ class WorkflowTemplate(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="WorkflowParameterBinding.semantic_key",
     )
+
+
+@event.listens_for(WorkflowTemplate, "before_insert")
+def initialize_workflow_logical_id(
+    _mapper: object, _connection: object, template: WorkflowTemplate
+) -> None:
+    if template.id is None:
+        template.id = uuid4()
+    if template.logical_id is None:
+        template.logical_id = template.id
 
 
 class WorkflowParameterBinding(Base):

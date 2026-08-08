@@ -146,7 +146,32 @@ async def test_workflow_template_can_be_deleted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workflow_template_edit_creates_next_version() -> None:
+async def test_updated_workflow_can_be_deleted_without_reappearing() -> None:
+    app.state.batch_repository = InMemoryBatchRepository()
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/api/v1/workflow-templates",
+            json={"name": "Delete lineage", "workflow_json": workflow_fixture()},
+        )
+        updated = await client.put(
+            f"/api/v1/workflow-templates/{created.json()['id']}",
+            json={"name": "Delete lineage", "workflow_json": workflow_fixture()},
+        )
+        deleted = await client.delete(
+            f"/api/v1/workflow-templates/{updated.json()['id']}"
+        )
+        listed = await client.get("/api/v1/workflow-templates")
+
+    assert deleted.status_code == 204
+    assert listed.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_template_edit_updates_same_record() -> None:
     app.state.batch_repository = InMemoryBatchRepository()
     app.state.configuration_repository = InMemoryConfigurationRepository()
     transport = httpx.ASGITransport(app=app)
@@ -157,8 +182,26 @@ async def test_workflow_template_edit_creates_next_version() -> None:
             "/api/v1/workflow-templates",
             json={"name": "Versioned workflow", "workflow_json": workflow_fixture()},
         )
-        version = await client.post(
-            f"/api/v1/workflow-templates/{created.json()['id']}/versions",
+        voice = await client.post(
+            "/api/v1/voice-profiles",
+            json={"name": "Voice", "provider": "elevenlabs", "provider_voice_id": "v1"},
+        )
+        character = await client.post(
+            "/api/v1/characters",
+            json={"name": "Character", "default_voice_profile_id": voice.json()["id"]},
+        )
+        await client.post(
+            "/api/v1/render-profiles",
+            json={
+                "name": "Uses latest workflow",
+                "character_id": character.json()["id"],
+                "voice_profile_id": voice.json()["id"],
+                "renderer_provider": "comfyui",
+                "workflow_template_id": created.json()["id"],
+            },
+        )
+        updated = await client.put(
+            f"/api/v1/workflow-templates/{created.json()['id']}",
             json={
                 "name": "Versioned workflow",
                 "workflow_json": {
@@ -167,10 +210,17 @@ async def test_workflow_template_edit_creates_next_version() -> None:
                 },
             },
         )
+        listed = await client.get("/api/v1/workflow-templates")
+        profiles = await client.get("/api/v1/render-profiles")
 
     assert created.status_code == 201
-    assert version.status_code == 201
-    assert version.json()["version"] == 2
+    assert updated.status_code == 200
+    assert updated.json()["id"] == created.json()["id"]
+    assert updated.json()["version"] == 2
+    assert updated.json()["logical_id"] == created.json()["logical_id"]
+    assert listed.json()["total"] == 1
+    assert listed.json()["items"][0]["id"] == created.json()["id"]
+    assert profiles.json()["items"][0]["workflow_template_id"] == created.json()["id"]
 
 
 @pytest.mark.asyncio

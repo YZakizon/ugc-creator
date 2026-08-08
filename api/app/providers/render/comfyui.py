@@ -92,6 +92,18 @@ class ComfyUIRenderer(VideoRenderer):
             return []
         return _extract_outputs(outputs)
 
+    async def download_output(self, output: RenderOutput) -> tuple[bytes, str | None]:
+        response = await self._request(
+            "GET",
+            "/view",
+            params={
+                "filename": output.filename,
+                "subfolder": output.subfolder,
+                "type": output.output_type or "output",
+            },
+        )
+        return response.content, response.headers.get("content-type")
+
     async def upload(
         self,
         filename: str,
@@ -121,6 +133,7 @@ class ComfyUIRenderer(VideoRenderer):
         json_body: Mapping[str, object] | None = None,
         files: Mapping[str, tuple[str, bytes]] | None = None,
         data: Mapping[str, str] | None = None,
+        params: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         try:
             if self.client is None:
@@ -131,6 +144,7 @@ class ComfyUIRenderer(VideoRenderer):
                         json=json_body,
                         files=files,
                         data=data,
+                        params=params,
                     )
             else:
                 response = await self.client.request(
@@ -139,6 +153,7 @@ class ComfyUIRenderer(VideoRenderer):
                     json=json_body,
                     files=files,
                     data=data,
+                    params=params,
                 )
         except httpx.HTTPError as exc:
             raise ComfyUIProviderError("ComfyUI is unavailable") from exc

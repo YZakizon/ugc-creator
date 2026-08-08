@@ -2,7 +2,7 @@ import React from "react";
 import Link from "next/link";
 
 import { CreateBatchForm } from "@/components/create-batch-form";
-import { CurrentDate, DashboardStats, RecentJobs } from "@/components/dashboard-live-data";
+import { CurrentDate, DashboardStats, RecentJobs, RenderLibrary } from "@/components/dashboard-live-data";
 import { DashboardTabs } from "@/components/dashboard-tabs";
 import { RenderProfileSetup } from "@/components/render-profile-setup";
 import { WorkflowTemplateSetup } from "@/components/workflow-template-setup";
@@ -57,7 +57,7 @@ export default async function HomePage() {
             </> },
             { id: "create", label: "Create batch", content: <CreateBatchForm /> },
             { id: "jobs", label: "Jobs", content: <section className="panel jobs-panel" aria-labelledby="jobs-title"><div className="panel-heading"><div><h2 id="jobs-title">Jobs</h2><p>Track content and render activity.</p></div></div><RecentJobs /></section> },
-            { id: "library", label: "Library", content: <section className="panel compact-empty empty-state" aria-labelledby="library-title"><h2 id="library-title">Output library</h2><p>Completed videos will appear here after the render pipeline is connected.</p></section> },
+            { id: "library", label: "Library", content: <section className="panel" aria-labelledby="library-title"><div className="panel-heading"><div><h2 id="library-title">Output library</h2><p>Completed videos ingested from ComfyUI.</p></div></div><RenderLibrary /></section> },
             { id: "profiles", label: "Profiles", content: <section className="panel profile-panel" aria-labelledby="profiles-title"><div className="panel-heading"><div><h2 id="profiles-title">Render profiles</h2><p>Reusable setups for your characters and scenes.</p></div></div><RenderProfileSetup /></section> },
             { id: "workflows", label: "Workflows", content: <section className="panel workflow-panel" aria-labelledby="workflows-title"><div className="panel-heading"><div><h2 id="workflows-title">ComfyUI workflows</h2><p>Import an API workflow and map semantic inputs.</p></div></div><WorkflowTemplateSetup /></section> },
           ]} />

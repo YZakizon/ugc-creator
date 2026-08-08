@@ -1,0 +1,251 @@
+from datetime import UTC, datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload, sessionmaker
+
+from app.core.statuses import JobStatus
+from app.db.models import (
+    MediaAsset,
+    RenderAttempt,
+    RenderNode,
+    RenderProfile,
+    TopicJob,
+    WorkflowTemplate,
+)
+from app.schemas import RenderNodeCreate
+
+
+def now() -> datetime:
+    return datetime.now(UTC)
+
+
+class RenderExecutionRepository:
+    def __init__(self, factory: sessionmaker[Session]) -> None:
+        self.factory = factory
+
+    def list_nodes(self) -> list[RenderNode]:
+        with self.factory() as session:
+            return list(
+                session.scalars(
+                    select(RenderNode).order_by(RenderNode.created_at.desc())
+                ).all()
+            )
+
+    def create_node(self, payload: RenderNodeCreate) -> RenderNode:
+        with self.factory() as session:
+            node = RenderNode(
+                name=payload.name.strip(),
+                provider="comfyui",
+                base_url=payload.base_url.rstrip("/"),
+                is_active=payload.is_active,
+            )
+            session.add(node)
+            session.commit()
+            session.refresh(node)
+            return node
+
+    def get_node(self, node_id: UUID) -> RenderNode | None:
+        with self.factory() as session:
+            return session.get(RenderNode, node_id)
+
+    def update_node_health(
+        self, node_id: UUID, healthy: bool, message: str | None
+    ) -> RenderNode:
+        with self.factory() as session:
+            node = session.get(RenderNode, node_id)
+            if node is None:
+                raise LookupError("Render node not found")
+            node.health_status = "healthy" if healthy else "unavailable"
+            node.health_message = message
+            node.health_checked_at = now()
+            session.commit()
+            session.refresh(node)
+            return node
+
+    def delete_node(self, node_id: UUID) -> bool:
+        with self.factory() as session:
+            node = session.get(RenderNode, node_id)
+            if node is None:
+                return False
+            if session.scalar(
+                select(RenderAttempt.id)
+                .where(RenderAttempt.render_node_id == node_id)
+                .limit(1)
+            ):
+                raise ValueError(
+                    "Render node has render attempt history and cannot be deleted"
+                )
+            session.delete(node)
+            session.commit()
+            return True
+
+    def queue_attempt(self, job_id: UUID, node_id: UUID) -> RenderAttempt:
+        with self.factory() as session:
+            job = session.get(TopicJob, job_id)
+            if job is None:
+                raise LookupError("Job not found")
+            if job.render_profile_id is None:
+                raise ValueError("Job has no render profile")
+            profile = session.get(RenderProfile, job.render_profile_id)
+            if profile is None or profile.workflow_template_id is None:
+                raise ValueError("Render profile has no workflow template")
+            node = session.get(RenderNode, node_id)
+            if node is None or not node.is_active:
+                raise ValueError("Choose an active render node")
+            existing = session.scalar(
+                select(RenderAttempt)
+                .where(
+                    RenderAttempt.job_id == job_id,
+                    RenderAttempt.status.in_(
+                        [
+                            "queued",
+                            "submitting_render",
+                            "rendering",
+                            "downloading_output",
+                        ]
+                    ),
+                )
+                .order_by(RenderAttempt.created_at.desc())
+            )
+            if existing is not None:
+                return existing
+            attempt = RenderAttempt(
+                job_id=job.id,
+                render_profile_id=profile.id,
+                render_node_id=node.id,
+                workflow_template_id=profile.workflow_template_id,
+                provider=node.provider,
+                status="queued",
+                progress=0,
+                workflow_snapshot={},
+                effective_values={},
+            )
+            job.status = JobStatus.QUEUED.value
+            job.error_message = None
+            session.add(attempt)
+            session.commit()
+            session.refresh(attempt)
+            return attempt
+
+    def get_attempt(self, attempt_id: UUID) -> RenderAttempt | None:
+        with self.factory() as session:
+            return session.scalar(
+                select(RenderAttempt)
+                .options(selectinload(RenderAttempt.assets))
+                .where(RenderAttempt.id == attempt_id)
+            )
+
+    def list_attempts(self, job_id: UUID | None = None) -> list[RenderAttempt]:
+        with self.factory() as session:
+            query = (
+                select(RenderAttempt)
+                .options(selectinload(RenderAttempt.assets))
+                .order_by(RenderAttempt.created_at.desc())
+            )
+            if job_id is not None:
+                query = query.where(RenderAttempt.job_id == job_id)
+            return list(session.scalars(query).unique().all())
+
+    def execution_context(
+        self, attempt_id: UUID
+    ) -> tuple[RenderAttempt, TopicJob, RenderProfile, RenderNode, WorkflowTemplate]:
+        with self.factory() as session:
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None:
+                raise LookupError("Render attempt not found")
+            job = session.get(TopicJob, attempt.job_id)
+            profile = session.get(RenderProfile, attempt.render_profile_id)
+            node = session.get(RenderNode, attempt.render_node_id)
+            workflow = session.scalar(
+                select(WorkflowTemplate)
+                .options(selectinload(WorkflowTemplate.bindings))
+                .where(WorkflowTemplate.id == attempt.workflow_template_id)
+            )
+            if job is None or profile is None or node is None or workflow is None:
+                raise LookupError("Render attempt configuration is unavailable")
+            _ = profile.character.name
+            return attempt, job, profile, node, workflow
+
+    def save_prepared(
+        self, attempt_id: UUID, workflow: dict[str, object], values: dict[str, object]
+    ) -> RenderAttempt:
+        with self.factory() as session:
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None:
+                raise LookupError("Render attempt not found")
+            attempt.workflow_snapshot = workflow
+            attempt.effective_values = values
+            attempt.status = "submitting_render"
+            attempt.job.status = JobStatus.SUBMITTING_RENDER.value
+            session.commit()
+            session.refresh(attempt)
+            return attempt
+
+    def save_submission(
+        self, attempt_id: UUID, external_job_id: str, client_id: str | None
+    ) -> RenderAttempt:
+        with self.factory() as session:
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None:
+                raise LookupError("Render attempt not found")
+            if attempt.external_job_id is None:
+                attempt.external_job_id = external_job_id
+                attempt.client_id = client_id
+                attempt.submitted_at = now()
+            attempt.status = "rendering"
+            attempt.progress = max(attempt.progress, 1)
+            attempt.job.status = JobStatus.RENDERING.value
+            session.commit()
+            session.refresh(attempt)
+            return attempt
+
+    def update_progress(
+        self, attempt_id: UUID, status: str, progress: int, error: str | None = None
+    ) -> None:
+        with self.factory() as session:
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None:
+                raise LookupError("Render attempt not found")
+            attempt.status = status
+            attempt.progress = progress
+            attempt.error_message = error
+            attempt.job.status = (
+                status
+                if status in {item.value for item in JobStatus}
+                else JobStatus.RENDERING.value
+            )
+            attempt.job.error_message = error
+            session.commit()
+
+    def complete(
+        self,
+        attempt_id: UUID,
+        object_key: str,
+        filename: str,
+        content_type: str | None,
+        size: int,
+    ) -> None:
+        with self.factory() as session:
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None:
+                raise LookupError("Render attempt not found")
+            asset = MediaAsset(
+                job_id=attempt.job_id,
+                render_attempt_id=attempt.id,
+                kind="video",
+                object_key=object_key,
+                filename=filename,
+                content_type=content_type,
+                size_bytes=size,
+            )
+            session.add(asset)
+            attempt.status = "completed"
+            attempt.progress = 100
+            attempt.completed_at = now()
+            attempt.job.status = JobStatus.COMPLETED.value
+            session.commit()
+
+    def get_asset(self, asset_id: UUID) -> MediaAsset | None:
+        with self.factory() as session:
+            return session.get(MediaAsset, asset_id)

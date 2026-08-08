@@ -34,6 +34,11 @@ async def test_comfyui_submit_status_and_outputs() -> None:
                     }
                 },
             )
+        if request.url.path == "/view":
+            assert request.url.params["filename"] == "final.mp4"
+            return httpx.Response(
+                200, content=b"video-bytes", headers={"content-type": "video/mp4"}
+            )
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -45,11 +50,14 @@ async def test_comfyui_submit_status_and_outputs() -> None:
         )
         status = await renderer.get_status(submission.external_job_id)
         outputs = await renderer.fetch_outputs(submission.external_job_id)
+        content, content_type = await renderer.download_output(outputs[0])
 
     assert submission.external_job_id == "prompt-123"
     assert status.state == "completed"
     assert status.progress == 100
     assert outputs[0].filename == "final.mp4"
+    assert content == b"video-bytes"
+    assert content_type == "video/mp4"
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { generateJobContent, getDashboardSummary } from "@/lib/api";
+import { generateJobContent, getDashboardSummary, getRenderAttempts, getRenderNodes, queueJobRender } from "@/lib/api";
 
 function StatCard({ label, value, hint, icon, tone }: {
   label: string;
@@ -59,10 +59,19 @@ export function RecentJobs() {
     queryFn: getDashboardSummary,
     refetchInterval: 5000,
   });
+  const nodes = useQuery({ queryKey: ["render-nodes"], queryFn: getRenderNodes });
+  const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
   const contentMutation = useMutation({
     mutationFn: generateJobContent,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    },
+  });
+  const renderMutation = useMutation({
+    mutationFn: ({ jobId, nodeId }: { jobId: string; nodeId: string }) => queueJobRender(jobId, nodeId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["render-attempts"] });
     },
   });
   const jobs = data?.recent_jobs ?? [];
@@ -101,9 +110,24 @@ export function RecentJobs() {
               {contentMutation.isPending && contentMutation.variables === job.id ? "Queuing…" : "Generate content"}
             </button>
           )}
+          {(job.status === "content_ready" || job.status === "ready_to_render") && (
+            <button className="job-action" type="button" disabled={renderMutation.isPending || !nodes.data?.items.some((node) => node.is_active)} onClick={() => { const node = nodes.data?.items.find((item) => item.health_status === "healthy") ?? nodes.data?.items.find((item) => item.is_active); if (node) renderMutation.mutate({ jobId: job.id, nodeId: node.id }); }}>{renderMutation.isPending && renderMutation.variables?.jobId === job.id ? "Queuing render…" : "Render with ComfyUI"}</button>
+          )}
+          {attempts.data?.items.find((attempt) => attempt.job_id === job.id) && <small className="job-render-progress">{attempts.data.items.find((attempt) => attempt.job_id === job.id)?.status.replaceAll("_", " ")} · {attempts.data.items.find((attempt) => attempt.job_id === job.id)?.progress}%</small>}
         </div>
       ))}
       {contentMutation.isError && <p className="form-error" role="alert">{contentMutation.error.message}</p>}
+      {renderMutation.isError && <p className="form-error" role="alert">{renderMutation.error.message}</p>}
+      {!nodes.isLoading && nodes.data?.items.length === 0 && <p className="field-hint">Add a ComfyUI render node in Settings before rendering.</p>}
     </div>
   );
+}
+
+export function RenderLibrary() {
+  const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
+  const assets = attempts.data?.items.flatMap((attempt) => attempt.assets.map((asset) => ({ attempt, asset }))) ?? [];
+  if (attempts.isLoading) return <div className="empty-state compact-empty"><p>Loading rendered videos…</p></div>;
+  if (attempts.isError) return <div className="empty-state compact-empty"><p>Output library is unavailable.</p></div>;
+  if (!assets.length) return <div className="empty-state compact-empty"><h3>No completed videos yet</h3><p>Render a content-ready job and its output will appear here.</p></div>;
+  return <div className="render-library-grid">{assets.map(({ attempt, asset }) => <article className="render-library-card" key={asset.id}><div className="library-video-placeholder">▶</div><strong>{asset.filename}</strong><small>ComfyUI · {Math.round(asset.size_bytes / 1024)} KB</small><a className="button button-primary" href={asset.download_url} download={asset.filename}>Download video</a><span>Attempt {attempt.id}</span></article>)}</div>;
 }

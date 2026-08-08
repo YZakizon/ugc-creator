@@ -254,6 +254,7 @@ class WorkflowTemplateCreate(BaseModel):
 
 class WorkflowTemplateRead(BaseModel):
     id: UUID
+    logical_id: UUID
     name: str
     description: str | None
     renderer_provider: str
@@ -281,3 +282,57 @@ class WorkflowMediaUploadRead(BaseModel):
     asset_key: str
     filename: str
     input_type: Literal["image", "audio"]
+
+
+class RenderNodeCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    base_url: str = Field(min_length=8, max_length=500)
+    is_active: bool = True
+
+
+class RenderNodeRead(RenderNodeCreate):
+    id: UUID
+    provider: str
+    health_status: Literal["unknown", "healthy", "unavailable"]
+    health_message: str | None
+    health_checked_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RenderNodeList(BaseModel):
+    items: list[RenderNodeRead]
+    total: int
+
+
+class MediaAssetRead(BaseModel):
+    id: UUID
+    job_id: UUID
+    render_attempt_id: UUID | None
+    kind: str
+    filename: str
+    content_type: str | None
+    size_bytes: int
+    download_url: str
+    created_at: datetime
+
+
+class RenderAttemptRead(BaseModel):
+    id: UUID
+    job_id: UUID
+    render_profile_id: UUID
+    render_node_id: UUID
+    workflow_template_id: UUID
+    provider: str
+    status: str
+    progress: int
+    external_job_id: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    assets: list[MediaAssetRead] = Field(default_factory=list)
+
+
+class RenderAttemptList(BaseModel):
+    items: list[RenderAttemptRead]
+    total: int

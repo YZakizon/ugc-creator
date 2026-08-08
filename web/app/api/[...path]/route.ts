@@ -53,6 +53,13 @@ export async function PATCH(
   return proxy(request, context.params.path);
 }
 
+export async function PUT(
+  request: NextRequest,
+  context: { params: { path: string[] } },
+) {
+  return proxy(request, context.params.path);
+}
+
 export async function DELETE(
   request: NextRequest,
   context: { params: { path: string[] } },

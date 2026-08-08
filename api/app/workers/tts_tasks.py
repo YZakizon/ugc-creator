@@ -65,6 +65,7 @@ def generate_voice_preview(preview_id: str) -> dict[str, str]:
         repository.update_voice_preview(
             preview_uuid,
             status="failed",
+            provider_request_id=exc.provider_request_id,
             error_message=str(exc),
         )
         return {"preview_id": preview_id, "status": "failed"}

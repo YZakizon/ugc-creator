@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.providers.tts.contracts import TTSRequest
+from app.providers.tts.contracts import TTSProviderError, TTSRequest
 from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
 
 
@@ -42,3 +42,69 @@ async def test_elevenlabs_adapter_maps_voice_settings_and_audio() -> None:
 
     assert result.audio == b"ID3audio"
     assert result.provider_request_id == "req-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_category", "expected_retriable"),
+    [
+        (401, "provider_auth_error", False),
+        (402, "provider_quota_exceeded", False),
+        (422, "provider_rejected", False),
+        (429, "provider_rate_limited", True),
+        (503, "provider_unavailable", True),
+    ],
+)
+async def test_elevenlabs_adapter_normalizes_provider_errors(
+    status_code: int, expected_category: str, expected_retriable: bool
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            json={
+                "detail": {
+                    "code": "upstream-code",
+                    "request_id": "body-request-id",
+                }
+            },
+        )
+
+    provider = ElevenLabsTTSProvider(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(TTSProviderError) as raised:
+        await provider.synthesize(
+            TTSRequest(
+                text="Hello",
+                voice_id="voice-123",
+                model_id="eleven_multilingual_v2",
+            )
+        )
+
+    assert raised.value.category == expected_category
+    assert raised.value.retriable is expected_retriable
+    assert raised.value.provider_request_id == "body-request-id"
+    assert raised.value.upstream_code == "upstream-code"
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_adapter_normalizes_timeout() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    provider = ElevenLabsTTSProvider(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(TTSProviderError) as raised:
+        await provider.synthesize(
+            TTSRequest(
+                text="Hello",
+                voice_id="voice-123",
+                model_id="eleven_multilingual_v2",
+            )
+        )
+
+    assert raised.value.category == "provider_timeout"
+    assert raised.value.retriable is True

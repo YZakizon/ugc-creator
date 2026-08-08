@@ -104,6 +104,7 @@ export type RenderProfile = {
 
 export type WorkflowTemplate = {
   id: string;
+  logical_id: string;
   name: string;
   description: string | null;
   renderer_provider: "comfyui";
@@ -121,6 +122,46 @@ export type WorkflowTemplate = {
   }>;
   created_at: string;
   updated_at: string;
+};
+
+export type RenderNode = {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  is_active: boolean;
+  health_status: "unknown" | "healthy" | "unavailable";
+  health_message: string | null;
+  health_checked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MediaAsset = {
+  id: string;
+  job_id: string;
+  kind: string;
+  filename: string;
+  content_type: string | null;
+  size_bytes: number;
+  download_url: string;
+  created_at: string;
+};
+
+export type RenderAttempt = {
+  id: string;
+  job_id: string;
+  render_profile_id: string;
+  render_node_id: string;
+  workflow_template_id: string;
+  provider: string;
+  status: string;
+  progress: number;
+  external_job_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  assets: MediaAsset[];
 };
 
 export type ResourceReference = { id: string; name: string };
@@ -335,9 +376,9 @@ export function createWorkflowTemplate(input: WorkflowTemplateInput): Promise<Wo
   });
 }
 
-export function createWorkflowTemplateVersion(templateId: string, input: WorkflowTemplateInput): Promise<WorkflowTemplate> {
-  return request<WorkflowTemplate>(`/api/v1/workflow-templates/${templateId}/versions`, {
-    method: "POST",
+export function updateWorkflowTemplate(templateId: string, input: WorkflowTemplateInput): Promise<WorkflowTemplate> {
+  return request<WorkflowTemplate>(`/api/v1/workflow-templates/${templateId}`, {
+    method: "PUT",
     body: JSON.stringify(input),
   });
 }
@@ -359,4 +400,28 @@ export function uploadWorkflowMedia(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function getRenderNodes(): Promise<{ items: RenderNode[]; total: number }> {
+  return request<{ items: RenderNode[]; total: number }>("/api/v1/render-nodes");
+}
+
+export function createRenderNode(input: { name: string; base_url: string; is_active: boolean }): Promise<RenderNode> {
+  return request<RenderNode>("/api/v1/render-nodes", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function checkRenderNode(nodeId: string): Promise<RenderNode> {
+  return request<RenderNode>(`/api/v1/render-nodes/${nodeId}/health`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export function deleteRenderNode(nodeId: string): Promise<void> {
+  return request<void>(`/api/v1/render-nodes/${nodeId}`, { method: "DELETE" });
+}
+
+export function queueJobRender(jobId: string, nodeId: string): Promise<RenderAttempt> {
+  return request<RenderAttempt>(`/api/v1/jobs/${jobId}/render?node_id=${encodeURIComponent(nodeId)}`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export function getRenderAttempts(): Promise<{ items: RenderAttempt[]; total: number }> {
+  return request<{ items: RenderAttempt[]; total: number }>("/api/v1/render-attempts");
 }
