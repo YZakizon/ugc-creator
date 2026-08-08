@@ -686,6 +686,19 @@ Do not claim checks passed unless actually run successfully. If a required exter
 
 ## Change discipline
 
+### Branch and worktree isolation
+
+- Every new task or bug fix MUST use its own dedicated Git branch and separate
+  worktree. Create both before making task edits.
+- Independent work branches from `main`; dependent work branches from the exact
+  required feature commit or branch.
+- Do not implement task changes in the primary workspace. Preserve any unrelated
+  changes there and in other worktrees.
+- Stage and commit only files belonging to the task.
+- After the task is merged or otherwise confirmed complete, remove its local
+  worktree and task-local branch. Never delete a remote branch unless explicitly
+  requested.
+
 Before editing:
 1. Read applicable `AGENTS.md`.
 2. Read `PLANS.md`.
