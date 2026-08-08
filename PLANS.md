@@ -1114,6 +1114,7 @@ Generate structured UGC content for one topic or multiple jobs.
 - [x] Build fake LLM provider.
 - [x] Unit tests for validation and service behavior.
 - [x] Add Celery content-generation task.
+- [x] Retry only provider failures classified as transient, with bounded backoff.
 
 ## Acceptance criteria
 - A fake provider can deterministically produce valid content in CI.
@@ -1148,6 +1149,7 @@ Create voice profiles, synthesize speech, measure real duration, and fit target 
 - [ ] Add LLM shorten/expand request.
 - [ ] Preserve script/TTS revision history or version metadata.
 - [x] Add Celery tasks.
+- [x] Retry transient TTS failures and recover stale queued/generating voice previews.
 - [ ] Tests for too-short, acceptable, too-long, and max-attempt cases.
 
 ## Acceptance criteria
@@ -1833,6 +1835,22 @@ inputs. Editing a configured workflow affects future renders using that profile.
 **Decision:** Celery + Redis for V1 background jobs.
 
 **Reason:** Video/TTS work is long-running and requires retryable persisted orchestration without adding heavier workflow infrastructure.
+
+### 2026-08-08 — Provider retries are typed and bounded
+**Status: accepted**
+
+**Decision:** Provider adapters classify failures as retriable or permanent. Celery
+tasks retry only transient failures with bounded exponential backoff. Voice preview
+requests reclaim matching queued or generating records after a five-minute stale
+timeout instead of remaining stuck indefinitely.
+
+**Reason:** HTTP adapters normalize network failures into domain exceptions, so task
+retry policy must use those typed exceptions. Persisted in-progress records also need
+a recovery path after worker crashes.
+
+**Consequences:** Permanent and exhausted failures are persisted as failed; transient
+TTS attempts return to queued while waiting for retry. Identical active previews remain
+deduplicated until the stale timeout expires.
 
 ### 2026-08-06 — PostgreSQL
 **Status: accepted**

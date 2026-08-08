@@ -2,6 +2,8 @@ import asyncio
 import os
 from uuid import UUID
 
+from celery import Task
+
 from app.db.session import create_database_engine, session_factory
 from app.providers.storage.local import LocalStorageProvider
 from app.providers.tts.contracts import TTSProviderError, TTSRequest
@@ -9,10 +11,15 @@ from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
 from app.providers.tts.fake import FakeTTSProvider
 from app.repositories import SqlAlchemyConfigurationRepository
 from app.workers.celery_app import celery_app
+from app.workers.retry import retry_provider_error
 
 
-@celery_app.task(name="ugc_creator.generate_voice_preview")  # type: ignore[untyped-decorator]
-def generate_voice_preview(preview_id: str) -> dict[str, str]:
+@celery_app.task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="ugc_creator.generate_voice_preview",
+    max_retries=3,
+)
+def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
     engine = create_database_engine()
     if engine is None:
         raise RuntimeError("DATABASE_URL is required for voice previews")
@@ -62,6 +69,14 @@ def generate_voice_preview(preview_id: str) -> dict[str, str]:
         )
         return {"preview_id": preview_id, "status": completed.status}
     except TTSProviderError as exc:
+        if exc.retriable:
+            repository.update_voice_preview(
+                preview_uuid,
+                status="queued",
+                provider_request_id=exc.provider_request_id,
+                error_message=str(exc),
+            )
+            retry_provider_error(task, exc, retriable=True)
         repository.update_voice_preview(
             preview_uuid,
             status="failed",

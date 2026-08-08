@@ -11,6 +11,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' INT TERM
 
+docker compose -p "$project_name" -f "$repo_root/compose.test.yaml" down -v >/dev/null 2>&1 || true
 docker compose -p "$project_name" -f "$repo_root/compose.test.yaml" up -d --build --wait postgres-test redis-test api-test worker-test
 
 (cd "$repo_root/web" && API_BASE_URL="http://127.0.0.1:18011" corepack pnpm exec next dev --hostname 127.0.0.1 --port 13011) &

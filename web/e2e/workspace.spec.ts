@@ -22,42 +22,91 @@ test.describe("workspace customer journeys", () => {
   });
 
   test("imports a workflow, creates a profile, and creates a multi-topic batch", async ({ page }) => {
+    test.setTimeout(90_000);
     await page.getByRole("link", { name: "Workflows" }).click();
     await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
-    await page.getByRole("link", { name: "Import workflow" }).first().click();
-    await expect(page).toHaveURL(/#workflows$/);
+    await page.getByRole("tab", { name: "Create workflow" }).click();
     await page.getByLabel("Template name").fill("Shelf workflow");
     await page.getByLabel("ComfyUI API workflow JSON").fill(workflow);
+    await page.getByLabel("Default source image").setInputFiles({ name: "source.png", mimeType: "image/png", buffer: Buffer.from("fake-image") });
+    await expect(page.getByText("Current file: source.png")).toBeVisible();
+    await page.getByLabel("Default audio").setInputFiles({ name: "voice.wav", mimeType: "audio/wav", buffer: Buffer.from("fake-audio") });
+    await expect(page.getByText("Current file: voice.wav")).toBeVisible();
     const workflowResponse = page.waitForResponse((response) => response.url().includes("workflow-templates") && response.request().method() === "POST");
     await page.getByRole("button", { name: "Import workflow" }).click();
     expect((await workflowResponse).status()).toBe(201);
-    await expect(page.getByText("Workflow version 1 saved successfully.")).toBeVisible();
+    await expect(page.getByText("Workflow imported successfully.")).toBeVisible();
+
+    await page.getByRole("link", { name: "Voice profiles" }).click();
+    await page.getByRole("tab", { name: "Create voice profile" }).click();
+    await page.getByLabel("Voice profile name").fill("Elena voice");
+    await page.getByLabel("Voice name").fill("Elena");
+    await page.getByLabel("Voice ID").fill("voice-elena");
+    await page.getByRole("button", { name: "Create voice profile" }).click();
+    await expect(page.getByText("Voice profile created.")).toBeVisible();
 
     await page.locator('a[href="/profiles"]').click();
     await page.getByRole("tab", { name: "Create profile" }).click();
     await page.getByLabel("Profile name").fill("Elena Shelf");
-    await page.getByLabel("Character name").fill("Elena");
-    await page.getByLabel("Voice profile").fill("Elena voice");
-    await page.getByLabel("ElevenLabs voice ID").fill("voice-elena");
-    await page.getByLabel("Workflow template").selectOption({ label: /Shelf workflow/ });
+    await page.getByLabel("Character").fill("Elena");
+    const voiceOption = page.getByLabel("Voice profile").locator("option").filter({ hasText: "Elena voice" });
+    await page.getByLabel("Voice profile").selectOption(await voiceOption.getAttribute("value") ?? "");
+    const workflowOption = page.getByLabel("Workflow template").locator("option").filter({ hasText: "Shelf workflow" });
+    await page.getByLabel("Workflow template").selectOption(await workflowOption.getAttribute("value") ?? "");
     await page.getByRole("button", { name: "Create profile" }).click();
     await expect(page.getByText("Render profile created successfully.")).toBeVisible();
+
+    await page.getByRole("link", { name: "Voice profiles" }).click();
+    await page.getByRole("tab", { name: "Voice profiles" }).click();
+    await page.getByRole("button", { name: "Show Elena voice details" }).click();
+    await page.getByPlaceholder("Enter text to generate speech…").fill("This is a generated speech preview.");
+    await page.getByRole("button", { name: "Generate speech" }).click();
+    await expect(page.getByText("completed", { exact: true })).toBeVisible({ timeout: 20_000 });
+    const speechDownload = page.getByRole("link", { name: "Download audio" });
+    const speechResponse = await page.request.get(await speechDownload.getAttribute("href") ?? "");
+    expect(speechResponse.status()).toBe(200);
+
+    await page.getByRole("link", { name: "Settings" }).click();
+    await page.getByLabel("Node name").fill("Fake ComfyUI");
+    await page.getByLabel("ComfyUI URL").fill("http://fake-comfyui-test:8188");
+    await page.getByRole("button", { name: "Add render node" }).click();
+    await expect(page.getByText("Render node saved.")).toBeVisible();
+    await page.getByRole("button", { name: "Test connection" }).click();
+    await expect(page.getByText("ComfyUI is connected.")).toBeVisible();
 
     await page.getByRole("link", { name: "Create batch" }).click();
     await page.getByLabel("Batch name").fill("Tuesday ideas");
     await page.getByLabel("Topics").fill("Burnout is not laziness\nA reminder for overthinkers");
-    await page.getByLabel("Render profile").selectOption({ label: "Elena Shelf" });
+    await page.locator(".batch-form select").selectOption({ label: "Elena Shelf" });
     await page.getByRole("button", { name: "Create batch" }).click();
     await expect(page.getByText("Batch created successfully.")).toBeVisible();
     await page.getByRole("tab", { name: "Jobs" }).click();
-    await expect(page.getByText("Burnout is not laziness")).toBeVisible();
+    const jobsPanel = page.locator("#tab-panel-jobs");
+    const firstJob = jobsPanel.locator(".job-row").filter({ hasText: "Burnout is not laziness" });
+    await expect(firstJob).toBeVisible();
     const generateResponse = page.waitForResponse((response) => response.url().includes("generate-content") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "Generate content" }).first().click();
+    await firstJob.getByRole("button", { name: "Generate content" }).click();
     expect((await generateResponse).status()).toBe(202);
     await expect.poll(async () => {
       await page.reload();
       await page.getByRole("tab", { name: "Jobs" }).click();
-      return await page.locator(".job-row").first().innerText();
+      return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
+
+    await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
+    await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
+      timeout: 20_000,
+      intervals: [500, 1000],
+    }).toContain("rendering");
+    await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
+      timeout: 30_000,
+      intervals: [1000, 2000],
+    }).toContain("completed");
+
+    await page.getByRole("tab", { name: "Library" }).click();
+    await expect(page.getByText("ugc-preview.mp4")).toBeVisible();
+    const videoDownload = page.getByRole("link", { name: "Download video" }).first();
+    const videoResponse = await page.request.get(await videoDownload.getAttribute("href") ?? "");
+    expect(videoResponse.status()).toBe(200);
   });
 });

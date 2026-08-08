@@ -6,15 +6,11 @@ import httpx
 
 from app.providers.llm.contracts import (
     LLMProvider,
+    LLMProviderError,
     UGCContent,
     UGCContentRequest,
     UGCContentResult,
 )
-
-
-class LLMProviderError(RuntimeError):
-    """Safe provider failure with no secret or raw response leakage."""
-
 
 UGC_CONTENT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -78,7 +74,11 @@ class OpenAIResponsesProvider(LLMProvider):
         self, request: UGCContentRequest
     ) -> UGCContentResult:
         if not self.api_key:
-            raise LLMProviderError("OpenAI is not configured on the server")
+            raise LLMProviderError(
+                "OpenAI is not configured on the server",
+                category="provider_auth_error",
+                retriable=False,
+            )
 
         payload = {
             "model": self.model,
@@ -107,23 +107,50 @@ class OpenAIResponsesProvider(LLMProvider):
             "Content-Type": "application/json",
         }
 
-        if self.client is None:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(
+        try:
+            if self.client is None:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    response = await client.post(
+                        "https://api.openai.com/v1/responses",
+                        headers=headers,
+                        json=payload,
+                    )
+            else:
+                response = await self.client.post(
                     "https://api.openai.com/v1/responses",
                     headers=headers,
                     json=payload,
                 )
-        else:
-            response = await self.client.post(
-                "https://api.openai.com/v1/responses",
-                headers=headers,
-                json=payload,
-            )
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            raise LLMProviderError(
+                "OpenAI is temporarily unreachable.",
+                category=(
+                    "provider_timeout"
+                    if isinstance(exc, httpx.TimeoutException)
+                    else "provider_unavailable"
+                ),
+                retriable=True,
+            ) from exc
 
         if response.status_code >= 400:
+            request_id = response.headers.get("x-request-id")
+            category = {
+                401: "provider_auth_error",
+                402: "provider_quota_exceeded",
+                408: "provider_timeout",
+                429: "provider_rate_limited",
+            }.get(
+                response.status_code,
+                "provider_rejected"
+                if response.status_code < 500
+                else "provider_unavailable",
+            )
             raise LLMProviderError(
-                f"OpenAI request failed with status {response.status_code}"
+                f"OpenAI request failed with status {response.status_code}",
+                category=category,
+                retriable=response.status_code in {408, 409, 429}
+                or response.status_code >= 500,
+                provider_request_id=request_id,
             )
 
         try:
@@ -134,7 +161,10 @@ class OpenAIResponsesProvider(LLMProvider):
             content = UGCContent.model_validate(json.loads(output_text))
         except (ValueError, TypeError, KeyError) as exc:
             raise LLMProviderError(
-                "OpenAI returned invalid structured content"
+                "OpenAI returned invalid structured content",
+                category="malformed_response",
+                retriable=False,
+                provider_request_id=response.headers.get("x-request-id"),
             ) from exc
 
         return UGCContentResult(

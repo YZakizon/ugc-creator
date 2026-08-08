@@ -120,7 +120,7 @@ describe("workflow template setup", () => {
     const jsonDetails = jsonSummary.closest("details");
     expect(controls).not.toBeNull();
     expect(jsonDetails).not.toBeNull();
-    expect(jsonDetails).not.toHaveAttribute("open");
+    expect(jsonDetails).toHaveAttribute("open");
     expect((controls as Node).compareDocumentPosition(jsonDetails as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: /Seed.*473920259086225/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Seed.*0$/i })).not.toBeInTheDocument();

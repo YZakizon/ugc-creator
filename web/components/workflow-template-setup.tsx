@@ -74,10 +74,10 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
   const currentDefaultAudio = selectedAudio ?? mediaAssets.audio;
   const mutation = useMutation<WorkflowTemplate, Error, { templateId: string | null; payload: WorkflowTemplateInput }>({
     mutationFn: ({ templateId, payload }) => templateId ? updateWorkflowTemplate(templateId, payload) : createWorkflowTemplate(payload),
-    onSuccess: (template) => {
+    onSuccess: (template, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["workflow-templates"] });
       setEditingTemplateId(template.id);
-      setToast({ message: "Workflow updated successfully.", variant: "success" });
+      setToast({ message: variables.templateId ? "Workflow updated successfully." : "Workflow imported successfully.", variant: "success" });
     },
   });
 
@@ -293,7 +293,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
         </label>
         <div className="workflow-json-editor">
           <WorkflowFieldTree workflow={workflow} workflowKind={workflowKind} onUpdateField={updatePromptInput} />
-          <details className="workflow-json-source">
+          <details className="workflow-json-source" open>
             <summary>ComfyUI API workflow JSON</summary>
             <textarea aria-label="ComfyUI API workflow JSON" value={workflow} onChange={(event) => updateWorkflowJson(event.target.value)} rows={10} spellCheck={false} placeholder="Paste or choose a ComfyUI API Format workflow JSON file." />
           </details>

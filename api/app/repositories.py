@@ -1,6 +1,6 @@
 import re
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
@@ -32,6 +32,20 @@ from app.schemas import (
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+VOICE_PREVIEW_STALE_AFTER = timedelta(minutes=5)
+
+
+def voice_preview_is_stale(preview: VoicePreview, now: datetime) -> bool:
+    updated_at = preview.updated_at
+    comparable_now = now
+    if updated_at.tzinfo is None:
+        comparable_now = now.replace(tzinfo=None)
+    return (
+        preview.status in {"queued", "generating"}
+        and updated_at <= comparable_now - VOICE_PREVIEW_STALE_AFTER
+    )
 
 
 def slugify(value: str) -> str:
@@ -329,10 +343,11 @@ class InMemoryConfigurationRepository:
             None,
         )
         if existing is not None:
-            if existing.status == "failed":
+            now = utc_now()
+            if existing.status == "failed" or voice_preview_is_stale(existing, now):
                 existing.status = "queued"
                 existing.error_message = None
-                existing.updated_at = utc_now()
+                existing.updated_at = now
                 return existing, True
             return existing, False
         now = utc_now()
@@ -705,15 +720,16 @@ class SqlAlchemyConfigurationRepository:
             if profile is None:
                 raise LookupError("Voice profile not found")
             existing = session.scalar(
-                select(VoicePreview).where(
-                    VoicePreview.request_fingerprint == fingerprint
-                )
+                select(VoicePreview)
+                .where(VoicePreview.request_fingerprint == fingerprint)
+                .with_for_update()
             )
             if existing is not None:
-                if existing.status == "failed":
+                now = utc_now()
+                if existing.status == "failed" or voice_preview_is_stale(existing, now):
                     existing.status = "queued"
                     existing.error_message = None
-                    existing.updated_at = utc_now()
+                    existing.updated_at = now
                     session.commit()
                     session.refresh(existing)
                     return existing, True

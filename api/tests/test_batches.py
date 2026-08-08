@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import httpx
 import pytest
 from sqlalchemy import create_engine
@@ -11,6 +13,7 @@ from app.repositories import (
     InMemoryConfigurationRepository,
     SqlAlchemyBatchRepository,
     SqlAlchemyConfigurationRepository,
+    utc_now,
 )
 from app.schemas import (
     BatchCreate,
@@ -315,6 +318,73 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
     assert audio.status_code == 200
     assert audio.content == b"ID3preview"
     assert audio.headers["content-type"] == "audio/mpeg"
+
+
+@pytest.mark.asyncio
+async def test_stale_generating_voice_preview_is_requeued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app.state.batch_repository = InMemoryBatchRepository()
+    repository = InMemoryConfigurationRepository()
+    app.state.configuration_repository = repository
+    queued: list[str] = []
+    monkeypatch.setattr("app.api.routes.generate_voice_preview.delay", queued.append)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        voice = await client.post(
+            "/api/v1/voice-profiles",
+            json={
+                "name": "Recoverable voice",
+                "provider": "elevenlabs",
+                "provider_voice_id": "voice-recovery",
+            },
+        )
+        endpoint = f"/api/v1/voice-profiles/{voice.json()['id']}/previews"
+        first = await client.post(endpoint, json={"text": "Recover this preview."})
+        preview = repository.voice_previews[next(iter(repository.voice_previews))]
+        preview.status = "generating"
+        preview.updated_at = utc_now() - timedelta(minutes=6)
+        second = await client.post(endpoint, json={"text": "Recover this preview."})
+
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["status"] == "queued"
+    assert queued == [first.json()["id"], first.json()["id"]]
+
+
+def test_sql_repository_requeues_stale_generating_voice_preview() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    repository = SqlAlchemyConfigurationRepository(factory)
+    profile = repository.create_voice_profile(
+        VoiceProfileCreate(
+            name="Elena voice",
+            provider="elevenlabs",
+            provider_voice_id="voice-elena",
+        )
+    )
+    preview, created = repository.create_voice_preview(
+        profile.id, "A short preview", "stale-preview-fingerprint"
+    )
+
+    assert created is True
+    with factory() as session:
+        stored = session.get(models.VoicePreview, preview.id)
+        assert stored is not None
+        stored.status = "generating"
+        stored.updated_at = utc_now() - timedelta(minutes=6)
+        session.commit()
+
+    recovered, should_enqueue = repository.create_voice_preview(
+        profile.id, "A short preview", "stale-preview-fingerprint"
+    )
+
+    assert recovered.id == preview.id
+    assert recovered.status == "queued"
+    assert recovered.error_message is None
+    assert should_enqueue is True
 
 
 @pytest.mark.asyncio

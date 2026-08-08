@@ -33,3 +33,18 @@ class LLMProvider(Protocol):
     async def generate_ugc_content(
         self, request: UGCContentRequest
     ) -> UGCContentResult: ...
+
+
+class LLMProviderError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str,
+        retriable: bool,
+        provider_request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.retriable = retriable
+        self.provider_request_id = provider_request_id

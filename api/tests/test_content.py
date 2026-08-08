@@ -10,12 +10,9 @@ from sqlalchemy.pool import StaticPool
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.main import app
-from app.providers.llm.contracts import UGCContentRequest
+from app.providers.llm.contracts import LLMProviderError, UGCContentRequest
 from app.providers.llm.fake import FakeLLMProvider
-from app.providers.llm.openai_responses import (
-    LLMProviderError,
-    OpenAIResponsesProvider,
-)
+from app.providers.llm.openai_responses import OpenAIResponsesProvider
 from app.repositories import (
     InMemoryBatchRepository,
     InMemoryConfigurationRepository,
@@ -74,6 +71,53 @@ async def test_openai_provider_requires_server_key() -> None:
         await provider.generate_ugc_content(
             UGCContentRequest(topic="A topic", target_duration_seconds=30)
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status_code", "expected_category", "expected_retriable"),
+    [
+        (401, "provider_auth_error", False),
+        (422, "provider_rejected", False),
+        (429, "provider_rate_limited", True),
+        (503, "provider_unavailable", True),
+    ],
+)
+async def test_openai_provider_normalizes_http_errors(
+    status_code: int, expected_category: str, expected_retriable: bool
+) -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            headers={"x-request-id": "openai-request"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAIResponsesProvider(api_key="test-key", client=client)
+        with pytest.raises(LLMProviderError) as raised:
+            await provider.generate_ugc_content(
+                UGCContentRequest(topic="A topic", target_duration_seconds=30)
+            )
+
+    assert raised.value.category == expected_category
+    assert raised.value.retriable is expected_retriable
+    assert raised.value.provider_request_id == "openai-request"
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_normalizes_timeout_as_retriable() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAIResponsesProvider(api_key="test-key", client=client)
+        with pytest.raises(LLMProviderError) as raised:
+            await provider.generate_ugc_content(
+                UGCContentRequest(topic="A topic", target_duration_seconds=30)
+            )
+
+    assert raised.value.category == "provider_timeout"
+    assert raised.value.retriable is True
 
 
 @pytest.mark.asyncio
