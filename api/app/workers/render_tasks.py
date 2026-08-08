@@ -134,6 +134,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     )
     repo.save_prepared(attempt_id, workflow, values)
     if not repo.mark_submission_started(attempt_id):
+        submit_render.apply_async(args=[str(attempt_id)], countdown=1)
         return
     submission = await renderer.submit(
         RenderRequest(workflow=workflow, client_id=attempt.client_id)

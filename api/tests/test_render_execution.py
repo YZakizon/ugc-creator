@@ -64,6 +64,68 @@ def test_unknown_submission_outcome_stays_reconcilable(
 
 
 @pytest.mark.asyncio
+async def test_claim_expiring_during_preparation_schedules_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    attempt = SimpleNamespace(
+        external_job_id=None,
+        status="queued",
+        client_id="durable-client",
+        workflow_snapshot={"1": {"class_type": "Text", "inputs": {}}},
+        binding_snapshot=[],
+    )
+    job = SimpleNamespace(
+        speech_script="Prepared script",
+        topic="Prepared topic",
+        hook=None,
+        target_duration_seconds=30,
+    )
+    profile = SimpleNamespace(
+        default_parameters={},
+        prompt_template=None,
+        character=SimpleNamespace(name="Elena"),
+    )
+    node = SimpleNamespace(base_url="http://comfyui")
+    template = SimpleNamespace(metadata_json={})
+    scheduled: list[tuple[list[str], int]] = []
+
+    class FakeRepository:
+        def get_attempt(self, _attempt_id: object) -> object:
+            return attempt
+
+        def claim_submission(self, _attempt_id: object) -> tuple[bool, int]:
+            return True, 0
+
+        def execution_context(self, _attempt_id: object) -> tuple[object, ...]:
+            return attempt, job, profile, node, template
+
+        def save_prepared(self, *_args: object) -> None:
+            pass
+
+        def mark_submission_started(self, _attempt_id: object) -> bool:
+            return False
+
+    class FakeRenderer:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        async def submit(self, _request: object) -> object:
+            raise AssertionError("An expired claim must not submit")
+
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+    monkeypatch.setattr("app.workers.render_tasks.ComfyUIRenderer", FakeRenderer)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async",
+        lambda *, args, countdown: scheduled.append((args, countdown)),
+    )
+
+    await _prepare_and_submit(attempt_id)
+
+    assert scheduled == [([str(attempt_id)], 1)]
+
+
+@pytest.mark.asyncio
 async def test_redelivered_active_submission_schedules_reconciliation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

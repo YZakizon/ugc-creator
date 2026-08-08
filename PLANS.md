@@ -1901,6 +1901,8 @@ tasks schedule a check at claim expiry; expired claims become an explicit
 unknown-outcome failure without automatically repeating the paid call.
 ElevenLabs connect failures and definite retriable HTTP responses may retry, but
 read/write/ambiguous network failures become non-retriable unknown outcomes.
+Render preparation that outlives its submission claim schedules an immediate
+reconciliation delivery rather than acknowledging into a stuck state.
 
 ### 2026-08-08 — Render-node URLs are deny-by-default
 **Status: accepted**
