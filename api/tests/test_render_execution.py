@@ -19,7 +19,10 @@ from app.db.models import (
     WorkflowParameterBinding,
     WorkflowTemplate,
 )
-from app.providers.render.comfyui import ComfyUIProviderError
+from app.providers.render.comfyui import (
+    ComfyUIProviderError,
+    ComfyUISubmissionOutcomeUnknown,
+)
 from app.providers.render.contracts import RenderOutput
 from app.render_repository import RenderExecutionRepository
 from app.schemas import RenderNodeCreate
@@ -28,7 +31,36 @@ from app.workers.render_tasks import (
     apply_default_workflow_media,
     render_has_timed_out,
     select_video_output,
+    submit_render,
 )
+
+
+def test_unknown_submission_outcome_stays_reconcilable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    scheduled: list[tuple[list[str], int]] = []
+
+    async def ambiguous_submission(_attempt_id: object) -> None:
+        raise ComfyUISubmissionOutcomeUnknown("ComfyUI submission outcome is unknown")
+
+    class FailIfMarkedFailed:
+        def update_progress(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("An ambiguous submission must not be marked failed")
+
+    monkeypatch.setattr(
+        "app.workers.render_tasks._prepare_and_submit", ambiguous_submission
+    )
+    monkeypatch.setattr("app.workers.render_tasks.repository", FailIfMarkedFailed)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async",
+        lambda *, args, countdown: scheduled.append((args, countdown)),
+    )
+
+    result = submit_render(str(attempt_id))
+
+    assert result == {"attempt_id": str(attempt_id), "status": "reconciling"}
+    assert scheduled == [([str(attempt_id)], 5)]
 
 
 @pytest.mark.asyncio

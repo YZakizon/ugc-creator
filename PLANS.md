@@ -1894,7 +1894,9 @@ records after losing ownership. Render completion uses terminal compare-and-set
 plus one video asset per attempt so repeated monitors cannot regress or duplicate
 the completed result. Celery acknowledges tasks only after execution and rejects
 worker-lost deliveries back to the broker; prefetch is one to limit reserved
-long-running work.
+long-running work. A transport failure or malformed success response from
+ComfyUI `/prompt` keeps the attempt in `submitting_render` and schedules
+client-ID reconciliation instead of marking the attempt failed.
 
 ### 2026-08-08 — Render-node URLs are deny-by-default
 **Status: accepted**

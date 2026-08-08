@@ -5,7 +5,11 @@ from pathlib import PurePath
 from uuid import UUID
 
 from app.db.session import create_database_engine, session_factory
-from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
+from app.providers.render.comfyui import (
+    ComfyUIProviderError,
+    ComfyUIRenderer,
+    ComfyUISubmissionOutcomeUnknown,
+)
 from app.providers.render.contracts import RenderOutput, RenderRequest
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
@@ -78,11 +82,16 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
             base_url=repo.execution_context(attempt_id)[3].base_url,
             client_id=existing.client_id,
         )
-        prompt_id = (
-            await renderer.find_submission(existing.client_id)
-            if existing.client_id and existing.submission_started_at is not None
-            else None
-        )
+        try:
+            prompt_id = (
+                await renderer.find_submission(existing.client_id)
+                if existing.client_id and existing.submission_started_at is not None
+                else None
+            )
+        except ComfyUIProviderError as exc:
+            raise ComfyUISubmissionOutcomeUnknown(
+                "ComfyUI submission reconciliation is temporarily unavailable"
+            ) from exc
         if prompt_id and repo.save_submission(
             attempt_id, prompt_id, existing.client_id
         ):
@@ -141,6 +150,12 @@ def submit_render(attempt_id: str) -> dict[str, str]:
     try:
         asyncio.run(_prepare_and_submit(attempt_uuid))
         return {"attempt_id": attempt_id, "status": "submitted"}
+    except ComfyUISubmissionOutcomeUnknown:
+        # Keep the durable submission intent intact. A follow-up delivery will
+        # search ComfyUI queue/history by the persisted client ID and will never
+        # blindly resubmit an operation whose result may have been accepted.
+        submit_render.apply_async(args=[attempt_id], countdown=5)
+        return {"attempt_id": attempt_id, "status": "reconciling"}
     except (
         ComfyUIProviderError,
         WorkflowValidationError,

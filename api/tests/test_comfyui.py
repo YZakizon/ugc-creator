@@ -3,7 +3,11 @@ import json
 import httpx
 import pytest
 
-from app.providers.render.comfyui import ComfyUIRenderer
+from app.providers.render.comfyui import (
+    ComfyUIProviderError,
+    ComfyUIRenderer,
+    ComfyUISubmissionOutcomeUnknown,
+)
 from app.providers.render.contracts import RenderRequest
 
 
@@ -119,3 +123,40 @@ async def test_comfyui_reconciles_submission_by_persisted_client_id() -> None:
         prompt_id = await renderer.find_submission("attempt-client")
 
     assert prompt_id == "prompt-queued"
+
+
+@pytest.mark.asyncio
+async def test_comfyui_lost_submit_response_has_unknown_outcome() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/prompt"
+        raise httpx.ReadTimeout(
+            "response lost after prompt acceptance", request=request
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        renderer = ComfyUIRenderer(base_url="http://comfyui.test", client=client)
+        with pytest.raises(
+            ComfyUISubmissionOutcomeUnknown, match="submission outcome is unknown"
+        ):
+            await renderer.submit(
+                RenderRequest(
+                    workflow={"1": {"class_type": "TextNode"}},
+                    client_id="durable-client-id",
+                )
+            )
+
+
+@pytest.mark.asyncio
+async def test_comfyui_rejected_submit_is_a_known_failure() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/prompt"
+        return httpx.Response(400, json={"error": "invalid workflow"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        renderer = ComfyUIRenderer(base_url="http://comfyui.test", client=client)
+        with pytest.raises(ComfyUIProviderError, match="status 400") as error:
+            await renderer.submit(
+                RenderRequest(workflow={"1": {"class_type": "TextNode"}})
+            )
+
+    assert not isinstance(error.value, ComfyUISubmissionOutcomeUnknown)

@@ -18,6 +18,10 @@ class ComfyUIProviderError(RuntimeError):
     """Safe ComfyUI failure without returning response bodies or credentials."""
 
 
+class ComfyUISubmissionOutcomeUnknown(ComfyUIProviderError):
+    """The prompt may have been accepted, so submission must be reconciled."""
+
+
 class ComfyUIRenderer(VideoRenderer):
     def __init__(
         self,
@@ -44,11 +48,19 @@ class ComfyUIRenderer(VideoRenderer):
                 "prompt": request.workflow,
                 "client_id": request.client_id or self.client_id,
             },
+            outcome_unknown_on_transport_error=True,
         )
-        payload = _json_object(response)
+        try:
+            payload = _json_object(response)
+        except ComfyUIProviderError as exc:
+            raise ComfyUISubmissionOutcomeUnknown(
+                "ComfyUI submission outcome is unknown"
+            ) from exc
         prompt_id = payload.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
-            raise ComfyUIProviderError("ComfyUI returned no prompt ID")
+            raise ComfyUISubmissionOutcomeUnknown(
+                "ComfyUI submission outcome is unknown"
+            )
         return RenderSubmission(
             provider="comfyui",
             external_job_id=prompt_id,
@@ -149,6 +161,7 @@ class ComfyUIRenderer(VideoRenderer):
         files: Mapping[str, tuple[str, bytes]] | None = None,
         data: Mapping[str, str] | None = None,
         params: Mapping[str, str] | None = None,
+        outcome_unknown_on_transport_error: bool = False,
     ) -> httpx.Response:
         try:
             if self.client is None:
@@ -172,6 +185,10 @@ class ComfyUIRenderer(VideoRenderer):
                     params=params,
                 )
         except httpx.HTTPError as exc:
+            if outcome_unknown_on_transport_error:
+                raise ComfyUISubmissionOutcomeUnknown(
+                    "ComfyUI submission outcome is unknown"
+                ) from exc
             raise ComfyUIProviderError("ComfyUI is unavailable") from exc
         if response.status_code >= 400:
             raise ComfyUIProviderError(
