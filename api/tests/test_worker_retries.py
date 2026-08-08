@@ -6,6 +6,7 @@ import pytest
 from app.providers.llm.contracts import LLMProviderError
 from app.providers.tts.contracts import TTSProviderError
 from app.workers import content_tasks, tts_tasks
+from app.workers.celery_app import celery_app
 from app.workers.retry import retry_provider_error
 
 
@@ -28,6 +29,12 @@ class FakeTask:
     def retry(self, *, exc: Exception, countdown: int) -> RetryScheduled:
         self.countdown = countdown
         return RetryScheduled(str(exc))
+
+
+def test_worker_loss_redelivers_unacknowledged_provider_tasks() -> None:
+    assert celery_app.conf.task_acks_late is True
+    assert celery_app.conf.task_reject_on_worker_lost is True
+    assert celery_app.conf.worker_prefetch_multiplier == 1
 
 
 def test_retriable_provider_error_schedules_bounded_retry() -> None:

@@ -32,6 +32,34 @@ from app.workers.render_tasks import (
 
 
 @pytest.mark.asyncio
+async def test_redelivered_active_submission_schedules_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    attempt = SimpleNamespace(
+        external_job_id=None,
+        status="submitting_render",
+        submission_claim_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    scheduled: list[int] = []
+
+    class FakeRepository:
+        def get_attempt(self, _attempt_id: object) -> object:
+            return attempt
+
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async",
+        lambda *, args, countdown: scheduled.append(countdown),
+    )
+
+    await _prepare_and_submit(attempt_id)
+
+    assert len(scheduled) == 1
+    assert 1 <= scheduled[0] <= 300
+
+
+@pytest.mark.asyncio
 async def test_uncertain_comfyui_submission_is_not_resubmitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

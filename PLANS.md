@@ -1231,6 +1231,7 @@ Complete the first real end-to-end video render using LTX 2.3 through generic Co
 - [x] Guard duplicate submit after worker retry.
 - [x] Atomically claim render submission before external calls and recover expired claims.
 - [x] Reconcile uncertain ComfyUI submissions by persisted client ID and never auto-resubmit an unknown outcome.
+- [x] Redeliver unacknowledged tasks after worker loss so claimed submissions always reach reconciliation.
 - [x] Bound render monitoring with a configurable timeout.
 - [x] Keep history-only progress explicitly indeterminate until WebSocket progress is implemented.
 - [x] Make render finalization terminal/idempotent and ingest only video/GIF outputs.
@@ -1891,7 +1892,9 @@ provider ID is persisted. A timeout alone cannot prove that retrying is safe.
 duplicate-charge prevention over automatic recovery. Late workers cannot update
 records after losing ownership. Render completion uses terminal compare-and-set
 plus one video asset per attempt so repeated monitors cannot regress or duplicate
-the completed result.
+the completed result. Celery acknowledges tasks only after execution and rejects
+worker-lost deliveries back to the broker; prefetch is one to limit reserved
+long-running work.
 
 ### 2026-08-08 — Render-node URLs are deny-by-default
 **Status: accepted**
