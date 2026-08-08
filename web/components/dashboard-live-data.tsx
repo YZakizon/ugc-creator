@@ -14,6 +14,15 @@ export function failedJobRetryKind(
   return attempt?.status === "failed" && Boolean(job.speech_script) ? "render" : "content";
 }
 
+export function renderProgressLabel(
+  attempt: Pick<RenderAttempt, "status" | "progress">,
+): string {
+  if (attempt.status === "rendering" && attempt.progress <= 1) {
+    return "Progress unavailable (polling)";
+  }
+  return `${attempt.progress}%`;
+}
+
 function StatCard({ label, value, hint, icon, tone }: {
   label: string;
   value: number | string;
@@ -125,7 +134,9 @@ export function RecentJobs() {
           {canRender && (
             <button className="job-action" type="button" disabled={renderMutation.isPending || !nodes.data?.items.some((node) => node.is_active)} onClick={() => { const node = nodes.data?.items.find((item) => item.health_status === "healthy") ?? nodes.data?.items.find((item) => item.is_active); if (node) renderMutation.mutate({ jobId: job.id, nodeId: node.id }); }}>{renderMutation.isPending && renderMutation.variables?.jobId === job.id ? "Queuing render…" : failedRender ? "Retry render" : "Render with ComfyUI"}</button>
           )}
-          {attempt && <small className="job-render-progress">{attempt.status.replaceAll("_", " ")} · {attempt.progress}%</small>}
+          {attempt && <small className="job-render-progress">
+            {attempt.status.replaceAll("_", " ")} · {renderProgressLabel(attempt)}
+          </small>}
         </div>
       })}
       {contentMutation.isError && <p className="form-error" role="alert">{contentMutation.error.message}</p>}

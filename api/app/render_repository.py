@@ -1,9 +1,9 @@
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
@@ -123,12 +123,15 @@ class RenderExecutionRepository:
             )
             if existing is not None:
                 return existing
+            attempt_id = uuid4()
             attempt = RenderAttempt(
+                id=attempt_id,
                 job_id=job.id,
                 render_profile_id=profile.id,
                 render_node_id=node.id,
                 workflow_template_id=profile.workflow_template_id,
                 provider=node.provider,
+                client_id=f"ugc-creator-{attempt_id}",
                 status="queued",
                 progress=0,
                 workflow_snapshot=deepcopy(workflow.workflow_json),
@@ -155,7 +158,6 @@ class RenderExecutionRepository:
     def claim_submission(self, attempt_id: UUID) -> tuple[bool, int]:
         claimed_at = now()
         claim_expires_at = claimed_at + SUBMISSION_CLAIM_DURATION
-        stale_without_lease = claimed_at - SUBMISSION_CLAIM_DURATION
         with self.factory() as session:
             claimed = cast(
                 CursorResult[Any],
@@ -164,22 +166,7 @@ class RenderExecutionRepository:
                     .where(
                         RenderAttempt.id == attempt_id,
                         RenderAttempt.external_job_id.is_(None),
-                        or_(
-                            RenderAttempt.status == "queued",
-                            and_(
-                                RenderAttempt.status == "submitting_render",
-                                or_(
-                                    RenderAttempt.submission_claim_expires_at
-                                    <= claimed_at,
-                                    and_(
-                                        RenderAttempt.submission_claim_expires_at.is_(
-                                            None
-                                        ),
-                                        RenderAttempt.updated_at <= stale_without_lease,
-                                    ),
-                                ),
-                            ),
-                        ),
+                        RenderAttempt.status == "queued",
                     )
                     .values(
                         status="submitting_render",
@@ -206,6 +193,26 @@ class RenderExecutionRepository:
                 comparable_now = claimed_at.replace(tzinfo=None)
             remaining = max(1, int((expires_at - comparable_now).total_seconds()))
             return False, remaining
+
+    def mark_submission_started(self, attempt_id: UUID) -> bool:
+        started_at = now()
+        with self.factory() as session:
+            started = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.status == "submitting_render",
+                        RenderAttempt.external_job_id.is_(None),
+                        RenderAttempt.submission_started_at.is_(None),
+                        RenderAttempt.submission_claim_expires_at > started_at,
+                    )
+                    .values(submission_started_at=started_at, updated_at=started_at)
+                ),
+            )
+            session.commit()
+            return started.rowcount == 1
 
     def get_attempt(self, attempt_id: UUID) -> RenderAttempt | None:
         with self.factory() as session:
@@ -263,33 +270,84 @@ class RenderExecutionRepository:
 
     def save_submission(
         self, attempt_id: UUID, external_job_id: str, client_id: str | None
-    ) -> RenderAttempt:
+    ) -> bool:
         with self.factory() as session:
             attempt = session.get(RenderAttempt, attempt_id)
             if attempt is None:
                 raise LookupError("Render attempt not found")
-            if attempt.external_job_id is None:
-                attempt.external_job_id = external_job_id
-                attempt.client_id = client_id
-                attempt.submitted_at = now()
-            attempt.submission_claim_expires_at = None
-            attempt.status = "rendering"
-            attempt.progress = max(attempt.progress, 1)
+            if attempt.external_job_id == external_job_id:
+                return attempt.status not in {"failed", "cancelled"}
+            submitted_at = now()
+            saved = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.external_job_id.is_(None),
+                        RenderAttempt.status.not_in(
+                            {"completed", "failed", "cancelled"}
+                        ),
+                    )
+                    .values(
+                        external_job_id=external_job_id,
+                        client_id=client_id,
+                        submitted_at=submitted_at,
+                        submission_claim_expires_at=None,
+                        status="rendering",
+                        progress=max(attempt.progress, 1),
+                        updated_at=submitted_at,
+                    )
+                ),
+            )
+            if saved.rowcount != 1:
+                session.rollback()
+                return False
             attempt.job.status = JobStatus.RENDERING.value
             session.commit()
-            session.refresh(attempt)
-            return attempt
+            return True
 
     def update_progress(
         self, attempt_id: UUID, status: str, progress: int, error: str | None = None
-    ) -> None:
+    ) -> bool:
         with self.factory() as session:
             attempt = session.get(RenderAttempt, attempt_id)
             if attempt is None:
                 raise LookupError("Render attempt not found")
-            attempt.status = status
-            attempt.progress = progress
-            attempt.error_message = error
+            allowed_statuses = (
+                {"rendering"}
+                if status == "rendering"
+                else {"queued", "submitting_render", "rendering", "downloading_output"}
+            )
+            changed = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.status.in_(allowed_statuses),
+                    )
+                    .values(
+                        status=status,
+                        progress=progress,
+                        error_message=error,
+                        submission_claim_expires_at=(
+                            None
+                            if status in {"failed", "completed", "cancelled"}
+                            else attempt.submission_claim_expires_at
+                        ),
+                        finalization_claim_expires_at=(
+                            None
+                            if status in {"failed", "completed", "cancelled"}
+                            else attempt.finalization_claim_expires_at
+                        ),
+                        updated_at=now(),
+                    )
+                ),
+            )
+            if changed.rowcount != 1:
+                session.rollback()
+                return False
             if status in {"failed", "completed", "cancelled"}:
                 attempt.submission_claim_expires_at = None
             attempt.job.status = (
@@ -299,6 +357,57 @@ class RenderExecutionRepository:
             )
             attempt.job.error_message = error
             session.commit()
+            return True
+
+    def claim_finalization(self, attempt_id: UUID) -> tuple[bool, int]:
+        claimed_at = now()
+        expires_at = claimed_at + SUBMISSION_CLAIM_DURATION
+        with self.factory() as session:
+            claimed = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.external_job_id.is_not(None),
+                        (
+                            (RenderAttempt.status == "rendering")
+                            | (
+                                (RenderAttempt.status == "downloading_output")
+                                & (
+                                    RenderAttempt.finalization_claim_expires_at
+                                    <= claimed_at
+                                )
+                            )
+                        ),
+                    )
+                    .values(
+                        status="downloading_output",
+                        progress=95,
+                        finalization_claim_expires_at=expires_at,
+                        updated_at=claimed_at,
+                    )
+                ),
+            )
+            if claimed.rowcount == 1:
+                session.commit()
+                return True, 0
+            session.rollback()
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None or attempt.status in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                return False, 0
+            claim_expires_at = attempt.finalization_claim_expires_at
+            if claim_expires_at is None:
+                return False, int(SUBMISSION_CLAIM_DURATION.total_seconds())
+            comparable_now = claimed_at
+            if claim_expires_at.tzinfo is None:
+                comparable_now = claimed_at.replace(tzinfo=None)
+            remaining = max(1, int((claim_expires_at - comparable_now).total_seconds()))
+            return False, remaining
 
     def complete(
         self,
@@ -307,11 +416,35 @@ class RenderExecutionRepository:
         filename: str,
         content_type: str | None,
         size: int,
-    ) -> None:
+    ) -> bool:
         with self.factory() as session:
             attempt = session.get(RenderAttempt, attempt_id)
             if attempt is None:
                 raise LookupError("Render attempt not found")
+            completed_at = now()
+            won = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.status.not_in(
+                            {"completed", "failed", "cancelled"}
+                        ),
+                    )
+                    .values(
+                        status="completed",
+                        progress=100,
+                        completed_at=completed_at,
+                        submission_claim_expires_at=None,
+                        finalization_claim_expires_at=None,
+                        updated_at=completed_at,
+                    )
+                ),
+            )
+            if won.rowcount != 1:
+                session.rollback()
+                return False
             asset = MediaAsset(
                 job_id=attempt.job_id,
                 render_attempt_id=attempt.id,
@@ -322,12 +455,9 @@ class RenderExecutionRepository:
                 size_bytes=size,
             )
             session.add(asset)
-            attempt.status = "completed"
-            attempt.progress = 100
-            attempt.completed_at = now()
-            attempt.submission_claim_expires_at = None
             attempt.job.status = JobStatus.COMPLETED.value
             session.commit()
+            return True
 
     def get_asset(self, asset_id: UUID) -> MediaAsset | None:
         with self.factory() as session:

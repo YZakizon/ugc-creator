@@ -37,7 +37,7 @@ RenderState = Literal[
 class RenderStatus(BaseModel):
     external_job_id: str
     state: RenderState
-    progress: float = Field(default=0, ge=0, le=100)
+    progress: float | None = Field(default=None, ge=0, le=100)
     message: str | None = None
 
 

@@ -1230,7 +1230,10 @@ Complete the first real end-to-end video render using LTX 2.3 through generic Co
 - [x] Normalize errors/status.
 - [x] Guard duplicate submit after worker retry.
 - [x] Atomically claim render submission before external calls and recover expired claims.
+- [x] Reconcile uncertain ComfyUI submissions by persisted client ID and never auto-resubmit an unknown outcome.
 - [x] Bound render monitoring with a configurable timeout.
+- [x] Keep history-only progress explicitly indeterminate until WebSocket progress is implemented.
+- [x] Make render finalization terminal/idempotent and ingest only video/GIF outputs.
 - [x] Create RenderAttempt records.
 - [x] Implement render submission/monitor/finalize Celery tasks.
 - [ ] Configure an LTX 2.3 RenderProfile.
@@ -1845,8 +1848,8 @@ inputs. Editing a configured workflow affects future renders using that profile.
 
 **Decision:** Provider adapters classify failures as retriable or permanent. Celery
 tasks retry only transient failures with bounded exponential backoff. Voice preview
-requests reclaim matching queued or generating records after a five-minute stale
-timeout instead of remaining stuck indefinitely.
+requests safely requeue stale work only when no provider call started; stale
+generating work becomes an explicit unknown outcome.
 
 **Reason:** HTTP adapters normalize network failures into domain exceptions, so task
 retry policy must use those typed exceptions. Persisted in-progress records also need
@@ -1867,9 +1870,28 @@ bounded lease, and attempts snapshot workflow JSON and bindings when queued.
 TTS or render submissions, while editing a workflow after queueing can otherwise
 change the payload of an already accepted attempt.
 
-**Consequences:** Only the claim winner calls the provider. Expired and legacy
-stuck render claims are recoverable, and workflow edits apply only to attempts
-queued after the edit.
+**Consequences:** Only the claim winner calls the provider. Expired submissions
+are reconciled or fail safely without automatic resubmission, and workflow edits
+apply only to attempts queued after the edit.
+
+### 2026-08-08 — Unknown provider outcomes require reconciliation
+**Status: accepted**
+
+**Decision:** A ComfyUI submission persists a stable client ID and submission
+intent before `/prompt`. Recovery searches ComfyUI queue/history for that client
+ID and never automatically resubmits when the outcome remains unknown.
+ElevenLabs preview claims use ownership tokens; a stale generating preview is
+marked failed with an explicit unknown-outcome message and requires a new user
+request before retrying.
+
+**Reason:** A worker can die after a provider accepts a request but before the
+provider ID is persisted. A timeout alone cannot prove that retrying is safe.
+
+**Consequences:** Unknown operations may require an explicit retry, favoring
+duplicate-charge prevention over automatic recovery. Late workers cannot update
+records after losing ownership. Render completion uses terminal compare-and-set
+plus one video asset per attempt so repeated monitors cannot regress or duplicate
+the completed result.
 
 ### 2026-08-08 — Render-node URLs are deny-by-default
 **Status: accepted**

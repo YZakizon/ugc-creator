@@ -107,6 +107,8 @@ class VoicePreview(TimestampMixin, Base):
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claim_token: Mapped[UUID | None] = mapped_column(nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     voice_profile: Mapped[VoiceProfile] = relationship()
 
@@ -209,7 +211,11 @@ class RenderAttempt(TimestampMixin, Base):
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    submission_started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submission_claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    finalization_claim_expires_at: Mapped[datetime | None] = mapped_column(
+        nullable=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     job: Mapped[TopicJob] = relationship(back_populates="render_attempts")
@@ -220,7 +226,12 @@ class RenderAttempt(TimestampMixin, Base):
 
 class MediaAsset(TimestampMixin, Base):
     __tablename__ = "media_assets"
-    __table_args__ = (Index("ix_media_assets_job_kind", "job_id", "kind"),)
+    __table_args__ = (
+        Index("ix_media_assets_job_kind", "job_id", "kind"),
+        UniqueConstraint(
+            "render_attempt_id", "kind", name="uq_media_assets_attempt_kind"
+        ),
+    )
 
     id: Mapped[UUIDPrimaryKey]
     job_id: Mapped[UUID] = mapped_column(

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import HomePage from "../app/page";
 import { Providers } from "../app/providers";
-import { failedJobRetryKind } from "../components/dashboard-live-data";
+import { failedJobRetryKind, renderProgressLabel } from "../components/dashboard-live-data";
 
 describe("home page", () => {
   afterEach(() => {
@@ -39,5 +39,12 @@ describe("home page", () => {
         undefined,
       ),
     ).toBe("content");
+  });
+
+  it("labels polling-only render progress as indeterminate", () => {
+    expect(renderProgressLabel({ status: "rendering", progress: 1 })).toBe(
+      "Progress unavailable (polling)",
+    );
+    expect(renderProgressLabel({ status: "completed", progress: 100 })).toBe("100%");
   });
 });

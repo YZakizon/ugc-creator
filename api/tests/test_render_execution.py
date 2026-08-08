@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -17,9 +19,75 @@ from app.db.models import (
     WorkflowParameterBinding,
     WorkflowTemplate,
 )
+from app.providers.render.comfyui import ComfyUIProviderError
+from app.providers.render.contracts import RenderOutput
 from app.render_repository import RenderExecutionRepository
 from app.schemas import RenderNodeCreate
-from app.workers.render_tasks import apply_default_workflow_media, render_has_timed_out
+from app.workers.render_tasks import (
+    _prepare_and_submit,
+    apply_default_workflow_media,
+    render_has_timed_out,
+    select_video_output,
+)
+
+
+@pytest.mark.asyncio
+async def test_uncertain_comfyui_submission_is_not_resubmitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    updates: list[tuple[str, str | None]] = []
+    attempt = SimpleNamespace(
+        id=attempt_id,
+        external_job_id=None,
+        client_id="persisted-client",
+        status="submitting_render",
+        submission_claim_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        submission_started_at=datetime.now(UTC) - timedelta(minutes=5),
+        progress=0,
+    )
+
+    class FakeRepository:
+        def get_attempt(self, _attempt_id: object) -> object:
+            return attempt
+
+        def execution_context(self, _attempt_id: object) -> tuple[object, ...]:
+            return (
+                attempt,
+                object(),
+                object(),
+                SimpleNamespace(base_url="http://comfyui"),
+                object(),
+            )
+
+        def update_progress(
+            self,
+            _attempt_id: object,
+            status: str,
+            _progress: int,
+            error: str | None = None,
+        ) -> bool:
+            updates.append((status, error))
+            return True
+
+    class FakeRenderer:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        async def find_submission(self, _client_id: str) -> None:
+            return None
+
+        async def submit(self, _request: object) -> object:
+            raise AssertionError("An unknown submission must not be resubmitted")
+
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+    monkeypatch.setattr("app.workers.render_tasks.ComfyUIRenderer", FakeRenderer)
+
+    await _prepare_and_submit(attempt_id)
+
+    assert updates[0][0] == "failed"
+    assert updates[0][1] is not None
+    assert "not resubmitted automatically" in updates[0][1]
 
 
 @pytest.mark.asyncio
@@ -139,11 +207,22 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         {"script": "Topic"},
     )
     repo.save_submission(first.id, "prompt-1", "client-1")
-    repo.complete(first.id, "jobs/video.mp4", "video.mp4", "video/mp4", 12)
+    assert repo.claim_finalization(first.id) == (True, 0)
+    duplicate_claim, retry_after = repo.claim_finalization(first.id)
+    assert duplicate_claim is False
+    assert retry_after > 0
+    assert not repo.update_progress(first.id, "rendering", 50)
+    assert repo.complete(first.id, "jobs/video.mp4", "video.mp4", "video/mp4", 12)
+    assert not repo.complete(
+        first.id, "jobs/duplicate.mp4", "duplicate.mp4", "video/mp4", 12
+    )
+    assert not repo.update_progress(first.id, "failed", 0, "late monitor failure")
     completed = repo.get_attempt(first.id)
     assert completed is not None
     assert completed.status == "completed"
     assert completed.external_job_id == "prompt-1"
+    assert completed.error_message is None
+    assert len(completed.assets) == 1
     assert completed.assets[0].object_key == "jobs/video.mp4"
 
 
@@ -197,6 +276,8 @@ def test_render_submission_claim_allows_only_one_concurrent_worker(tmp_path) -> 
         claims = list(executor.map(lambda _index: claim(), range(2)))
 
     assert sorted(claims) == [False, True]
+    assert repository.mark_submission_started(attempt.id)
+    assert not repository.mark_submission_started(attempt.id)
 
     with factory() as session:
         stored = session.get(type(attempt), attempt.id)
@@ -206,7 +287,23 @@ def test_render_submission_claim_allows_only_one_concurrent_worker(tmp_path) -> 
         stored.updated_at = datetime.now(UTC) - timedelta(minutes=6)
         session.commit()
 
-    assert repository.claim_submission(attempt.id) == (True, 0)
+    assert repository.claim_submission(attempt.id) == (False, 300)
+
+
+def test_video_output_selection_skips_preview_images() -> None:
+    selected = select_video_output(
+        [
+            RenderOutput(filename="preview.png", media_type="image"),
+            RenderOutput(filename="final.mp4", media_type="video"),
+        ]
+    )
+
+    assert selected.filename == "final.mp4"
+
+
+def test_video_output_selection_rejects_image_only_results() -> None:
+    with pytest.raises(ComfyUIProviderError, match="video or GIF"):
+        select_video_output([RenderOutput(filename="preview.png", media_type="image")])
 
 
 def test_queued_attempt_keeps_workflow_and_binding_snapshots() -> None:

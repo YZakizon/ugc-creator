@@ -6,7 +6,7 @@ from uuid import UUID
 
 from app.db.session import create_database_engine, session_factory
 from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
-from app.providers.render.contracts import RenderRequest
+from app.providers.render.contracts import RenderOutput, RenderRequest
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
 from app.services.workflow_service import WorkflowValidationError, prepare_workflow
@@ -60,6 +60,42 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     if existing.external_job_id:
         monitor_render.apply_async(args=[str(attempt_id)], countdown=1)
         return
+    if existing.status in {"completed", "failed", "cancelled"}:
+        return
+    if existing.status == "submitting_render":
+        expires_at = existing.submission_claim_expires_at
+        checked_at = datetime.now(UTC)
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                checked_at = checked_at.replace(tzinfo=None)
+            remaining = int((expires_at - checked_at).total_seconds())
+            if remaining > 0:
+                submit_render.apply_async(
+                    args=[str(attempt_id)], countdown=max(1, remaining)
+                )
+                return
+        renderer = ComfyUIRenderer(
+            base_url=repo.execution_context(attempt_id)[3].base_url,
+            client_id=existing.client_id,
+        )
+        prompt_id = (
+            await renderer.find_submission(existing.client_id)
+            if existing.client_id and existing.submission_started_at is not None
+            else None
+        )
+        if prompt_id and repo.save_submission(
+            attempt_id, prompt_id, existing.client_id
+        ):
+            monitor_render.apply_async(args=[str(attempt_id)], countdown=1)
+            return
+        repo.update_progress(
+            attempt_id,
+            "failed",
+            existing.progress,
+            "ComfyUI submission outcome is unknown; it was not resubmitted "
+            "automatically. Retry render to create a new attempt.",
+        )
+        return
     claimed, retry_after = repo.claim_submission(attempt_id)
     if not claimed:
         if retry_after:
@@ -88,11 +124,15 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         attempt.workflow_snapshot, attempt.binding_snapshot, values
     )
     repo.save_prepared(attempt_id, workflow, values)
+    if not repo.mark_submission_started(attempt_id):
+        return
     submission = await renderer.submit(
         RenderRequest(workflow=workflow, client_id=attempt.client_id)
     )
-    repo.save_submission(attempt_id, submission.external_job_id, submission.client_id)
-    monitor_render.apply_async(args=[str(attempt_id)], countdown=3)
+    if repo.save_submission(
+        attempt_id, submission.external_job_id, submission.client_id
+    ):
+        monitor_render.apply_async(args=[str(attempt_id)], countdown=3)
 
 
 @celery_app.task(name="ugc_creator.submit_render")  # type: ignore[untyped-decorator]
@@ -115,6 +155,8 @@ def submit_render(attempt_id: str) -> dict[str, str]:
 async def _monitor(attempt_id: UUID) -> str:
     repo = repository()
     attempt, _job, _profile, node, _template = repo.execution_context(attempt_id)
+    if attempt.status in {"completed", "failed", "cancelled"}:
+        return attempt.status
     if not attempt.external_job_id:
         raise ValueError("Render attempt has no ComfyUI prompt ID")
     timeout_seconds = max(60, int(os.getenv("RENDER_TIMEOUT_SECONDS", "3600")))
@@ -131,10 +173,15 @@ async def _monitor(attempt_id: UUID) -> str:
     renderer = ComfyUIRenderer(base_url=node.base_url, client_id=attempt.client_id)
     status = await renderer.get_status(attempt.external_job_id)
     if status.state in {"queued", "running"}:
+        progress = (
+            max(attempt.progress, 1)
+            if status.progress is None
+            else max(attempt.progress, 1, int(status.progress))
+        )
         repo.update_progress(
             attempt_id,
             "rendering",
-            max(attempt.progress, 1, int(status.progress)),
+            progress,
         )
         monitor_render.apply_async(args=[str(attempt_id)], countdown=5)
         return "rendering"
@@ -146,11 +193,15 @@ async def _monitor(attempt_id: UUID) -> str:
             status.message or "ComfyUI render failed",
         )
         return "failed"
-    repo.update_progress(attempt_id, "downloading_output", 95)
+    claimed, retry_after = repo.claim_finalization(attempt_id)
+    if not claimed:
+        if retry_after:
+            monitor_render.apply_async(args=[str(attempt_id)], countdown=retry_after)
+            return "downloading_output"
+        current = repo.get_attempt(attempt_id)
+        return current.status if current is not None else "failed"
     outputs = await renderer.fetch_outputs(attempt.external_job_id)
-    if not outputs:
-        raise ComfyUIProviderError("ComfyUI completed without a downloadable output")
-    output = outputs[0]
+    output = select_video_output(outputs)
     content, content_type = await renderer.download_output(output)
     output_name = PurePath(output.filename).name
     object_key = (
@@ -165,6 +216,18 @@ async def _monitor(attempt_id: UUID) -> str:
         len(content),
     )
     return "completed"
+
+
+def select_video_output(outputs: list[RenderOutput]) -> RenderOutput:
+    video_extensions = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".gif"}
+    for output in outputs:
+        if output.media_type == "video" or PurePath(output.filename).suffix.lower() in (
+            video_extensions
+        ):
+            return output
+    raise ComfyUIProviderError(
+        "ComfyUI completed without a downloadable video or GIF output"
+    )
 
 
 @celery_app.task(name="ugc_creator.monitor_render")  # type: ignore[untyped-decorator]

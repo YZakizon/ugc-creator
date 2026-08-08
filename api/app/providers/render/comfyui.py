@@ -63,7 +63,6 @@ class ComfyUIRenderer(VideoRenderer):
             return RenderStatus(external_job_id=external_job_id, state="queued")
 
         status = history.get("status")
-        progress = _extract_progress(history)
         if isinstance(status, dict):
             status_string = status.get("status_str")
             if status_string == "success":
@@ -76,14 +75,22 @@ class ComfyUIRenderer(VideoRenderer):
                 return RenderStatus(
                     external_job_id=external_job_id,
                     state="failed",
-                    progress=progress,
                     message="ComfyUI reported a workflow error",
                 )
         return RenderStatus(
             external_job_id=external_job_id,
             state="running",
-            progress=progress,
         )
+
+    async def find_submission(self, client_id: str) -> str | None:
+        queue = _json_object(await self._request("GET", "/queue"))
+        prompt_id = _find_client_prompt_in_queue(queue, client_id)
+        if prompt_id is not None:
+            return prompt_id
+        history = _json_object(
+            await self._request("GET", "/history", params={"max_items": "100"})
+        )
+        return _find_client_prompt_in_history(history, client_id)
 
     async def cancel(self, external_job_id: str) -> None:
         del external_job_id  # ComfyUI's interrupt endpoint is process-wide.
@@ -205,41 +212,52 @@ def _extract_outputs(outputs: Mapping[str, object]) -> list[RenderOutput]:
                         filename=filename,
                         subfolder=subfolder if isinstance(subfolder, str) else "",
                         output_type=item_type if isinstance(item_type, str) else "",
+                        media_type=(
+                            "video" if output_type in {"videos", "gifs"} else "image"
+                        ),
                     )
                 )
     return discovered
 
 
-def _extract_progress(history: Mapping[str, object]) -> float:
-    direct = history.get("progress")
-    if isinstance(direct, (int, float)) and not isinstance(direct, bool):
-        return max(0, min(100, float(direct)))
-    status = history.get("status")
-    if not isinstance(status, dict):
-        return 0
-    status_progress = status.get("progress")
-    if isinstance(status_progress, (int, float)) and not isinstance(
-        status_progress, bool
+def _find_client_prompt_in_queue(
+    payload: Mapping[str, object], client_id: str
+) -> str | None:
+    for queue_name in ("queue_running", "queue_pending"):
+        entries = payload.get(queue_name)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            prompt_id = _prompt_record_client_match(entry, client_id)
+            if prompt_id is not None:
+                return prompt_id
+    return None
+
+
+def _find_client_prompt_in_history(
+    payload: Mapping[str, object], client_id: str
+) -> str | None:
+    for key, value in payload.items():
+        if not isinstance(value, dict):
+            continue
+        prompt_id = _prompt_record_client_match(value.get("prompt"), client_id)
+        if prompt_id is not None:
+            return prompt_id
+        extra_data = value.get("extra_data")
+        if isinstance(extra_data, dict) and extra_data.get("client_id") == client_id:
+            return key
+    return None
+
+
+def _prompt_record_client_match(record: object, client_id: str) -> str | None:
+    if not isinstance(record, list) or len(record) < 4:
+        return None
+    prompt_id = record[1]
+    extra_data = record[3]
+    if (
+        isinstance(prompt_id, str)
+        and isinstance(extra_data, dict)
+        and extra_data.get("client_id") == client_id
     ):
-        return max(0, min(100, float(status_progress)))
-    messages = status.get("messages")
-    if not isinstance(messages, list):
-        return 0
-    for message in reversed(messages):
-        if (
-            isinstance(message, list)
-            and len(message) >= 2
-            and message[0] == "progress"
-            and isinstance(message[1], dict)
-        ):
-            value = message[1].get("value")
-            maximum = message[1].get("max")
-            if (
-                isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and isinstance(maximum, (int, float))
-                and not isinstance(maximum, bool)
-                and maximum > 0
-            ):
-                return max(0, min(100, float(value) / float(maximum) * 100))
-    return 0
+        return prompt_id
+    return None

@@ -30,9 +30,10 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
         raise RuntimeError("Voice preview not found")
     if preview.status == "completed" and preview.asset_key:
         return {"preview_id": preview_id, "status": preview.status}
-    preview = repository.claim_voice_preview(preview_uuid)
-    if preview is None:
+    claim = repository.claim_voice_preview(preview_uuid)
+    if claim is None:
         return {"preview_id": preview_id, "status": "already_claimed"}
+    preview, claim_token = claim
     settings = dict(preview.settings_json)
     output_format = str(settings.pop("output_format", "mp3_44100_128"))
     language_code = settings.pop("language_code", None)
@@ -68,8 +69,12 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
             asset_key=asset_key,
             content_type=result.content_type,
             filename=f"voice-preview-{preview.id}.{result.extension}",
+            claim_token=claim_token,
         )
-        return {"preview_id": preview_id, "status": completed.status}
+        return {
+            "preview_id": preview_id,
+            "status": completed.status if completed is not None else "claim_lost",
+        }
     except TTSProviderError as exc:
         if exc.retriable:
             repository.update_voice_preview(
@@ -77,6 +82,7 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
                 status="queued",
                 provider_request_id=exc.provider_request_id,
                 error_message=str(exc),
+                claim_token=claim_token,
             )
             retry_provider_error(task, exc, retriable=True)
         repository.update_voice_preview(
@@ -84,6 +90,7 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
             status="failed",
             provider_request_id=exc.provider_request_id,
             error_message=str(exc),
+            claim_token=claim_token,
         )
         return {"preview_id": preview_id, "status": "failed"}
     except Exception:
@@ -91,5 +98,6 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
             preview_uuid,
             status="failed",
             error_message="Speech generation failed unexpectedly.",
+            claim_token=claim_token,
         )
         raise

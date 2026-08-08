@@ -113,7 +113,7 @@ def test_tts_task_requeues_transient_failure_before_retry(
 
         def claim_voice_preview(self, _preview_id: object) -> object:
             updates.append({"status": "generating"})
-            return preview
+            return preview, uuid4()
 
     class FailingProvider:
         async def synthesize(self, _request: object) -> object:

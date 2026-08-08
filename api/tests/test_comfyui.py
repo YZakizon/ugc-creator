@@ -76,7 +76,7 @@ async def test_comfyui_upload_returns_server_filename() -> None:
 
 
 @pytest.mark.asyncio
-async def test_comfyui_status_reads_execution_progress() -> None:
+async def test_comfyui_history_polling_reports_indeterminate_progress() -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -96,4 +96,26 @@ async def test_comfyui_status_reads_execution_progress() -> None:
         ).get_status("prompt-1")
 
     assert status.state == "running"
-    assert status.progress == 70
+    assert status.progress is None
+
+
+@pytest.mark.asyncio
+async def test_comfyui_reconciles_submission_by_persisted_client_id() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/queue":
+            return httpx.Response(
+                200,
+                json={
+                    "queue_running": [],
+                    "queue_pending": [
+                        [1, "prompt-queued", {}, {"client_id": "attempt-client"}]
+                    ],
+                },
+            )
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        renderer = ComfyUIRenderer(base_url="http://comfyui.test", client=client)
+        prompt_id = await renderer.find_submission("attempt-client")
+
+    assert prompt_id == "prompt-queued"

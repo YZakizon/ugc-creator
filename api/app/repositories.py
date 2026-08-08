@@ -37,17 +37,22 @@ def utc_now() -> datetime:
 
 
 VOICE_PREVIEW_STALE_AFTER = timedelta(minutes=5)
+VOICE_PREVIEW_OUTCOME_UNKNOWN = (
+    "The previous speech request may still be running. Its provider outcome is "
+    "unknown, so it was not retried automatically. Request speech again to retry."
+)
 
 
 def voice_preview_is_stale(preview: VoicePreview, now: datetime) -> bool:
-    updated_at = preview.updated_at
-    comparable_now = now
-    if updated_at.tzinfo is None:
-        comparable_now = now.replace(tzinfo=None)
-    return (
-        preview.status in {"queued", "generating"}
-        and updated_at <= comparable_now - VOICE_PREVIEW_STALE_AFTER
+    stale_at = (
+        preview.claim_expires_at
+        if preview.status == "generating" and preview.claim_expires_at is not None
+        else preview.updated_at + VOICE_PREVIEW_STALE_AFTER
     )
+    comparable_now = now
+    if stale_at.tzinfo is None:
+        comparable_now = now.replace(tzinfo=None)
+    return preview.status in {"queued", "generating"} and stale_at <= comparable_now
 
 
 def slugify(value: str) -> str:
@@ -346,11 +351,20 @@ class InMemoryConfigurationRepository:
         )
         if existing is not None:
             now = utc_now()
-            if existing.status == "failed" or voice_preview_is_stale(existing, now):
+            if existing.status == "failed":
                 existing.status = "queued"
                 existing.error_message = None
                 existing.updated_at = now
                 return existing, True
+            if voice_preview_is_stale(existing, now):
+                if existing.status == "queued":
+                    existing.updated_at = now
+                    return existing, True
+                existing.status = "failed"
+                existing.error_message = VOICE_PREVIEW_OUTCOME_UNKNOWN
+                existing.claim_token = None
+                existing.claim_expires_at = None
+                existing.updated_at = now
             return existing, False
         now = utc_now()
         preview = VoicePreview(
@@ -728,13 +742,26 @@ class SqlAlchemyConfigurationRepository:
             )
             if existing is not None:
                 now = utc_now()
-                if existing.status == "failed" or voice_preview_is_stale(existing, now):
+                if existing.status == "failed":
                     existing.status = "queued"
                     existing.error_message = None
                     existing.updated_at = now
                     session.commit()
                     session.refresh(existing)
                     return existing, True
+                if voice_preview_is_stale(existing, now):
+                    if existing.status == "queued":
+                        existing.updated_at = now
+                        session.commit()
+                        session.refresh(existing)
+                        return existing, True
+                    existing.status = "failed"
+                    existing.error_message = VOICE_PREVIEW_OUTCOME_UNKNOWN
+                    existing.claim_token = None
+                    existing.claim_expires_at = None
+                    existing.updated_at = now
+                    session.commit()
+                    session.refresh(existing)
                 return existing, False
             preview = VoicePreview(
                 voice_profile_id=profile.id,
@@ -755,7 +782,9 @@ class SqlAlchemyConfigurationRepository:
         with self.factory() as session:
             return session.get(VoicePreview, preview_id)
 
-    def claim_voice_preview(self, preview_id: UUID) -> VoicePreview | None:
+    def claim_voice_preview(self, preview_id: UUID) -> tuple[VoicePreview, UUID] | None:
+        claimed_at = utc_now()
+        claim_token = uuid4()
         with self.factory() as session:
             claimed = cast(
                 CursorResult[Any],
@@ -765,14 +794,22 @@ class SqlAlchemyConfigurationRepository:
                         VoicePreview.id == preview_id,
                         VoicePreview.status == "queued",
                     )
-                    .values(status="generating", updated_at=utc_now())
+                    .values(
+                        status="generating",
+                        claim_token=claim_token,
+                        claim_expires_at=claimed_at + VOICE_PREVIEW_STALE_AFTER,
+                        updated_at=claimed_at,
+                    )
                 ),
             )
             if claimed.rowcount != 1:
                 session.rollback()
                 return None
             session.commit()
-            return session.get(VoicePreview, preview_id)
+            preview = session.get(VoicePreview, preview_id)
+            if preview is None:
+                return None
+            return preview, claim_token
 
     def update_voice_preview(
         self,
@@ -784,20 +821,37 @@ class SqlAlchemyConfigurationRepository:
         content_type: str | None = None,
         filename: str | None = None,
         error_message: str | None = None,
-    ) -> VoicePreview:
+        claim_token: UUID,
+    ) -> VoicePreview | None:
         with self.factory() as session:
+            updated = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(VoicePreview)
+                    .where(
+                        VoicePreview.id == preview_id,
+                        VoicePreview.claim_token == claim_token,
+                    )
+                    .values(
+                        status=status,
+                        provider_request_id=provider_request_id,
+                        asset_key=asset_key,
+                        content_type=content_type,
+                        filename=filename,
+                        error_message=error_message,
+                        claim_token=None,
+                        claim_expires_at=None,
+                        updated_at=utc_now(),
+                    )
+                ),
+            )
+            if updated.rowcount != 1:
+                session.rollback()
+                return None
+            session.commit()
             preview = session.get(VoicePreview, preview_id)
             if preview is None:
                 raise LookupError("Voice preview not found")
-            preview.status = status
-            preview.provider_request_id = provider_request_id
-            preview.asset_key = asset_key
-            preview.content_type = content_type
-            preview.filename = filename
-            preview.error_message = error_message
-            preview.updated_at = utc_now()
-            session.commit()
-            session.refresh(preview)
             return preview
 
     def create_render_profile(self, payload: RenderProfileCreate) -> RenderProfile:

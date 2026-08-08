@@ -323,7 +323,7 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
 
 
 @pytest.mark.asyncio
-async def test_stale_generating_voice_preview_is_requeued(
+async def test_stale_generating_voice_preview_requires_explicit_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app.state.batch_repository = InMemoryBatchRepository()
@@ -349,13 +349,16 @@ async def test_stale_generating_voice_preview_is_requeued(
         preview.status = "generating"
         preview.updated_at = utc_now() - timedelta(minutes=6)
         second = await client.post(endpoint, json={"text": "Recover this preview."})
+        third = await client.post(endpoint, json={"text": "Recover this preview."})
 
     assert second.json()["id"] == first.json()["id"]
-    assert second.json()["status"] == "queued"
+    assert second.json()["status"] == "failed"
+    assert "outcome is unknown" in second.json()["error_message"]
+    assert third.json()["status"] == "queued"
     assert queued == [first.json()["id"], first.json()["id"]]
 
 
-def test_sql_repository_requeues_stale_generating_voice_preview() -> None:
+def test_sql_repository_requires_explicit_retry_for_stale_generating_preview() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
@@ -384,9 +387,60 @@ def test_sql_repository_requeues_stale_generating_voice_preview() -> None:
     )
 
     assert recovered.id == preview.id
-    assert recovered.status == "queued"
-    assert recovered.error_message is None
+    assert recovered.status == "failed"
+    assert recovered.error_message is not None
+    assert "outcome is unknown" in recovered.error_message
+    assert should_enqueue is False
+
+    retried, should_enqueue = repository.create_voice_preview(
+        profile.id, "A short preview", "stale-preview-fingerprint"
+    )
+    assert retried.status == "queued"
     assert should_enqueue is True
+
+
+def test_voice_preview_claim_token_rejects_late_worker_update() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    repository = SqlAlchemyConfigurationRepository(factory)
+    profile = repository.create_voice_profile(
+        VoiceProfileCreate(
+            name="Owned voice",
+            provider="elevenlabs",
+            provider_voice_id="voice-owned",
+        )
+    )
+    preview, _ = repository.create_voice_preview(
+        profile.id, "Owned preview", "owned-preview"
+    )
+    first_claim = repository.claim_voice_preview(preview.id)
+    assert first_claim is not None
+    _claimed_preview, first_token = first_claim
+
+    with factory() as session:
+        stored = session.get(models.VoicePreview, preview.id)
+        assert stored is not None
+        stored.status = "failed"
+        stored.claim_token = None
+        stored.claim_expires_at = None
+        session.commit()
+    repository.create_voice_preview(profile.id, "Owned preview", "owned-preview")
+    second_claim = repository.claim_voice_preview(preview.id)
+    assert second_claim is not None
+    _claimed_preview, second_token = second_claim
+
+    assert (
+        repository.update_voice_preview(
+            preview.id, status="completed", claim_token=first_token
+        )
+        is None
+    )
+    completed = repository.update_voice_preview(
+        preview.id, status="completed", claim_token=second_token
+    )
+    assert completed is not None
+    assert completed.status == "completed"
 
 
 def test_voice_preview_claim_allows_only_one_concurrent_worker(tmp_path) -> None:
