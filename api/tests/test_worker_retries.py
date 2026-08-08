@@ -154,3 +154,39 @@ def test_tts_task_requeues_transient_failure_before_retry(
     assert [update["status"] for update in updates] == ["generating", "queued"]
     assert updates[-1]["provider_request_id"] == "tts-request"
     assert scheduled[0][1] == 1
+
+
+def test_redelivered_tts_task_schedules_claim_expiry_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview_id = uuid4()
+    preview = SimpleNamespace(id=preview_id, status="generating", asset_key=None)
+    scheduled: list[tuple[list[str], int]] = []
+
+    class FakeRepository:
+        def get_voice_preview(self, _preview_id: object) -> object:
+            return preview
+
+        def claim_voice_preview(self, _preview_id: object) -> None:
+            return None
+
+        def reconcile_voice_preview_claim(self, _preview_id: object) -> tuple[str, int]:
+            return "generating", 42
+
+    monkeypatch.setattr(tts_tasks, "create_database_engine", object)
+    monkeypatch.setattr(tts_tasks, "session_factory", lambda _engine: object())
+    monkeypatch.setattr(
+        tts_tasks,
+        "SqlAlchemyConfigurationRepository",
+        lambda _factory: FakeRepository(),
+    )
+    monkeypatch.setattr(
+        tts_tasks.generate_voice_preview,
+        "apply_async",
+        lambda *, args, countdown: scheduled.append((args, countdown)),
+    )
+
+    result = tts_tasks.generate_voice_preview.run(str(preview_id))
+
+    assert result == {"preview_id": str(preview_id), "status": "generating"}
+    assert scheduled == [([str(preview_id)], 42)]

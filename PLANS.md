@@ -1896,7 +1896,9 @@ the completed result. Celery acknowledges tasks only after execution and rejects
 worker-lost deliveries back to the broker; prefetch is one to limit reserved
 long-running work. A transport failure or malformed success response from
 ComfyUI `/prompt` keeps the attempt in `submitting_render` and schedules
-client-ID reconciliation instead of marking the attempt failed.
+client-ID reconciliation instead of marking the attempt failed. Redelivered TTS
+tasks schedule a check at claim expiry; expired claims become an explicit
+unknown-outcome failure without automatically repeating the paid call.
 
 ### 2026-08-08 — Render-node URLs are deny-by-default
 **Status: accepted**

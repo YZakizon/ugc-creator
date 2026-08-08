@@ -32,7 +32,10 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
         return {"preview_id": preview_id, "status": preview.status}
     claim = repository.claim_voice_preview(preview_uuid)
     if claim is None:
-        return {"preview_id": preview_id, "status": "already_claimed"}
+        status, retry_after = repository.reconcile_voice_preview_claim(preview_uuid)
+        if retry_after:
+            generate_voice_preview.apply_async(args=[preview_id], countdown=retry_after)
+        return {"preview_id": preview_id, "status": status}
     preview, claim_token = claim
     settings = dict(preview.settings_json)
     output_format = str(settings.pop("output_format", "mp3_44100_128"))

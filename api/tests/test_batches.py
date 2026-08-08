@@ -443,6 +443,46 @@ def test_voice_preview_claim_token_rejects_late_worker_update() -> None:
     assert completed.status == "completed"
 
 
+def test_expired_voice_preview_claim_is_resolved_without_resynthesis() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False)
+    repository = SqlAlchemyConfigurationRepository(factory)
+    profile = repository.create_voice_profile(
+        VoiceProfileCreate(
+            name="Recover owned voice",
+            provider="elevenlabs",
+            provider_voice_id="voice-recover-owned",
+        )
+    )
+    preview, _ = repository.create_voice_preview(
+        profile.id, "Recover after worker loss", "worker-loss-preview"
+    )
+    claim = repository.claim_voice_preview(preview.id)
+    assert claim is not None
+    _claimed_preview, stale_token = claim
+    with factory() as session:
+        stored = session.get(models.VoicePreview, preview.id)
+        assert stored is not None
+        stored.claim_expires_at = utc_now() - timedelta(seconds=1)
+        session.commit()
+
+    status, retry_after = repository.reconcile_voice_preview_claim(preview.id)
+
+    assert (status, retry_after) == ("failed", 0)
+    resolved = repository.get_voice_preview(preview.id)
+    assert resolved is not None
+    assert resolved.error_message is not None
+    assert "outcome is unknown" in resolved.error_message
+    assert resolved.claim_token is None
+    assert (
+        repository.update_voice_preview(
+            preview.id, status="completed", claim_token=stale_token
+        )
+        is None
+    )
+
+
 def test_voice_preview_claim_allows_only_one_concurrent_worker(tmp_path) -> None:
     engine = create_engine(
         f"sqlite:///{tmp_path / 'voice-claim.db'}",

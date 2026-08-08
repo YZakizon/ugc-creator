@@ -811,6 +811,49 @@ class SqlAlchemyConfigurationRepository:
                 return None
             return preview, claim_token
 
+    def reconcile_voice_preview_claim(self, preview_id: UUID) -> tuple[str, int]:
+        checked_at = utc_now()
+        with self.factory() as session:
+            preview = session.get(VoicePreview, preview_id)
+            if preview is None:
+                raise LookupError("Voice preview not found")
+            if preview.status != "generating":
+                return preview.status, 0
+            expires_at = preview.claim_expires_at
+            if expires_at is None:
+                return preview.status, int(VOICE_PREVIEW_STALE_AFTER.total_seconds())
+            comparable_now = checked_at
+            if expires_at.tzinfo is None:
+                comparable_now = checked_at.replace(tzinfo=None)
+            remaining = int((expires_at - comparable_now).total_seconds())
+            if remaining > 0:
+                return preview.status, max(1, remaining)
+            expired = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(VoicePreview)
+                    .where(
+                        VoicePreview.id == preview_id,
+                        VoicePreview.status == "generating",
+                        VoicePreview.claim_token == preview.claim_token,
+                    )
+                    .values(
+                        status="failed",
+                        error_message=VOICE_PREVIEW_OUTCOME_UNKNOWN,
+                        claim_token=None,
+                        claim_expires_at=None,
+                        updated_at=checked_at,
+                    )
+                ),
+            )
+            session.commit()
+            if expired.rowcount == 1:
+                return "failed", 0
+            current = session.get(VoicePreview, preview_id)
+            if current is None:
+                raise LookupError("Voice preview not found")
+            return current.status, 0
+
     def update_voice_preview(
         self,
         preview_id: UUID,
