@@ -14,6 +14,12 @@ class StartupSanityReport(TypedDict):
     warnings: list[str]
 
 
+def content_generation_configured() -> bool:
+    return os.getenv("UGC_FAKE_PROVIDERS") == "1" or bool(
+        os.getenv("OPENAI_API_KEY", "").strip()
+    )
+
+
 def build_startup_sanity_report() -> StartupSanityReport:
     fake_providers = os.getenv("UGC_FAKE_PROVIDERS") == "1"
     checks: dict[str, StartupCheck] = {
@@ -28,7 +34,7 @@ def build_startup_sanity_report() -> StartupSanityReport:
             "REDIS_URL is missing; background jobs cannot be queued reliably.",
         ),
         "openai": _check(
-            fake_providers or bool(os.getenv("OPENAI_API_KEY", "").strip()),
+            content_generation_configured(),
             "OpenAI content generation is configured."
             if not fake_providers
             else "Fake content generation is enabled.",

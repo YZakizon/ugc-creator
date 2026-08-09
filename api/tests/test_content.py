@@ -148,6 +148,7 @@ async def test_content_service_persists_fake_provider_result() -> None:
 async def test_content_endpoint_queues_job_by_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
     batch_repository = InMemoryBatchRepository()
     app.state.batch_repository = batch_repository
     app.state.configuration_repository = InMemoryConfigurationRepository()
@@ -170,3 +171,42 @@ async def test_content_endpoint_queues_job_by_id(
     assert response.status_code == 202
     assert response.json()["status"] == "queued"
     assert queued == [str(batch.jobs[0].id)]
+
+
+@pytest.mark.asyncio
+async def test_content_endpoint_rejects_unconfigured_openai_before_queueing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("UGC_FAKE_PROVIDERS", raising=False)
+    batch_repository = InMemoryBatchRepository()
+    app.state.batch_repository = batch_repository
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    batch = batch_repository.create_batch(
+        BatchCreate(name="Unconfigured", topics=["A topic"])
+    )
+    queued: list[str] = []
+    monkeypatch.setattr("app.api.routes.generate_job_content.delay", queued.append)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            f"/api/v1/jobs/{batch.jobs[0].id}/generate-content",
+            json={},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "code": "provider_not_configured",
+        "provider": "openai",
+        "message": (
+            "OpenAI is not configured. Set OPENAI_API_KEY in the root .env file "
+            "and restart Docker before generating content."
+        ),
+        "retriable": False,
+    }
+    assert queued == []
+    stored = batch_repository.get_job(batch.jobs[0].id)
+    assert stored is not None
+    assert stored.status == "draft"
