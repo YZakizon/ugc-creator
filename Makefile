@@ -1,12 +1,21 @@
 .RECIPEPREFIX := >
 
-.PHONY: setup lint typecheck test test-e2e check-compose dev compose-up compose-down \
-	docker-build-run docker-run docker-stop docker-logs capture-docker-ports \
-	ensure-traefik-network
+ENV_FILE ?= .env
+API_DEV_PORT ?= 8000
+API_RUNNER ?= uv run
+API_DEV_RELOAD ?= --reload
+
+.PHONY: setup env-merge lint typecheck test test-e2e check-compose check-env \
+	check-host-api dev \
+	compose-up compose-down docker-build-run docker-run docker-stop docker-logs \
+	capture-docker-ports ensure-traefik-network api-dev web-dev
 
 setup:
 >cd api && uv sync --dev
 >cd web && corepack pnpm install
+
+env-merge:
+>bash scripts/merge_env_example.sh
 
 lint:
 >cd api && uv run ruff format --check . && uv run ruff check .
@@ -25,6 +34,18 @@ test-e2e:
 
 check-compose:
 >bash scripts/check_traefik_compose.sh
+
+check-env:
+>bash scripts/check_env_contexts.sh
+
+check-host-api:
+>bash scripts/check_host_api.sh
+
+api-dev:
+>set -a; . "$(abspath $(ENV_FILE))"; set +a; cd api && $(API_RUNNER) uvicorn app.main:app $(API_DEV_RELOAD) --port $(API_DEV_PORT)
+
+web-dev:
+>set -a; . "$(abspath $(ENV_FILE))"; set +a; cd web && corepack pnpm dev
 
 dev: docker-build-run
 

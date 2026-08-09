@@ -21,11 +21,17 @@ Kling.
 
 ## Local setup
 
-1. Copy the example environment file:
+1. Create or update the local environment file without replacing existing values:
 
    ```bash
-   cp .env.example .env
+   make env-merge
    ```
+
+   The command appends variables missing from `.env`; it never overwrites existing
+   provider keys or local settings. Add your `OPENAI_API_KEY` and
+   `ELEVENLABS_API_KEY` values after merging. The example uses host-reachable
+   `localhost` URLs. Docker Compose overrides them with the `postgres`, `redis`,
+   `minio`, and `api` service names for container-to-container traffic.
 
 2. Install project dependencies:
 
@@ -62,11 +68,13 @@ Kling.
    TRAEFIK_ENTRYPOINT=web
    ```
 
-4. For non-Docker development, start the API and web development servers separately:
+4. For non-Docker application development, start the API and web development
+   servers in separate terminals. These targets load the root `.env` before
+   changing into each application directory:
 
    ```bash
-   cd api && uv run uvicorn app.main:app --reload --port 8000
-   cd web && pnpm dev
+   make api-dev
+   make web-dev
    ```
 
    The API health endpoint is available at <http://localhost:8000/health>.
