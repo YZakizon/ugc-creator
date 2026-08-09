@@ -316,7 +316,7 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .voice-preview-history-copy > small { color: #777487; }
 .voice-preview-history-actions { display: flex; min-height: 40px; align-items: center; justify-content: flex-end; gap: 8px; }
 .voice-preview-history-actions audio { display: block; width: 240px; height: 40px; }
-.voice-preview-history-actions > .profile-icon-button { align-self: center; margin: 0; }
+.voice-preview-history-actions > .profile-icon-button { width: 38px; height: 38px; flex: 0 0 38px; align-self: center; margin: 0; border-radius: 8px; }
 .elevenlabs-balance { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border: 1px solid #ded9f5; border-radius: 10px; background: linear-gradient(135deg, #fbfaff, #f4f1ff); }
 .elevenlabs-balance > div { display: flex; align-items: center; gap: 10px; }
 .elevenlabs-balance > div > span:last-child, .elevenlabs-balance-value { display: grid; gap: 2px; }

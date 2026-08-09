@@ -38,6 +38,40 @@ test.describe("workspace customer journeys", () => {
     });
     expect(createResponse.status()).toBe(201);
 
+    await page.route("**/api/v1/voice-profiles/*/previews", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [{
+            id: "playwright-preview",
+            voice_profile_id: "playwright-profile",
+            text: "Playwright generated speech history check",
+            status: "completed",
+            provider: "elevenlabs",
+            provider_request_id: "fake-request",
+            generated_usage_units: 42,
+            account_used_units: 100,
+            account_limit_units: 10000,
+            account_remaining_units: 9900,
+            usage_resets_at_unix: null,
+            usage_unit: "characters",
+            content_type: "audio/mpeg",
+            filename: "preview.mp3",
+            error_message: null,
+            download_url: "/api/v1/voice-previews/playwright-preview/audio",
+            created_at: "2026-08-09T07:00:00Z",
+            updated_at: "2026-08-09T07:00:01Z",
+          }],
+          total: 1,
+        }),
+      });
+    });
+
     await page.goto("/voice-profiles");
     await page.getByRole("button", { name: `Show ${profileName} details` }).click();
 
@@ -57,8 +91,15 @@ test.describe("workspace customer journeys", () => {
 
     await historyTab.click();
     await expect(historyTab).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByRole("tabpanel", { name: "History" }).getByRole("heading", { name: "Generated speech history" })).toBeVisible();
+    const historyPanel = page.getByRole("tabpanel", { name: "History" });
+    await expect(historyPanel.getByRole("heading", { name: "Generated speech history" })).toBeVisible();
     await expect(previewPanel).toBeHidden();
+    const downloadBox = await historyPanel.getByRole("link", { name: "Download audio" }).boundingBox();
+    const deleteBox = await historyPanel.getByRole("button", { name: "Delete generated speech" }).boundingBox();
+    expect(downloadBox).not.toBeNull();
+    expect(deleteBox).not.toBeNull();
+    expect(downloadBox?.width).toBe(deleteBox?.width);
+    expect(downloadBox?.height).toBe(deleteBox?.height);
   });
 
   test("imports a workflow, creates a profile, and creates a multi-topic batch", async ({ page }) => {
