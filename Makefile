@@ -1,12 +1,15 @@
 .RECIPEPREFIX := >
 
-.PHONY: setup lint typecheck test test-e2e check-compose dev compose-up compose-down \
-	docker-build-run docker-run docker-stop docker-logs capture-docker-ports \
-	ensure-traefik-network
+.PHONY: setup env-merge lint typecheck test test-e2e check-compose dev \
+	compose-up compose-down docker-build-run docker-run docker-stop docker-logs \
+	capture-docker-ports ensure-traefik-network
 
 setup:
 >cd api && uv sync --dev
 >cd web && corepack pnpm install
+
+env-merge:
+>bash scripts/merge_env_example.sh
 
 lint:
 >cd api && uv run ruff format --check . && uv run ruff check .

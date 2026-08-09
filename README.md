@@ -21,11 +21,15 @@ Kling.
 
 ## Local setup
 
-1. Copy the example environment file:
+1. Create or update the local environment file without replacing existing values:
 
    ```bash
-   cp .env.example .env
+   make env-merge
    ```
+
+   The command appends variables missing from `.env`; it never overwrites existing
+   provider keys or local settings. Add your `OPENAI_API_KEY` and
+   `ELEVENLABS_API_KEY` values after merging.
 
 2. Install project dependencies:
 
