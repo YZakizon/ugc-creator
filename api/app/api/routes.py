@@ -546,6 +546,17 @@ def delete_voice_preview(
     preview = repo.get_voice_preview(preview_id)
     if preview is None:
         raise HTTPException(status_code=404, detail="Voice preview not found")
+    if preview.status in {"queued", "generating"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "voice_preview_in_progress",
+                "message": (
+                    "Generated speech cannot be deleted while generation is in "
+                    "progress."
+                ),
+            },
+        )
     if preview.asset_key:
         try:
             LocalStorageProvider().delete(preview.asset_key)

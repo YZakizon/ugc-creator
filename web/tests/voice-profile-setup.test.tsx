@@ -112,7 +112,9 @@ describe("voice profile setup", () => {
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("voice-profiles/voice-1/previews")) {
-        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{
+          id: "preview-active", voice_profile_id: "voice-1", text: "Still generating", status: "generating", provider: "elevenlabs", provider_request_id: null, generated_usage_units: null, account_used_units: null, account_limit_units: null, account_remaining_units: null, usage_resets_at_unix: null, usage_unit: null, content_type: null, filename: null, error_message: null, download_url: null, created_at: "2026-08-07T12:01:00Z", updated_at: "2026-08-07T12:01:00Z",
+        }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({
         items: [{ id: "voice-1", name: "Hope voice", provider: "elevenlabs", provider_voice_id: "voice-123", provider_model: "eleven_multilingual_v2", speed: 1, stability: 0.5, similarity: 0.75, style_exaggeration: 0.5, extra_settings: { voice_name: "Hope" }, created_at: "2026-08-07T12:00:00Z", updated_at: "2026-08-07T12:00:00Z" }], total: 1,
@@ -152,5 +154,6 @@ describe("voice profile setup", () => {
     expect(screen.getByRole("tab", { name: "History" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("heading", { name: "Generated speech history" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Preview to generate speech" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete generated speech" })).toBeDisabled();
   });
 });

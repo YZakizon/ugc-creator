@@ -307,6 +307,9 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
             json={"text": "This is a speech preview."},
         )
         preview = repository.voice_previews[next(iter(repository.voice_previews))]
+        queued_delete = await client.delete(f"/api/v1/voice-previews/{preview.id}")
+        preview.status = "generating"
+        generating_delete = await client.delete(f"/api/v1/voice-previews/{preview.id}")
         preview.status = "completed"
         preview.asset_key = f"voice-previews/{preview.id}/speech.mp3"
         preview.content_type = "audio/mpeg"
@@ -328,6 +331,10 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
     assert voices.json()["items"][0]["voice_id"] == "fake-voice-hope"
     assert created.json()["status"] == "queued"
     assert queued == [created.json()["id"]]
+    assert queued_delete.status_code == 409
+    assert queued_delete.json()["detail"]["code"] == "voice_preview_in_progress"
+    assert generating_delete.status_code == 409
+    assert generating_delete.json()["detail"]["code"] == "voice_preview_in_progress"
     assert polled.json()["download_url"].endswith(f"/{preview.id}/audio")
     assert audio.status_code == 200
     assert audio.content == b"ID3preview"
