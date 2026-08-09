@@ -29,7 +29,9 @@ Kling.
 
    The command appends variables missing from `.env`; it never overwrites existing
    provider keys or local settings. Add your `OPENAI_API_KEY` and
-   `ELEVENLABS_API_KEY` values after merging.
+   `ELEVENLABS_API_KEY` values after merging. The example uses Docker Compose
+   service names (`postgres`, `redis`, `minio`, and `api`) for container-to-container
+   traffic; use the values captured in `.docker/ports.env` for host access.
 
 2. Install project dependencies:
 
