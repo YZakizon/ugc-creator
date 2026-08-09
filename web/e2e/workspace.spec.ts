@@ -21,6 +21,46 @@ test.describe("workspace customer journeys", () => {
     await expect(page.getByRole("heading", { name: "Good morning, Your Name" })).toBeVisible();
   });
 
+  test("switches between generated speech preview and history", async ({ page }) => {
+    const profileName = `Playwright voice ${Date.now()}`;
+    const createResponse = await page.request.post("/api/v1/voice-profiles", {
+      data: {
+        name: profileName,
+        provider: "elevenlabs",
+        provider_voice_id: "playwright-voice-id",
+        provider_model: "eleven_multilingual_v2",
+        speed: 1,
+        stability: 0.5,
+        similarity: 0.75,
+        style_exaggeration: 0.5,
+        extra_settings: { voice_name: "Playwright Voice" },
+      },
+    });
+    expect(createResponse.status()).toBe(201);
+
+    await page.goto("/voice-profiles");
+    await page.getByRole("button", { name: `Show ${profileName} details` }).click();
+
+    const tabList = page.getByRole("tablist", { name: "Generated speech sections" });
+    const previewTab = page.getByRole("tab", { name: "Preview" });
+    const historyTab = page.getByRole("tab", { name: "History" });
+    const previewPanel = page.getByRole("tabpanel", { name: "Preview" });
+
+    await expect(previewTab).toHaveAttribute("aria-selected", "true");
+    await expect(previewPanel.getByRole("heading", { name: "Preview to generate speech" })).toBeVisible();
+    const tabBox = await tabList.boundingBox();
+    const panelBox = await previewPanel.boundingBox();
+    expect(tabBox).not.toBeNull();
+    expect(panelBox).not.toBeNull();
+    expect((panelBox?.y ?? 0) > (tabBox?.y ?? 0) + (tabBox?.height ?? 0)).toBe(true);
+    expect(Math.abs((panelBox?.width ?? 0) - (tabBox?.width ?? 0))).toBeLessThan(2);
+
+    await historyTab.click();
+    await expect(historyTab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tabpanel", { name: "History" }).getByRole("heading", { name: "Generated speech history" })).toBeVisible();
+    await expect(previewPanel).toBeHidden();
+  });
+
   test("imports a workflow, creates a profile, and creates a multi-topic batch", async ({ page }) => {
     test.setTimeout(90_000);
     await page.getByRole("link", { name: "Workflows" }).click();
