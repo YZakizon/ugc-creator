@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
+from app.core.startup import content_generation_configured
 from app.core.statuses import JobStatus
 from app.core.urls import validate_render_node_url
 from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
@@ -383,6 +384,21 @@ def get_job(job_id: UUID, repo: BatchRepository = Depends(repository)) -> JobRea
 def queue_content_generation(
     job_id: UUID, repo: BatchRepository = Depends(repository)
 ) -> JobRead:
+    if repo.get_job(job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not content_generation_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "provider_not_configured",
+                "provider": "openai",
+                "message": (
+                    "OpenAI is not configured. Set OPENAI_API_KEY in the root "
+                    ".env file and restart Docker before generating content."
+                ),
+                "retriable": False,
+            },
+        )
     job = repo.queue_job_for_content(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
