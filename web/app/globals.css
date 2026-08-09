@@ -290,6 +290,24 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .voice-preview-status.completed { color: #237952; background: #e7f7ef; }
 .voice-preview-status.failed { color: #a94343; background: #fff0f0; }
 .voice-preview-result audio { flex: 1 1 320px; min-width: 220px; }
+.voice-preview-download { display: inline-grid; width: 38px; height: 38px; flex: 0 0 38px; place-items: center; border: 1px solid #cfc8fb; border-radius: 8px; color: #5c49c9; background: #f7f5ff; }
+.voice-preview-download:hover { background: #eeeaff; }
+.voice-preview-download:focus-visible { outline: 2px solid #6f5bd3; outline-offset: 2px; }
+.voice-preview-download svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.9; }
+.voice-preview-usage { display: grid; width: 100%; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 2px 0 0; }
+.voice-preview-usage div { padding: 9px 11px; border: 1px solid #e8e5f5; border-radius: 8px; background: #faf9ff; }
+.voice-preview-usage dt { color: #777487; font-size: 12px; }
+.voice-preview-usage dd { margin: 2px 0 0; color: #34313f; font-size: 13px; font-weight: 650; }
+.voice-preview-history { display: grid; width: 100%; gap: 10px; margin-top: 8px; padding-top: 14px; border-top: 1px solid #ebe8f5; }
+.voice-preview-history h4, .voice-preview-history p { margin: 0; }
+.voice-preview-history > div > p, .voice-preview-history > p { margin-top: 3px; color: #777487; font-size: 13px; }
+.voice-preview-history-list { display: grid; gap: 8px; }
+.voice-preview-history-list > article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid #e8e5f5; border-radius: 9px; background: #fff; }
+.voice-preview-history-copy { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.voice-preview-history-copy > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-preview-history-copy > small { color: #777487; }
+.voice-preview-history-actions { display: flex; align-items: center; gap: 8px; }
+.voice-preview-history-actions audio { width: 240px; }
 .profile-form-actions { display: flex; align-items: end; gap: 8px; }
 .profile-edit-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .profile-form .form-error, .profile-form .form-success { grid-column: 1 / -1; }

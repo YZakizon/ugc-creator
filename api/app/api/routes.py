@@ -46,6 +46,7 @@ from app.schemas import (
     RenderProfileSetupCreate,
     RenderProfileUpdate,
     VoicePreviewCreate,
+    VoicePreviewList,
     VoicePreviewRead,
     VoiceProfileCreate,
     VoiceProfileList,
@@ -425,6 +426,41 @@ def get_voice_preview(
     if preview is None:
         raise HTTPException(status_code=404, detail="Voice preview not found")
     return VoicePreviewRead.model_validate(voice_preview_to_dict(preview))
+
+
+@router.get("/voice-profiles/{profile_id}/previews", response_model=VoicePreviewList)
+def list_voice_previews(
+    profile_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoicePreviewList:
+    if repo.get_voice_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Voice profile not found")
+    items, total = repo.list_voice_previews(profile_id)
+    return VoicePreviewList(
+        items=[
+            VoicePreviewRead.model_validate(voice_preview_to_dict(item))
+            for item in items
+        ],
+        total=total,
+    )
+
+
+@router.delete("/voice-previews/{preview_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_voice_preview(
+    preview_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> None:
+    preview = repo.get_voice_preview(preview_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="Voice preview not found")
+    if preview.asset_key:
+        try:
+            LocalStorageProvider().delete(preview.asset_key)
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503, detail="Voice preview audio could not be deleted"
+            ) from exc
+    repo.delete_voice_preview(preview_id)
 
 
 @router.get("/voice-previews/{preview_id}/audio")

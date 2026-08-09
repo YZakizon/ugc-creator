@@ -312,6 +312,13 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
         (tmp_path / preview.asset_key).write_bytes(b"ID3preview")
         polled = await client.get(f"/api/v1/voice-previews/{preview.id}")
         audio = await client.get(f"/api/v1/voice-previews/{preview.id}/audio")
+        history = await client.get(
+            f"/api/v1/voice-profiles/{voice.json()['id']}/previews"
+        )
+        deleted = await client.delete(f"/api/v1/voice-previews/{preview.id}")
+        history_after_delete = await client.get(
+            f"/api/v1/voice-profiles/{voice.json()['id']}/previews"
+        )
 
     assert created.status_code == 202
     assert created.json()["status"] == "queued"
@@ -320,6 +327,11 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
     assert audio.status_code == 200
     assert audio.content == b"ID3preview"
     assert audio.headers["content-type"] == "audio/mpeg"
+    assert history.status_code == 200
+    assert [item["id"] for item in history.json()["items"]] == [str(preview.id)]
+    assert deleted.status_code == 204
+    assert history_after_delete.json() == {"items": [], "total": 0}
+    assert not (tmp_path / preview.asset_key).exists()
 
 
 @pytest.mark.asyncio

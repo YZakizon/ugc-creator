@@ -6,8 +6,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
 import { ConfirmDialog, Toast } from "@/components/feedback";
-import { ApiRequestError, createVoicePreview, createVoiceProfile, deleteVoiceProfile, getVoicePreview, getVoiceProfiles, updateVoiceProfile } from "@/lib/api";
-import type { ResourceReference, VoiceProfile, VoiceProfileInUseDetail } from "@/lib/api";
+import { ApiRequestError, createVoicePreview, createVoiceProfile, deleteVoicePreview, deleteVoiceProfile, getVoicePreview, getVoicePreviews, getVoiceProfiles, updateVoiceProfile } from "@/lib/api";
+import type { ResourceReference, VoicePreview, VoiceProfile, VoiceProfileInUseDetail } from "@/lib/api";
 
 type VoiceForm = {
   profileName: string;
@@ -90,6 +90,7 @@ export function VoiceProfileSetup() {
   const [editForm, setEditForm] = useState<VoiceForm>(emptyVoiceForm);
   const editFormRef = useRef<VoiceForm>(emptyVoiceForm);
   const [pendingDelete, setPendingDelete] = useState<VoiceProfile | null>(null);
+  const [pendingPreviewDelete, setPendingPreviewDelete] = useState<VoicePreview | null>(null);
   const [previewText, setPreviewText] = useState("Hello! This is a preview of the selected voice profile.");
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: "success" | "danger"; profileLinks?: ResourceReference[] } | null>(null);
@@ -135,6 +136,21 @@ export function VoiceProfileSetup() {
     queryFn: () => getVoicePreview(previewId as string),
     enabled: previewId !== null,
     refetchInterval: (query) => ["queued", "generating"].includes(query.state.data?.status ?? "") ? 1500 : false,
+  });
+  const previewsQuery = useQuery({
+    queryKey: ["voice-previews", expandedId],
+    queryFn: () => getVoicePreviews(expandedId as string),
+    enabled: expandedId !== null,
+    refetchInterval: (query) => query.state.data?.items.some((item) => ["queued", "generating"].includes(item.status)) ? 1500 : false,
+  });
+  const deletePreviewMutation = useMutation({
+    mutationFn: deleteVoicePreview,
+    onSuccess: (_, deletedId) => {
+      if (previewId === deletedId) setPreviewId(null);
+      void queryClient.invalidateQueries({ queryKey: ["voice-previews", expandedId] });
+      setToast({ message: "Generated speech deleted.", variant: "success" });
+    },
+    onError: (error) => setToast({ message: error.message, variant: "danger" }),
   });
 
   function updateForm(field: keyof VoiceForm, value: string | boolean) {
@@ -188,9 +204,10 @@ export function VoiceProfileSetup() {
               <div className="profile-form-section-heading"><h3>Generate speech preview</h3><p>Test this saved ElevenLabs voice and download the generated audio.</p></div>
               <div className="voice-preview-controls">
                 <label className="voice-preview-text">Text<textarea rows={5} maxLength={5000} value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="Enter text to generate speech…" /><small>{previewText.length} / 5000 characters</small></label>
-                <div className="voice-preview-actions"><button className="button button-secondary" type="button" disabled={previewMutation.isPending || !previewText.trim()} onClick={() => previewMutation.mutate({ voiceProfileId: profile.id, text: previewText.trim() })}>{previewMutation.isPending ? "Queuing…" : "Generate speech"}</button>{previewQuery.data && <span className={`voice-preview-status ${previewQuery.data.status}`}>{previewQuery.data.status.replaceAll("_", " ")}</span>}</div>
-                {previewQuery.data?.status === "completed" && previewQuery.data.download_url && <div className="voice-preview-result"><audio controls preload="metadata" src={previewQuery.data.download_url}>Your browser does not support audio playback.</audio><a className="button button-primary" href={previewQuery.data.download_url} download={previewQuery.data.filename ?? "voice-preview.mp3"}>Download audio</a></div>}
+                <div className="voice-preview-actions"><button className="button button-secondary" type="button" disabled={previewMutation.isPending || !previewText.trim()} onClick={() => previewMutation.mutate({ voiceProfileId: profile.id, text: previewText.trim() }, { onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["voice-previews", profile.id] }) })}>{previewMutation.isPending ? "Queuing…" : "Generate speech"}</button>{previewQuery.data && <span className={`voice-preview-status ${previewQuery.data.status}`}>{previewQuery.data.status.replaceAll("_", " ")}</span>}</div>
+                {previewQuery.data?.status === "completed" && previewQuery.data.download_url && <div className="voice-preview-result"><audio controls preload="metadata" src={previewQuery.data.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={previewQuery.data.download_url} download={previewQuery.data.filename ?? "voice-preview.mp3"} aria-label="Download audio" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><VoicePreviewUsage preview={previewQuery.data} /></div>}
                 {previewQuery.data?.status === "failed" && <p className="form-error" role="alert">{previewQuery.data.error_message ?? "Speech generation failed."}</p>}
+                <VoicePreviewHistory previews={previewsQuery.data?.items ?? []} loading={previewsQuery.isLoading} onDelete={setPendingPreviewDelete} />
               </div>
             </section>
             <div className="profile-create-actions"><button className="button button-primary" type="submit" disabled={updateMutation.isPending}>{updateMutation.isPending ? "Saving…" : "Save changes"}</button></div>
@@ -199,8 +216,29 @@ export function VoiceProfileSetup() {
       </div> : <div className="profile-empty compact-profile-empty"><div className="profile-list-icon">◒</div><div><h3>No voice profiles yet</h3><p>Create an ElevenLabs voice configuration, then attach it to a render profile.</p></div></div>}
     </div>
     <ConfirmDialog open={pendingDelete !== null} title="Delete voice profile?" message={pendingDelete ? `“${pendingDelete.name}” will be permanently removed. Deletion is blocked while it is attached to a render profile or character.` : ""} confirmLabel="Delete" onCancel={() => setPendingDelete(null)} onConfirm={() => { if (pendingDelete) deleteMutation.mutate(pendingDelete.id); setPendingDelete(null); }} />
+    <ConfirmDialog open={pendingPreviewDelete !== null} title="Delete generated speech?" message="The saved audio and its usage history will be permanently removed." confirmLabel="Delete" onCancel={() => setPendingPreviewDelete(null)} onConfirm={() => { if (pendingPreviewDelete) deletePreviewMutation.mutate(pendingPreviewDelete.id); setPendingPreviewDelete(null); }} />
     {toast && <Toast message={toast.message} variant={toast.variant} content={toast.profileLinks?.length ? <span className="voice-delete-conflict"><span>{toast.message}</span><span className="toast-profile-links">{toast.profileLinks.map((profile) => <Link key={profile.id} href={`/profiles#profile-${profile.id}`}>Open {profile.name} · {profile.id}</Link>)}</span></span> : undefined} onClose={() => setToast(null)} />}
   </div>;
+}
+
+function VoicePreviewHistory({ previews, loading, onDelete }: { previews: VoicePreview[]; loading: boolean; onDelete: (preview: VoicePreview) => void }) {
+  return <section className="voice-preview-history" aria-labelledby="voice-preview-history-title">
+    <div><h4 id="voice-preview-history-title">Generated speech history</h4><p>Audio remains saved until you delete it.</p></div>
+    {loading ? <p>Loading generated speech…</p> : previews.length === 0 ? <p>No generated speech yet.</p> : <div className="voice-preview-history-list">{previews.map((preview) => <article key={preview.id}>
+      <div className="voice-preview-history-copy"><strong>{preview.text}</strong><small><HumanDate value={preview.created_at} /> · {preview.status.replaceAll("_", " ")}</small>{preview.status === "completed" && <VoicePreviewUsage preview={preview} />}{preview.status === "failed" && <span className="form-error">{preview.error_message ?? "Speech generation failed."}</span>}</div>
+      <div className="voice-preview-history-actions">{preview.status === "completed" && preview.download_url && <><audio controls preload="none" src={preview.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={preview.download_url} download={preview.filename ?? "voice-preview.mp3"} aria-label="Download audio" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></>}<button className="icon-button profile-icon-button danger" type="button" aria-label="Delete generated speech" title="Delete generated speech" onClick={() => onDelete(preview)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div>
+    </article>)}</div>}
+  </section>;
+}
+
+function VoicePreviewUsage({ preview }: { preview: VoicePreview }) {
+  if (preview.generated_usage_units === null && preview.account_remaining_units === null) return null;
+  const unit = preview.usage_unit ?? "characters";
+  return <dl className="voice-preview-usage" aria-label="ElevenLabs usage">
+    {preview.generated_usage_units !== null && <div><dt>This generation</dt><dd>{preview.generated_usage_units.toLocaleString()} {unit}</dd></div>}
+    {preview.account_remaining_units !== null && <div><dt>Account remaining</dt><dd>{preview.account_remaining_units.toLocaleString()}{preview.account_limit_units !== null ? ` of ${preview.account_limit_units.toLocaleString()}` : ""} {unit}</dd></div>}
+    {preview.usage_resets_at_unix !== null && <div><dt>Resets</dt><dd><HumanDate value={new Date(preview.usage_resets_at_unix * 1000).toISOString()} /></dd></div>}
+  </dl>;
 }
 
 function voiceProfileConflictDetail(error: Error): VoiceProfileInUseDetail | null {

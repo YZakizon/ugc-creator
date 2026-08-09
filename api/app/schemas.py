@@ -207,12 +207,23 @@ class VoicePreviewRead(BaseModel):
     status: Literal["queued", "generating", "completed", "failed"]
     provider: str
     provider_request_id: str | None
+    generated_usage_units: int | None
+    account_used_units: int | None
+    account_limit_units: int | None
+    account_remaining_units: int | None
+    usage_resets_at_unix: int | None
+    usage_unit: str | None
     content_type: str | None
     filename: str | None
     error_message: str | None
     download_url: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class VoicePreviewList(BaseModel):
+    items: list[VoicePreviewRead]
+    total: int
 
 
 class RenderProfileList(BaseModel):

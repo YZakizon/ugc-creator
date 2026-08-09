@@ -1141,6 +1141,8 @@ Create voice profiles, synthesize speech, measure real duration, and fit target 
 - [x] Map style exaggeration.
 - [x] Support provider-model configuration.
 - [x] Store generated audio via StorageProvider.
+- [x] Persist per-generation ElevenLabs character cost and post-generation account allowance snapshots.
+- [x] Keep generated speech previews in user-managed history until explicit deletion.
 - [ ] Measure duration with ffprobe.
 - [ ] Store effective TTS settings.
 - [x] Add fake TTS provider with deterministic audio fixture.

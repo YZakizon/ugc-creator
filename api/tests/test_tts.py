@@ -12,6 +12,15 @@ from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
 @pytest.mark.asyncio
 async def test_elevenlabs_adapter_maps_voice_settings_and_audio() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/user/subscription":
+            return httpx.Response(
+                200,
+                json={
+                    "character_count": 125,
+                    "character_limit": 10_000,
+                    "next_character_count_reset_unix": 1_800_000_000,
+                },
+            )
         assert request.url.path == "/v1/text-to-speech/voice-123"
         assert request.url.params["output_format"] == "mp3_44100_128"
         assert request.headers["xi-api-key"] == "secret"
@@ -24,7 +33,11 @@ async def test_elevenlabs_adapter_maps_voice_settings_and_audio() -> None:
             "style": 0.5,
             "use_speaker_boost": True,
         }
-        return httpx.Response(200, content=b"ID3audio", headers={"request-id": "req-1"})
+        return httpx.Response(
+            200,
+            content=b"ID3audio",
+            headers={"request-id": "req-1", "character-cost": "5"},
+        )
 
     provider = ElevenLabsTTSProvider(
         api_key="secret", transport=httpx.MockTransport(handler)
@@ -46,6 +59,35 @@ async def test_elevenlabs_adapter_maps_voice_settings_and_audio() -> None:
 
     assert result.audio == b"ID3audio"
     assert result.provider_request_id == "req-1"
+    assert result.usage is not None
+    assert result.usage.generated_units == 5
+    assert result.usage.account_used_units == 125
+    assert result.usage.account_limit_units == 10_000
+    assert result.usage.account_remaining_units == 9_875
+    assert result.usage.resets_at_unix == 1_800_000_000
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_adapter_keeps_audio_when_usage_lookup_fails() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/user/subscription":
+            return httpx.Response(403)
+        return httpx.Response(200, content=b"audio", headers={"character-cost": "12"})
+
+    result = await ElevenLabsTTSProvider(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    ).synthesize(
+        TTSRequest(
+            text="Hello",
+            voice_id="voice-123",
+            model_id="eleven_multilingual_v2",
+        )
+    )
+
+    assert result.audio == b"audio"
+    assert result.usage is not None
+    assert result.usage.generated_units == 12
+    assert result.usage.account_remaining_units is None
 
 
 @pytest.mark.asyncio

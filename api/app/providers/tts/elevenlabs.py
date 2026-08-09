@@ -7,6 +7,7 @@ from app.providers.tts.contracts import (
     TTSProviderOutcomeUnknown,
     TTSRequest,
     TTSResult,
+    TTSUsage,
 )
 
 SUPPORTED_OUTPUT_FORMATS = {
@@ -60,6 +61,11 @@ class ElevenLabsTTSProvider:
                     params={"output_format": request.output_format},
                     headers={"xi-api-key": self.api_key},
                     json=payload,
+                )
+                usage = (
+                    await self._get_usage(client, response)
+                    if not response.is_error
+                    else None
                 )
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             raise TTSProviderError(
@@ -116,4 +122,44 @@ class ElevenLabsTTSProvider:
             content_type=content_type,
             extension=extension,
             provider_request_id=response.headers.get("request-id"),
+            usage=usage,
         )
+
+    async def _get_usage(
+        self, client: httpx.AsyncClient, speech_response: httpx.Response
+    ) -> TTSUsage:
+        generated_units = _optional_int(speech_response.headers.get("character-cost"))
+        try:
+            response = await client.get(
+                "/v1/user/subscription",
+                headers={"xi-api-key": self.api_key or ""},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            used = _optional_int(payload.get("character_count"))
+            limit = _optional_int(payload.get("character_limit"))
+            remaining = (
+                max(limit - used, 0) if used is not None and limit is not None else None
+            )
+            return TTSUsage(
+                generated_units=generated_units,
+                account_used_units=used,
+                account_limit_units=limit,
+                account_remaining_units=remaining,
+                resets_at_unix=_optional_int(
+                    payload.get("next_character_count_reset_unix")
+                ),
+            )
+        except (httpx.HTTPError, ValueError, AttributeError):
+            return TTSUsage(generated_units=generated_units)
+
+
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
