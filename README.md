@@ -48,6 +48,19 @@ Kling.
    ```
 
    The web shell remains available at <http://localhost:3010>.
+   When the development Traefik stack is running, it is also available at
+   <http://ugc.localhost>. The web container joins the shared `traefik-proxy`
+   network; the API remains private and is reached through the web app's
+   same-origin proxy.
+
+   Traefik routing can be adjusted in `.env`:
+
+   ```dotenv
+   TRAEFIK_ENABLE=true
+   TRAEFIK_ENVIRONMENT=dev
+   TRAEFIK_HOST=ugc.localhost
+   TRAEFIK_ENTRYPOINT=web
+   ```
 
 4. For non-Docker development, start the API and web development servers separately:
 
