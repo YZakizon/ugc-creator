@@ -76,6 +76,7 @@ def test_content_task_retries_typed_transient_provider_error(
     monkeypatch.delenv("UGC_FAKE_PROVIDERS", raising=False)
     monkeypatch.setattr(content_tasks, "create_database_engine", object)
     monkeypatch.setattr(content_tasks, "session_factory", lambda _engine: object())
+    monkeypatch.setattr(content_tasks, "content_provider", lambda _factory: object())
     monkeypatch.setattr(
         content_tasks,
         "run_content_generation",

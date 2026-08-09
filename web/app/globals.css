@@ -241,6 +241,16 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .profile-form input, .profile-form select { width: 100%; min-height: 40px; border: 1px solid #e5e5ed; border-radius: 8px; outline: none; padding: 10px 11px; color: #454652; background: #fcfcfe; font-size: 15.6px; }
 .profile-form input:focus, .profile-form select:focus { border-color: #a99bf3; box-shadow: 0 0 0 3px #806be91a; }
 .profile-form button { align-self: end; justify-self: start; white-space: nowrap; }
+.settings-page { display: grid; gap: 18px; }
+.content-prompt-editor { display: grid; min-width: 0; gap: 9px; }
+.content-prompt-editor > label { color: #6d6e7c; font-size: 13px; font-weight: 700; }
+.content-prompt-editor textarea { width: 100%; min-height: 190px; resize: vertical; border: 1px solid #e5e5ed; border-radius: 8px; outline: none; padding: 12px; color: #454652; background: #fff; font: inherit; line-height: 1.5; }
+.content-prompt-editor textarea:focus { border-color: #a99bf3; box-shadow: 0 0 0 3px #806be91a; }
+.content-prompt-variables, .content-prompt-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.content-prompt-variables > span, .content-prompt-footer > span { color: #8e8f9c; font-size: 12px; }
+.content-prompt-variables .button { min-height: 31px; padding: 5px 9px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.content-prompt-footer { justify-content: flex-end; padding-top: 7px; border-top: 1px solid #ecebf2; }
+.content-prompt-footer > span { margin-right: auto; }
 .profile-create-form { align-items: start; }
 .profile-form-section { display: grid; grid-template-columns: minmax(180px, .36fr) minmax(0, 1fr); gap: 24px; padding: 18px; border: 1px solid #e9e8f0; border-radius: 10px; background: #fcfcfe; }
 .profile-form-section-heading { padding-top: 3px; }

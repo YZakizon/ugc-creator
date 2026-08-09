@@ -33,6 +33,11 @@ Kling.
    `localhost` URLs. Docker Compose overrides them with the `postgres`, `redis`,
    `minio`, and `api` service names for container-to-container traffic.
 
+   Keep `UGC_FAKE_PROVIDERS=0` for real OpenAI and ElevenLabs requests. Set it
+   to `1` only for deterministic automated tests or demos that must not call
+   paid providers. The OpenAI content prompt is edited under **Settings** in the
+   application and is stored in PostgreSQL, not in `.env`.
+
 2. Install project dependencies:
 
    ```bash

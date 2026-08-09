@@ -10,6 +10,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
 
+from app.core.content_prompts import (
+    DEFAULT_CONTENT_PROMPT_TEMPLATE,
+    SUPPORTED_CONTENT_PROMPT_PLACEHOLDERS,
+    content_prompt_version,
+)
 from app.core.startup import content_generation_configured
 from app.core.statuses import JobStatus
 from app.core.urls import validate_render_node_url
@@ -37,6 +42,8 @@ from app.schemas import (
     CharacterCreate,
     CharacterList,
     CharacterRead,
+    ContentPromptSettingsRead,
+    ContentPromptSettingsUpdate,
     DashboardSummary,
     JobRead,
     RenderAttemptList,
@@ -75,6 +82,18 @@ from app.workers.render_tasks import submit_render
 from app.workers.tts_tasks import generate_voice_preview
 
 router = APIRouter(prefix="/api/v1")
+
+
+def content_prompt_settings_read(
+    prompt_template: str, prompt_version: str
+) -> ContentPromptSettingsRead:
+    return ContentPromptSettingsRead(
+        provider="openai",
+        prompt_template=prompt_template,
+        prompt_version=prompt_version,
+        default_prompt_template=DEFAULT_CONTENT_PROMPT_TEMPLATE,
+        supported_placeholders=list(SUPPORTED_CONTENT_PROMPT_PLACEHOLDERS),
+    )
 
 
 @router.get("/tts-providers/elevenlabs/usage", response_model=TTSAccountUsageRead)
@@ -170,6 +189,35 @@ def repository(request: Request) -> BatchRepository:
 
 def configuration_repository(request: Request) -> ConfigurationRepository:
     return cast(ConfigurationRepository, request.app.state.configuration_repository)
+
+
+async def content_settings_repository(request: Request) -> ConfigurationRepository:
+    return cast(ConfigurationRepository, request.app.state.configuration_repository)
+
+
+@router.get("/settings/content-generation", response_model=ContentPromptSettingsRead)
+async def get_content_prompt_settings(
+    repo: ConfigurationRepository = Depends(content_settings_repository),
+) -> ContentPromptSettingsRead:
+    setting = repo.get_content_prompt_setting("openai")
+    if setting is None:
+        return content_prompt_settings_read(
+            DEFAULT_CONTENT_PROMPT_TEMPLATE,
+            content_prompt_version(DEFAULT_CONTENT_PROMPT_TEMPLATE),
+        )
+    return content_prompt_settings_read(setting.prompt_template, setting.prompt_version)
+
+
+@router.put("/settings/content-generation", response_model=ContentPromptSettingsRead)
+async def update_content_prompt_settings(
+    payload: ContentPromptSettingsUpdate,
+    repo: ConfigurationRepository = Depends(content_settings_repository),
+) -> ContentPromptSettingsRead:
+    version = content_prompt_version(payload.prompt_template)
+    setting = repo.upsert_content_prompt_setting(
+        "openai", payload.prompt_template, version
+    )
+    return content_prompt_settings_read(setting.prompt_template, setting.prompt_version)
 
 
 def render_repository(request: Request) -> RenderExecutionRepository:

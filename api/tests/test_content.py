@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.content_prompts import DEFAULT_CONTENT_PROMPT_TEMPLATE
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.main import app
@@ -17,9 +18,11 @@ from app.repositories import (
     InMemoryBatchRepository,
     InMemoryConfigurationRepository,
     SqlAlchemyBatchRepository,
+    SqlAlchemyConfigurationRepository,
 )
 from app.schemas import BatchCreate
 from app.services.content_service import run_content_generation
+from app.workers.content_tasks import content_provider
 
 
 def structured_content() -> dict[str, object]:
@@ -45,6 +48,7 @@ async def test_openai_responses_provider_parses_structured_output() -> None:
         assert request.url.path == "/v1/responses"
         payload = json.loads(request.content)
         assert payload["text"]["format"]["type"] == "json_schema"
+        assert "30 seconds" in payload["input"][0]["content"]
         return httpx.Response(
             200,
             json={"output_text": json.dumps(structured_content())},
@@ -62,6 +66,30 @@ async def test_openai_responses_provider_parses_structured_output() -> None:
     assert result.provider == "openai"
     assert result.request_id == "req_test"
     assert result.content.speech_script == "A short script."
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_uses_saved_prompt_text_and_version() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["input"][0]["content"] == "Make it fit 45 seconds."
+        return httpx.Response(
+            200,
+            json={"output_text": json.dumps(structured_content())},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAIResponsesProvider(
+            api_key="test-key",
+            client=client,
+            prompt_template="Make it fit {{TARGET_DURATION_SECONDS}} seconds.",
+            prompt_version="custom-test",
+        )
+        result = await provider.generate_ugc_content(
+            UGCContentRequest(topic="A topic", target_duration_seconds=45)
+        )
+
+    assert result.prompt_version == "custom-test"
 
 
 @pytest.mark.asyncio
@@ -142,6 +170,71 @@ async def test_content_service_persists_fake_provider_result() -> None:
     assert job.status == "content_ready"
     assert job.speech_script
     assert job.llm_provider == "fake"
+
+
+def test_content_worker_loads_persisted_openai_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    SqlAlchemyConfigurationRepository(factory).upsert_content_prompt_setting(
+        "openai", "Saved {{TARGET_DURATION_SECONDS}} prompt.", "custom-saved"
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("UGC_FAKE_PROVIDERS", raising=False)
+
+    provider = content_provider(factory)
+
+    assert isinstance(provider, OpenAIResponsesProvider)
+    assert provider.prompt_template == "Saved {{TARGET_DURATION_SECONDS}} prompt."
+    assert provider.prompt_version == "custom-saved"
+
+
+@pytest.mark.asyncio
+async def test_content_prompt_settings_api_saves_validated_prompt() -> None:
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        initial = await client.get("/api/v1/settings/content-generation")
+        updated = await client.put(
+            "/api/v1/settings/content-generation",
+            json={
+                "prompt_template": (
+                    "Write a calm script lasting {{TARGET_DURATION_SECONDS}} seconds."
+                )
+            },
+        )
+        reread = await client.get("/api/v1/settings/content-generation")
+
+    assert initial.status_code == 200
+    assert initial.json()["prompt_template"] == DEFAULT_CONTENT_PROMPT_TEMPLATE
+    assert updated.status_code == 200
+    assert updated.json()["prompt_version"].startswith("custom-")
+    assert reread.json() == updated.json()
+    assert reread.json()["supported_placeholders"] == ["TARGET_DURATION_SECONDS"]
+
+
+@pytest.mark.asyncio
+async def test_content_prompt_settings_api_rejects_unknown_placeholder() -> None:
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.put(
+            "/api/v1/settings/content-generation",
+            json={"prompt_template": "Write about {{UNKNOWN_VALUE}}."},
+        )
+
+    assert response.status_code == 422
+    assert "Unsupported prompt placeholder" in response.text
 
 
 @pytest.mark.asyncio

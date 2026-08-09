@@ -1734,9 +1734,9 @@ Append decisions here as implementation clarifies unknowns.
   informal model prose.
 - Content is persisted on `TopicJob` before later TTS/render stages, and the
   Celery task receives only the durable job UUID.
-- Prompt text and version can be configured server-side with
-  `OPENAI_PROMPT_TEMPLATE` and `OPENAI_PROMPT_VERSION`; provider calls never
-  run in browser code.
+- Prompt text is edited in Settings, persisted server-side, and loaded by the
+  content worker. Its version is derived from the saved prompt checksum;
+  provider calls never run in browser code.
 
 ## 40.4 ComfyUI workflow execution
 

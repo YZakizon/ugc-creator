@@ -12,6 +12,7 @@ from app.core.statuses import BatchStatus, JobStatus
 from app.db.models import (
     Batch,
     Character,
+    ContentPromptSetting,
     RenderAttempt,
     RenderProfile,
     TopicJob,
@@ -249,6 +250,30 @@ class InMemoryConfigurationRepository:
         self.voice_previews: dict[UUID, VoicePreview] = {}
         self.render_profiles: dict[UUID, RenderProfile] = {}
         self.workflow_templates: dict[UUID, WorkflowTemplate] = {}
+        self.content_prompt_settings: dict[str, ContentPromptSetting] = {}
+
+    def get_content_prompt_setting(self, provider: str) -> ContentPromptSetting | None:
+        return self.content_prompt_settings.get(provider)
+
+    def upsert_content_prompt_setting(
+        self, provider: str, prompt_template: str, prompt_version: str
+    ) -> ContentPromptSetting:
+        now = utc_now()
+        setting = self.content_prompt_settings.get(provider)
+        if setting is None:
+            setting = ContentPromptSetting(
+                provider=provider,
+                prompt_template=prompt_template,
+                prompt_version=prompt_version,
+                created_at=now,
+                updated_at=now,
+            )
+            self.content_prompt_settings[provider] = setting
+        else:
+            setting.prompt_template = prompt_template
+            setting.prompt_version = prompt_version
+            setting.updated_at = now
+        return setting
 
     def create_character(self, payload: CharacterCreate) -> Character:
         now = utc_now()
@@ -651,6 +676,29 @@ class InMemoryConfigurationRepository:
 class SqlAlchemyConfigurationRepository:
     def __init__(self, factory: sessionmaker[Session]) -> None:
         self.factory = factory
+
+    def get_content_prompt_setting(self, provider: str) -> ContentPromptSetting | None:
+        with self.factory() as session:
+            return session.get(ContentPromptSetting, provider)
+
+    def upsert_content_prompt_setting(
+        self, provider: str, prompt_template: str, prompt_version: str
+    ) -> ContentPromptSetting:
+        with self.factory() as session:
+            setting = session.get(ContentPromptSetting, provider)
+            if setting is None:
+                setting = ContentPromptSetting(
+                    provider=provider,
+                    prompt_template=prompt_template,
+                    prompt_version=prompt_version,
+                )
+                session.add(setting)
+            else:
+                setting.prompt_template = prompt_template
+                setting.prompt_version = prompt_version
+            session.commit()
+            session.refresh(setting)
+            return setting
 
     def create_character(self, payload: CharacterCreate) -> Character:
         with self.factory() as session:

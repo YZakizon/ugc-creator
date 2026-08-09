@@ -4,7 +4,25 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.content_prompts import validate_content_prompt_template
 from app.core.statuses import BatchStatus, JobStatus
+
+
+class ContentPromptSettingsUpdate(BaseModel):
+    prompt_template: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("prompt_template")
+    @classmethod
+    def validate_prompt_template(cls, value: str) -> str:
+        return validate_content_prompt_template(value)
+
+
+class ContentPromptSettingsRead(BaseModel):
+    provider: str
+    prompt_template: str
+    prompt_version: str
+    default_prompt_template: str
+    supported_placeholders: list[str]
 
 
 class BatchCreate(BaseModel):
