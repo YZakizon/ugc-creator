@@ -7,7 +7,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.content_prompts import DEFAULT_CONTENT_PROMPT_TEMPLATE
+from app.core.content_prompts import (
+    DEFAULT_CONTENT_PROMPT_TEMPLATE,
+    validate_content_prompt_template,
+)
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.main import app
@@ -235,6 +238,40 @@ async def test_content_prompt_settings_api_rejects_unknown_placeholder() -> None
 
     assert response.status_code == 422
     assert "Unsupported prompt placeholder" in response.text
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    ["{{topic}}", "{{UNKNOWN-VALUE}}"],
+)
+def test_content_prompt_template_rejects_every_unknown_placeholder(
+    placeholder: str,
+) -> None:
+    with pytest.raises(ValueError, match="Unsupported prompt placeholder"):
+        validate_content_prompt_template(f"Write about {placeholder}.")
+
+
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "{{TARGET_DURATION_SECONDS}",
+        "TARGET_DURATION_SECONDS}}",
+        "{{}}",
+        "{{{TARGET_DURATION_SECONDS}}}",
+    ],
+)
+def test_content_prompt_template_rejects_malformed_placeholder(
+    placeholder: str,
+) -> None:
+    with pytest.raises(ValueError, match="Malformed prompt placeholder"):
+        validate_content_prompt_template(f"Write for {placeholder} seconds.")
+
+
+def test_content_prompt_template_normalizes_supported_placeholder_spacing() -> None:
+    assert (
+        validate_content_prompt_template("Write for {{ TARGET_DURATION_SECONDS }}.")
+        == "Write for {{TARGET_DURATION_SECONDS}}."
+    )
 
 
 @pytest.mark.asyncio
