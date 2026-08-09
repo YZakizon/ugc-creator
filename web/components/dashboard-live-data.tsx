@@ -14,6 +14,13 @@ export function failedJobRetryKind(
   return attempt?.status === "failed" && Boolean(job.speech_script) ? "render" : "content";
 }
 
+export function jobFailureMessage(
+  job: Pick<Job, "status" | "error_message">,
+): string | null {
+  if (job.status !== "failed") return null;
+  return job.error_message?.trim() || "This job failed without a detailed error. Retry it or check the worker logs.";
+}
+
 export function renderProgressLabel(
   attempt: Pick<RenderAttempt, "status" | "progress">,
 ): string {
@@ -70,7 +77,7 @@ export function CurrentDate() {
   return <p className="eyebrow">{date || "Today"}</p>;
 }
 
-export function RecentJobs() {
+export function RecentJobs({ contentGenerationReady }: { contentGenerationReady: boolean }) {
   const queryClient = useQueryClient();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-summary"],
@@ -116,19 +123,25 @@ export function RecentJobs() {
       {jobs.map((job) => {
         const attempt = attempts.data?.items.find((item) => item.job_id === job.id);
         const failedRender = failedJobRetryKind(job, attempt) === "render";
+        const failureMessage = jobFailureMessage(job);
         const canRender = job.status === "content_ready" || job.status === "ready_to_render" || failedRender;
         return <div className="job-row" key={job.id}>
           <span className="job-status-dot" />
-          <span><strong>{job.topic}</strong><small>{job.status.replaceAll("_", " ")}</small></span>
+          <span>
+            <strong>{job.topic}</strong>
+            <small>{job.status.replaceAll("_", " ")}</small>
+            {failureMessage && <small className="job-error" role="alert">{failureMessage}</small>}
+          </span>
           <b>{job.target_duration_seconds}s</b>
           {(job.status === "draft" || (job.status === "failed" && !failedRender)) && (
             <button
               className="job-action"
               type="button"
-              disabled={contentMutation.isPending}
+              disabled={contentMutation.isPending || !contentGenerationReady}
+              title={contentGenerationReady ? undefined : "Set OPENAI_API_KEY in the root .env file and restart Docker"}
               onClick={() => contentMutation.mutate(job.id)}
             >
-              {contentMutation.isPending && contentMutation.variables === job.id ? "Queuing…" : "Generate content"}
+              {contentMutation.isPending && contentMutation.variables === job.id ? "Queuing…" : contentGenerationReady ? "Generate content" : "OpenAI setup required"}
             </button>
           )}
           {canRender && (
