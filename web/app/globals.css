@@ -280,6 +280,13 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .eleven-reset { justify-self: end !important; padding: 5px 0; border: 0; color: #565765; background: transparent; font-size: 12px; font-weight: 700; }
 .eleven-reset:hover { color: #5c49c9; transform: none; }
 .voice-preview-section { grid-column: 1 / -1; }
+.speech-preview-tabs { display: flex; gap: 4px; padding: 4px; border: 1px solid #e5e2f2; border-radius: 9px; background: #f8f7fc; }
+.speech-preview-tab { min-height: 34px; padding: 0 15px; border: 0; border-radius: 6px; color: #797887; background: transparent; font-size: 13px; font-weight: 700; }
+.speech-preview-tab:hover { color: #5e49d5; background: #f0edff; }
+.speech-preview-tab.active { color: #5e49d5; background: #fff; box-shadow: 0 1px 4px #35276f18; }
+.speech-preview-tab:focus-visible { outline: 2px solid #6f5bd3; outline-offset: 1px; }
+.speech-preview-panel { display: grid; gap: 12px; padding-top: 4px; }
+.speech-preview-panel[hidden] { display: none; }
 .voice-preview-controls { display: grid; min-width: 0; gap: 10px; }
 .voice-preview-text { display: grid; gap: 7px; color: #535461; font-size: 13px; font-weight: 700; }
 .voice-preview-text textarea { width: 100%; min-height: 125px; resize: vertical; border: 1px solid #e1dfeb; border-radius: 8px; padding: 11px; color: #454652; background: white; font: inherit; line-height: 1.45; }
@@ -298,7 +305,7 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .voice-preview-usage div { padding: 9px 11px; border: 1px solid #e8e5f5; border-radius: 8px; background: #faf9ff; }
 .voice-preview-usage dt { color: #777487; font-size: 12px; }
 .voice-preview-usage dd { margin: 2px 0 0; color: #34313f; font-size: 13px; font-weight: 650; }
-.voice-preview-history { display: grid; width: 100%; gap: 10px; margin-top: 8px; padding-top: 14px; border-top: 1px solid #ebe8f5; }
+.voice-preview-history { display: grid; width: 100%; gap: 10px; }
 .voice-preview-history h4, .voice-preview-history p { margin: 0; }
 .voice-preview-history > div > p, .voice-preview-history > p { margin-top: 3px; color: #777487; font-size: 13px; }
 .voice-preview-history-list { display: grid; gap: 8px; }

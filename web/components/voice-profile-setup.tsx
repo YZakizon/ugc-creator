@@ -95,6 +95,7 @@ export function VoiceProfileSetup() {
   const [pendingPreviewDelete, setPendingPreviewDelete] = useState<VoicePreview | null>(null);
   const [previewText, setPreviewText] = useState("Hello! This is a preview of the selected voice profile.");
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [speechTab, setSpeechTab] = useState<"preview" | "history">("preview");
   const [toast, setToast] = useState<{ message: string; variant: "success" | "danger"; profileLinks?: ResourceReference[] } | null>(null);
 
   const createMutation = useMutation({
@@ -180,6 +181,7 @@ export function VoiceProfileSetup() {
     }
     setExpandedId(profile.id);
     setPreviewId(null);
+    setSpeechTab("preview");
     const values = toForm(profile);
     editFormRef.current = values;
     setEditForm(values);
@@ -210,12 +212,20 @@ export function VoiceProfileSetup() {
           {expandedId === profile.id && <form className="profile-form voice-config-form voice-config-edit" onSubmit={(event) => { event.preventDefault(); updateMutation.mutate({ id: profile.id, values: editFormRef.current }); }}>
             <VoiceFields values={editForm} onChange={updateEditForm} voices={elevenLabsVoicesQuery.data?.items ?? []} voicesLoading={elevenLabsVoicesQuery.isLoading} />
             <section className="profile-form-section voice-preview-section">
-              <div className="profile-form-section-heading"><h3>Generate speech preview</h3><p>Test this saved ElevenLabs voice and download the generated audio.</p></div>
-              <div className="voice-preview-controls">
-                <label className="voice-preview-text">Text<textarea rows={5} maxLength={5000} value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="Enter text to generate speech…" /><small>{previewText.length} / 5000 characters</small></label>
-                <div className="voice-preview-actions"><button className="button button-secondary" type="button" disabled={previewMutation.isPending || !previewText.trim()} onClick={() => previewMutation.mutate({ voiceProfileId: profile.id, text: previewText.trim() }, { onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["voice-previews", profile.id] }) })}>{previewMutation.isPending ? "Queuing…" : "Generate speech"}</button>{previewQuery.data && <span className={`voice-preview-status ${previewQuery.data.status}`}>{previewQuery.data.status.replaceAll("_", " ")}</span>}</div>
-                {previewQuery.data?.status === "completed" && previewQuery.data.download_url && <div className="voice-preview-result"><audio controls preload="metadata" src={previewQuery.data.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={previewQuery.data.download_url} download={previewQuery.data.filename ?? "voice-preview.mp3"} aria-label="Download audio" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><VoicePreviewUsage preview={previewQuery.data} /></div>}
-                {previewQuery.data?.status === "failed" && <p className="form-error" role="alert">{previewQuery.data.error_message ?? "Speech generation failed."}</p>}
+              <div className="speech-preview-tabs" role="tablist" aria-label="Generated speech sections">
+                <button id={`speech-preview-tab-${profile.id}`} className={`speech-preview-tab${speechTab === "preview" ? " active" : ""}`} type="button" role="tab" aria-selected={speechTab === "preview"} aria-controls={`speech-preview-panel-${profile.id}`} onClick={() => setSpeechTab("preview")}>Preview</button>
+                <button id={`speech-history-tab-${profile.id}`} className={`speech-preview-tab${speechTab === "history" ? " active" : ""}`} type="button" role="tab" aria-selected={speechTab === "history"} aria-controls={`speech-history-panel-${profile.id}`} onClick={() => setSpeechTab("history")}>History</button>
+              </div>
+              <div id={`speech-preview-panel-${profile.id}`} className="speech-preview-panel" role="tabpanel" aria-labelledby={`speech-preview-tab-${profile.id}`} hidden={speechTab !== "preview"}>
+                <div className="profile-form-section-heading"><h3>Preview to generate speech</h3><p>Test this saved ElevenLabs voice and download the generated audio.</p></div>
+                <div className="voice-preview-controls">
+                  <label className="voice-preview-text">Text<textarea rows={5} maxLength={5000} value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="Enter text to generate speech…" /><small>{previewText.length} / 5000 characters</small></label>
+                  <div className="voice-preview-actions"><button className="button button-secondary" type="button" disabled={previewMutation.isPending || !previewText.trim()} onClick={() => previewMutation.mutate({ voiceProfileId: profile.id, text: previewText.trim() }, { onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["voice-previews", profile.id] }) })}>{previewMutation.isPending ? "Queuing…" : "Generate speech"}</button>{previewQuery.data && <span className={`voice-preview-status ${previewQuery.data.status}`}>{previewQuery.data.status.replaceAll("_", " ")}</span>}</div>
+                  {previewQuery.data?.status === "completed" && previewQuery.data.download_url && <div className="voice-preview-result"><audio controls preload="metadata" src={previewQuery.data.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={previewQuery.data.download_url} download={previewQuery.data.filename ?? "voice-preview.mp3"} aria-label="Download audio" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><VoicePreviewUsage preview={previewQuery.data} /></div>}
+                  {previewQuery.data?.status === "failed" && <p className="form-error" role="alert">{previewQuery.data.error_message ?? "Speech generation failed."}</p>}
+                </div>
+              </div>
+              <div id={`speech-history-panel-${profile.id}`} className="speech-preview-panel" role="tabpanel" aria-labelledby={`speech-history-tab-${profile.id}`} hidden={speechTab !== "history"}>
                 <VoicePreviewHistory previews={previewsQuery.data?.items ?? []} loading={previewsQuery.isLoading} onDelete={setPendingPreviewDelete} />
               </div>
             </section>

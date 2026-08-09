@@ -122,6 +122,9 @@ describe("voice profile setup", () => {
     render(<Providers><VoiceProfileSetup /></Providers>);
     expect(await screen.findByText("9,875")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Show Hope voice details" }));
+    expect(screen.getByRole("tab", { name: "Preview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "Preview to generate speech" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Generated speech history" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Choose from ElevenLabs My Voices" }));
     expect(await screen.findByRole("dialog", { name: "ElevenLabs My Voices" })).toBeInTheDocument();
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
@@ -145,5 +148,9 @@ describe("voice profile setup", () => {
     expect(screen.getByText("10 characters")).toBeInTheDocument();
     expect(screen.getByText("9,875 of 10,000 characters")).toBeInTheDocument();
     expect(Array.from(document.querySelectorAll("audio")).some((audio) => audio.getAttribute("src") === "/api/v1/voice-previews/preview-1/audio")).toBe(true);
+    fireEvent.click(screen.getByRole("tab", { name: "History" }));
+    expect(screen.getByRole("tab", { name: "History" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("heading", { name: "Generated speech history" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Preview to generate speech" })).not.toBeInTheDocument();
   });
 });
