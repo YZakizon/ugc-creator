@@ -1,13 +1,13 @@
 "use client";
 
-import React, { FormEvent, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
 import { ConfirmDialog, Toast } from "@/components/feedback";
-import { ApiRequestError, createVoicePreview, createVoiceProfile, deleteVoiceProfile, getVoicePreview, getVoiceProfiles, updateVoiceProfile } from "@/lib/api";
-import type { ResourceReference, VoiceProfile, VoiceProfileInUseDetail } from "@/lib/api";
+import { ApiRequestError, createVoicePreview, createVoiceProfile, deleteVoicePreview, deleteVoiceProfile, getElevenLabsUsage, getElevenLabsVoices, getVoicePreview, getVoicePreviews, getVoiceProfiles, updateVoiceProfile } from "@/lib/api";
+import type { ElevenLabsVoice, ResourceReference, TTSAccountUsage, VoicePreview, VoiceProfile, VoiceProfileInUseDetail } from "@/lib/api";
 
 type VoiceForm = {
   profileName: string;
@@ -83,6 +83,8 @@ function voicePayload(form: VoiceForm) {
 export function VoiceProfileSetup() {
   const queryClient = useQueryClient();
   const voicesQuery = useQuery({ queryKey: ["voice-profiles"], queryFn: getVoiceProfiles });
+  const accountUsageQuery = useQuery({ queryKey: ["elevenlabs-usage"], queryFn: getElevenLabsUsage, staleTime: 60_000 });
+  const elevenLabsVoicesQuery = useQuery({ queryKey: ["elevenlabs-voices"], queryFn: getElevenLabsVoices, staleTime: 5 * 60_000 });
   const [activeTab, setActiveTab] = useState<"create" | "list">("list");
   const [form, setForm] = useState<VoiceForm>(emptyVoiceForm);
   const formRef = useRef<VoiceForm>(emptyVoiceForm);
@@ -90,8 +92,10 @@ export function VoiceProfileSetup() {
   const [editForm, setEditForm] = useState<VoiceForm>(emptyVoiceForm);
   const editFormRef = useRef<VoiceForm>(emptyVoiceForm);
   const [pendingDelete, setPendingDelete] = useState<VoiceProfile | null>(null);
+  const [pendingPreviewDelete, setPendingPreviewDelete] = useState<VoicePreview | null>(null);
   const [previewText, setPreviewText] = useState("Hello! This is a preview of the selected voice profile.");
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [speechTab, setSpeechTab] = useState<"preview" | "history">("preview");
   const [toast, setToast] = useState<{ message: string; variant: "success" | "danger"; profileLinks?: ResourceReference[] } | null>(null);
 
   const createMutation = useMutation({
@@ -136,6 +140,27 @@ export function VoiceProfileSetup() {
     enabled: previewId !== null,
     refetchInterval: (query) => ["queued", "generating"].includes(query.state.data?.status ?? "") ? 1500 : false,
   });
+  const previewsQuery = useQuery({
+    queryKey: ["voice-previews", expandedId],
+    queryFn: () => getVoicePreviews(expandedId as string),
+    enabled: expandedId !== null,
+    refetchInterval: (query) => query.state.data?.items.some((item) => ["queued", "generating"].includes(item.status)) ? 1500 : false,
+  });
+  const deletePreviewMutation = useMutation({
+    mutationFn: deleteVoicePreview,
+    onSuccess: (_, deletedId) => {
+      if (previewId === deletedId) setPreviewId(null);
+      void queryClient.invalidateQueries({ queryKey: ["voice-previews", expandedId] });
+      setToast({ message: "Generated speech deleted.", variant: "success" });
+    },
+    onError: (error) => setToast({ message: error.message, variant: "danger" }),
+  });
+
+  useEffect(() => {
+    if (previewQuery.data?.status === "completed") {
+      void queryClient.invalidateQueries({ queryKey: ["elevenlabs-usage"] });
+    }
+  }, [previewQuery.data?.status, queryClient]);
 
   function updateForm(field: keyof VoiceForm, value: string | boolean) {
     const next = { ...formRef.current, [field]: value } as VoiceForm;
@@ -156,12 +181,14 @@ export function VoiceProfileSetup() {
     }
     setExpandedId(profile.id);
     setPreviewId(null);
+    setSpeechTab("preview");
     const values = toForm(profile);
     editFormRef.current = values;
     setEditForm(values);
   }
 
   return <div className="voice-profile-setup">
+    <ElevenLabsBalance usage={accountUsageQuery.data} loading={accountUsageQuery.isLoading} error={accountUsageQuery.isError ? accountUsageQuery.error.message : null} />
     <div className="profile-tabs" role="tablist" aria-label="Voice profile sections">
       <button className={`profile-tab${activeTab === "create" ? " active" : ""}`} type="button" role="tab" aria-selected={activeTab === "create"} onClick={() => setActiveTab("create")}>Create voice profile</button>
       <button className={`profile-tab${activeTab === "list" ? " active" : ""}`} type="button" role="tab" aria-selected={activeTab === "list"} onClick={() => setActiveTab("list")}>Voice profiles</button>
@@ -169,7 +196,7 @@ export function VoiceProfileSetup() {
 
     <div className="profile-tab-panel" role="tabpanel" hidden={activeTab !== "create"}>
       <form className="profile-form voice-config-form" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); createMutation.mutate(voicePayload(formRef.current)); }}>
-        <VoiceFields values={form} onChange={updateForm} />
+        <VoiceFields values={form} onChange={updateForm} voices={elevenLabsVoicesQuery.data?.items ?? []} voicesLoading={elevenLabsVoicesQuery.isLoading} />
         <div className="profile-create-actions"><button className="button button-primary" type="submit" disabled={createMutation.isPending}>{createMutation.isPending ? "Creating…" : "Create voice profile"}</button></div>
       </form>
     </div>
@@ -183,14 +210,23 @@ export function VoiceProfileSetup() {
               <svg className="profile-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>
             </button><button className="icon-button profile-icon-button danger" type="button" aria-label={`Delete ${profile.name}`} title="Delete voice profile" disabled={deleteMutation.isPending} onClick={() => setPendingDelete(profile)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div>
           {expandedId === profile.id && <form className="profile-form voice-config-form voice-config-edit" onSubmit={(event) => { event.preventDefault(); updateMutation.mutate({ id: profile.id, values: editFormRef.current }); }}>
-            <VoiceFields values={editForm} onChange={updateEditForm} />
+            <VoiceFields values={editForm} onChange={updateEditForm} voices={elevenLabsVoicesQuery.data?.items ?? []} voicesLoading={elevenLabsVoicesQuery.isLoading} />
             <section className="profile-form-section voice-preview-section">
-              <div className="profile-form-section-heading"><h3>Generate speech preview</h3><p>Test this saved ElevenLabs voice and download the generated audio.</p></div>
-              <div className="voice-preview-controls">
-                <label className="voice-preview-text">Text<textarea rows={5} maxLength={5000} value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="Enter text to generate speech…" /><small>{previewText.length} / 5000 characters</small></label>
-                <div className="voice-preview-actions"><button className="button button-secondary" type="button" disabled={previewMutation.isPending || !previewText.trim()} onClick={() => previewMutation.mutate({ voiceProfileId: profile.id, text: previewText.trim() })}>{previewMutation.isPending ? "Queuing…" : "Generate speech"}</button>{previewQuery.data && <span className={`voice-preview-status ${previewQuery.data.status}`}>{previewQuery.data.status.replaceAll("_", " ")}</span>}</div>
-                {previewQuery.data?.status === "completed" && previewQuery.data.download_url && <div className="voice-preview-result"><audio controls preload="metadata" src={previewQuery.data.download_url}>Your browser does not support audio playback.</audio><a className="button button-primary" href={previewQuery.data.download_url} download={previewQuery.data.filename ?? "voice-preview.mp3"}>Download audio</a></div>}
-                {previewQuery.data?.status === "failed" && <p className="form-error" role="alert">{previewQuery.data.error_message ?? "Speech generation failed."}</p>}
+              <div className="speech-preview-tabs" role="tablist" aria-label="Generated speech sections">
+                <button id={`speech-preview-tab-${profile.id}`} className={`speech-preview-tab${speechTab === "preview" ? " active" : ""}`} type="button" role="tab" aria-selected={speechTab === "preview"} aria-controls={`speech-preview-panel-${profile.id}`} onClick={() => setSpeechTab("preview")}>Preview</button>
+                <button id={`speech-history-tab-${profile.id}`} className={`speech-preview-tab${speechTab === "history" ? " active" : ""}`} type="button" role="tab" aria-selected={speechTab === "history"} aria-controls={`speech-history-panel-${profile.id}`} onClick={() => setSpeechTab("history")}>History</button>
+              </div>
+              <div id={`speech-preview-panel-${profile.id}`} className="speech-preview-panel" role="tabpanel" aria-labelledby={`speech-preview-tab-${profile.id}`} hidden={speechTab !== "preview"}>
+                <div className="profile-form-section-heading"><h3>Preview to generate speech</h3><p>Test this saved ElevenLabs voice and download the generated audio.</p></div>
+                <div className="voice-preview-controls">
+                  <label className="voice-preview-text">Text<textarea rows={5} maxLength={5000} value={previewText} onChange={(event) => setPreviewText(event.target.value)} placeholder="Enter text to generate speech…" /><small>{previewText.length} / 5000 characters</small></label>
+                  <div className="voice-preview-actions"><button className="button button-secondary" type="button" disabled={previewMutation.isPending || !previewText.trim()} onClick={() => previewMutation.mutate({ voiceProfileId: profile.id, text: previewText.trim() }, { onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["voice-previews", profile.id] }) })}>{previewMutation.isPending ? "Queuing…" : "Generate speech"}</button>{previewQuery.data && <span className={`voice-preview-status ${previewQuery.data.status}`}>{previewQuery.data.status.replaceAll("_", " ")}</span>}</div>
+                  {previewQuery.data?.status === "completed" && previewQuery.data.download_url && <div className="voice-preview-result"><audio controls preload="metadata" src={previewQuery.data.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={previewQuery.data.download_url} download={previewQuery.data.filename ?? "voice-preview.mp3"} aria-label="Download audio" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><VoicePreviewUsage preview={previewQuery.data} /></div>}
+                  {previewQuery.data?.status === "failed" && <p className="form-error" role="alert">{previewQuery.data.error_message ?? "Speech generation failed."}</p>}
+                </div>
+              </div>
+              <div id={`speech-history-panel-${profile.id}`} className="speech-preview-panel" role="tabpanel" aria-labelledby={`speech-history-tab-${profile.id}`} hidden={speechTab !== "history"}>
+                <VoicePreviewHistory previews={previewsQuery.data?.items ?? []} loading={previewsQuery.isLoading} onDelete={setPendingPreviewDelete} />
               </div>
             </section>
             <div className="profile-create-actions"><button className="button button-primary" type="submit" disabled={updateMutation.isPending}>{updateMutation.isPending ? "Saving…" : "Save changes"}</button></div>
@@ -199,8 +235,36 @@ export function VoiceProfileSetup() {
       </div> : <div className="profile-empty compact-profile-empty"><div className="profile-list-icon">◒</div><div><h3>No voice profiles yet</h3><p>Create an ElevenLabs voice configuration, then attach it to a render profile.</p></div></div>}
     </div>
     <ConfirmDialog open={pendingDelete !== null} title="Delete voice profile?" message={pendingDelete ? `“${pendingDelete.name}” will be permanently removed. Deletion is blocked while it is attached to a render profile or character.` : ""} confirmLabel="Delete" onCancel={() => setPendingDelete(null)} onConfirm={() => { if (pendingDelete) deleteMutation.mutate(pendingDelete.id); setPendingDelete(null); }} />
+    <ConfirmDialog open={pendingPreviewDelete !== null} title="Delete generated speech?" message="The saved audio and its usage history will be permanently removed." confirmLabel="Delete" onCancel={() => setPendingPreviewDelete(null)} onConfirm={() => { if (pendingPreviewDelete) deletePreviewMutation.mutate(pendingPreviewDelete.id); setPendingPreviewDelete(null); }} />
     {toast && <Toast message={toast.message} variant={toast.variant} content={toast.profileLinks?.length ? <span className="voice-delete-conflict"><span>{toast.message}</span><span className="toast-profile-links">{toast.profileLinks.map((profile) => <Link key={profile.id} href={`/profiles#profile-${profile.id}`}>Open {profile.name} · {profile.id}</Link>)}</span></span> : undefined} onClose={() => setToast(null)} />}
   </div>;
+}
+
+function ElevenLabsBalance({ usage, loading, error }: { usage: TTSAccountUsage | undefined; loading: boolean; error: string | null }) {
+  return <section className="elevenlabs-balance" aria-labelledby="elevenlabs-balance-title">
+    <div><span className="eleven-provider-mark">E</span><span><strong id="elevenlabs-balance-title">ElevenLabs balance</strong><small>Current account allowance</small></span></div>
+    {loading ? <span>Loading balance…</span> : error ? <span className="form-error">Balance unavailable</span> : !usage?.configured ? <span>API key not configured</span> : <span className="elevenlabs-balance-value"><strong>{usage.remaining_units?.toLocaleString() ?? "—"}</strong><small>{usage.limit_units !== null ? ` of ${usage.limit_units.toLocaleString()} ${usage.unit} remaining` : `${usage.unit} remaining`}</small></span>}
+  </section>;
+}
+
+function VoicePreviewHistory({ previews, loading, onDelete }: { previews: VoicePreview[]; loading: boolean; onDelete: (preview: VoicePreview) => void }) {
+  return <section className="voice-preview-history" aria-labelledby="voice-preview-history-title">
+    <div><h4 id="voice-preview-history-title">Generated speech history</h4><p>Audio remains saved until you delete it.</p></div>
+    {loading ? <p>Loading generated speech…</p> : previews.length === 0 ? <p>No generated speech yet.</p> : <div className="voice-preview-history-list">{previews.map((preview) => <article key={preview.id}>
+      <div className="voice-preview-history-copy"><strong>{preview.text}</strong><small><HumanDate value={preview.created_at} /> · {preview.status.replaceAll("_", " ")}</small>{preview.status === "completed" && <VoicePreviewUsage preview={preview} />}{preview.status === "failed" && <span className="form-error">{preview.error_message ?? "Speech generation failed."}</span>}</div>
+      <div className="voice-preview-history-actions">{preview.status === "completed" && preview.download_url && <><audio controls preload="none" src={preview.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={preview.download_url} download={preview.filename ?? "voice-preview.mp3"} aria-label="Download audio" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></>}<button className="icon-button profile-icon-button danger" type="button" aria-label="Delete generated speech" title={preview.status === "queued" || preview.status === "generating" ? "Wait for speech generation to finish before deleting" : "Delete generated speech"} disabled={preview.status === "queued" || preview.status === "generating"} onClick={() => onDelete(preview)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div>
+    </article>)}</div>}
+  </section>;
+}
+
+function VoicePreviewUsage({ preview }: { preview: VoicePreview }) {
+  if (preview.generated_usage_units === null && preview.account_remaining_units === null) return null;
+  const unit = preview.usage_unit ?? "characters";
+  return <dl className="voice-preview-usage" aria-label="ElevenLabs usage">
+    {preview.generated_usage_units !== null && <div><dt>This generation</dt><dd>{preview.generated_usage_units.toLocaleString()} {unit}</dd></div>}
+    {preview.account_remaining_units !== null && <div><dt>Account remaining</dt><dd>{preview.account_remaining_units.toLocaleString()}{preview.account_limit_units !== null ? ` of ${preview.account_limit_units.toLocaleString()}` : ""} {unit}</dd></div>}
+    {preview.usage_resets_at_unix !== null && <div><dt>Resets</dt><dd><HumanDate value={new Date(preview.usage_resets_at_unix * 1000).toISOString()} /></dd></div>}
+  </dl>;
 }
 
 function voiceProfileConflictDetail(error: Error): VoiceProfileInUseDetail | null {
@@ -211,17 +275,21 @@ function voiceProfileConflictDetail(error: Error): VoiceProfileInUseDetail | nul
     : null;
 }
 
-function VoiceFields({ values, onChange }: { values: VoiceForm; onChange: (field: keyof VoiceForm, value: string | boolean) => void }) {
+function VoiceFields({ values, onChange, voices, voicesLoading }: { values: VoiceForm; onChange: (field: keyof VoiceForm, value: string | boolean) => void; voices: ElevenLabsVoice[]; voicesLoading: boolean }) {
+  const [voicePickerOpen, setVoicePickerOpen] = useState(false);
+  const voiceNameId = useId();
+  const selectedVoice = voices.find((voice) => voice.voice_id === values.voiceId);
   return <>
     <section className="profile-form-section">
       <div className="profile-form-section-heading"><h3>Voice identity</h3><p>Name this reusable configuration and identify the ElevenLabs voice.</p></div>
       <div className="profile-form-fields">
         <label>Voice profile name<input required value={values.profileName} onChange={(event) => onChange("profileName", event.target.value)} placeholder="Elena — Hope" /></label>
         <label>Provider / renderer<div className="eleven-setting-select disabled"><span className="eleven-provider-mark">E</span><strong>ElevenLabs</strong></div></label>
-        <label>Voice name<div className="eleven-setting-input"><span className="eleven-voice-orb" /><input required value={values.voiceName} onChange={(event) => onChange("voiceName", event.target.value)} placeholder="Hope — upbeat and clear" /></div></label>
+        <div className="voice-name-field"><span className="voice-name-heading"><label htmlFor={voiceNameId}>Voice name</label><button className="voice-catalog-button" type="button" aria-label="Choose from ElevenLabs My Voices" title="Choose from ElevenLabs My Voices" onClick={() => setVoicePickerOpen(true)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2m2-5v10m4-13v16m4-13v10m2-5h2" /></svg></button></span><div className="eleven-setting-input"><span className="eleven-voice-orb" /><input id={voiceNameId} required value={values.voiceName} onChange={(event) => onChange("voiceName", event.target.value)} placeholder="Hope — upbeat and clear" />{selectedVoice?.preview_url && <VoiceCatalogPreview voice={selectedVoice} />}</div></div>
         <label>Voice ID<input required value={values.voiceId} onChange={(event) => onChange("voiceId", event.target.value)} placeholder="ElevenLabs voice ID" /></label>
         <label className="profile-field-wide">Model<select value={values.model} onChange={(event) => onChange("model", event.target.value)}><option value="eleven_multilingual_v2">Eleven Multilingual v2</option><option value="eleven_turbo_v2_5">Eleven Turbo v2.5</option><option value="eleven_v3">Eleven v3</option></select></label>
       </div>
+      {voicePickerOpen && <div className="voice-catalog-backdrop" role="presentation" onMouseDown={() => setVoicePickerOpen(false)}><section className="voice-catalog-dialog" role="dialog" aria-modal="true" aria-labelledby="voice-catalog-title" onMouseDown={(event) => event.stopPropagation()}><div className="voice-catalog-heading"><div><h3 id="voice-catalog-title">ElevenLabs My Voices</h3><p>Select a voice to populate its name and ID.</p></div><button className="icon-button" type="button" aria-label="Close My Voices" onClick={() => setVoicePickerOpen(false)}>×</button></div>{voicesLoading ? <p>Loading voices…</p> : voices.length === 0 ? <p>No saved ElevenLabs voices are available.</p> : <div className="voice-catalog-list">{voices.map((voice) => <article key={voice.voice_id}><div><strong>{voice.name}</strong><small>{voice.category ?? "voice"} · {voice.voice_id}</small>{voice.description && <p>{voice.description}</p>}</div><div>{voice.preview_url && <VoiceCatalogPreview voice={voice} />}<button className="button button-primary button-small" type="button" onClick={() => { onChange("voiceName", voice.name); onChange("voiceId", voice.voice_id); setVoicePickerOpen(false); }}>Use voice</button></div></article>)}</div>}</section></div>}
     </section>
     <section className="profile-form-section">
       <div className="profile-form-section-heading"><h3>ElevenLabs parameters</h3><p>Values are normalized and validated before synthesis.</p></div>
@@ -238,6 +306,20 @@ function VoiceFields({ values, onChange }: { values: VoiceForm; onChange: (field
       </div>
     </section>
   </>;
+}
+
+function VoiceCatalogPreview({ voice }: { voice: ElevenLabsVoice }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  function playPreview() {
+    document.querySelectorAll<HTMLAudioElement>("audio[data-voice-catalog-preview]").forEach((audio) => {
+      if (audio !== audioRef.current) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+    });
+    void audioRef.current?.play();
+  }
+  return <><audio ref={audioRef} data-voice-catalog-preview src={voice.preview_url ?? undefined} preload="none" /><button className="voice-preview-icon" type="button" aria-label={`Preview ${voice.name}`} title={`Preview ${voice.name}`} onClick={playPreview}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z" /></svg></button></>;
 }
 
 function VoiceSlider({ label, low, high, min, max, step, value, suffix = "", onChange }: { label: string; low: string; high: string; min: string; max: string; step: string; value: string; suffix?: string; onChange: (value: string) => void }) {

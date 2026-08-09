@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 from pathlib import PurePath
 from typing import cast
 from uuid import UUID, uuid4
@@ -13,6 +14,8 @@ from app.core.statuses import JobStatus
 from app.core.urls import validate_render_node_url
 from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
 from app.providers.storage.local import LocalStorageProvider, StorageError
+from app.providers.tts.contracts import TTSProviderError, TTSUsage
+from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
 from app.render_repository import RenderExecutionRepository
 from app.repositories import (
     BatchRepository,
@@ -45,7 +48,11 @@ from app.schemas import (
     RenderProfileRead,
     RenderProfileSetupCreate,
     RenderProfileUpdate,
+    TTSAccountUsageRead,
+    TTSVoiceList,
+    TTSVoiceRead,
     VoicePreviewCreate,
+    VoicePreviewList,
     VoicePreviewRead,
     VoiceProfileCreate,
     VoiceProfileList,
@@ -67,6 +74,93 @@ from app.workers.render_tasks import submit_render
 from app.workers.tts_tasks import generate_voice_preview
 
 router = APIRouter(prefix="/api/v1")
+
+
+@router.get("/tts-providers/elevenlabs/usage", response_model=TTSAccountUsageRead)
+async def get_elevenlabs_usage(request: Request) -> TTSAccountUsageRead:
+    if os.getenv("UGC_FAKE_PROVIDERS") == "1":
+        usage = TTSUsage(
+            account_used_units=125,
+            account_limit_units=10_000,
+            account_remaining_units=9_875,
+        )
+        configured = True
+    else:
+        provider = ElevenLabsTTSProvider()
+        if not provider.api_key:
+            return TTSAccountUsageRead(
+                provider="elevenlabs",
+                configured=False,
+                used_units=None,
+                limit_units=None,
+                remaining_units=None,
+                resets_at_unix=None,
+                unit="characters",
+            )
+        try:
+            usage = await provider.get_account_usage()
+            configured = True
+        except TTSProviderError:
+            repo = cast(
+                ConfigurationRepository, request.app.state.configuration_repository
+            )
+            latest = repo.get_latest_voice_preview_usage()
+            if latest is None:
+                return TTSAccountUsageRead(
+                    provider="elevenlabs",
+                    configured=True,
+                    used_units=None,
+                    limit_units=None,
+                    remaining_units=None,
+                    resets_at_unix=None,
+                    unit="characters",
+                )
+            usage = TTSUsage(
+                account_used_units=latest.account_used_units,
+                account_limit_units=latest.account_limit_units,
+                account_remaining_units=latest.account_remaining_units,
+                resets_at_unix=latest.usage_resets_at_unix,
+                unit=latest.usage_unit or "characters",
+            )
+            configured = True
+    return TTSAccountUsageRead(
+        provider="elevenlabs",
+        configured=configured,
+        used_units=usage.account_used_units,
+        limit_units=usage.account_limit_units,
+        remaining_units=usage.account_remaining_units,
+        resets_at_unix=usage.resets_at_unix,
+        unit=usage.unit,
+    )
+
+
+@router.get("/tts-providers/elevenlabs/voices", response_model=TTSVoiceList)
+async def get_elevenlabs_voices() -> TTSVoiceList:
+    if os.getenv("UGC_FAKE_PROVIDERS") == "1":
+        items = [
+            TTSVoiceRead(
+                voice_id="fake-voice-hope",
+                name="Hope",
+                category="generated",
+                description="Deterministic fake ElevenLabs voice.",
+                preview_url=None,
+            )
+        ]
+    else:
+        provider = ElevenLabsTTSProvider()
+        if not provider.api_key:
+            return TTSVoiceList(items=[], total=0)
+        try:
+            voices = await provider.list_voices()
+        except TTSProviderError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.category, "message": str(exc)},
+            ) from exc
+        items = [
+            TTSVoiceRead.model_validate(voice, from_attributes=True) for voice in voices
+        ]
+    return TTSVoiceList(items=items, total=len(items))
 
 
 def repository(request: Request) -> BatchRepository:
@@ -425,6 +519,52 @@ def get_voice_preview(
     if preview is None:
         raise HTTPException(status_code=404, detail="Voice preview not found")
     return VoicePreviewRead.model_validate(voice_preview_to_dict(preview))
+
+
+@router.get("/voice-profiles/{profile_id}/previews", response_model=VoicePreviewList)
+def list_voice_previews(
+    profile_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> VoicePreviewList:
+    if repo.get_voice_profile(profile_id) is None:
+        raise HTTPException(status_code=404, detail="Voice profile not found")
+    items, total = repo.list_voice_previews(profile_id)
+    return VoicePreviewList(
+        items=[
+            VoicePreviewRead.model_validate(voice_preview_to_dict(item))
+            for item in items
+        ],
+        total=total,
+    )
+
+
+@router.delete("/voice-previews/{preview_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_voice_preview(
+    preview_id: UUID,
+    repo: ConfigurationRepository = Depends(configuration_repository),
+) -> None:
+    preview = repo.get_voice_preview(preview_id)
+    if preview is None:
+        raise HTTPException(status_code=404, detail="Voice preview not found")
+    if preview.status in {"queued", "generating"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "voice_preview_in_progress",
+                "message": (
+                    "Generated speech cannot be deleted while generation is in "
+                    "progress."
+                ),
+            },
+        )
+    if preview.asset_key:
+        try:
+            LocalStorageProvider().delete(preview.asset_key)
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503, detail="Voice preview audio could not be deleted"
+            ) from exc
+    repo.delete_voice_preview(preview_id)
 
 
 @router.get("/voice-previews/{preview_id}/audio")

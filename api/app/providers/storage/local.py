@@ -33,3 +33,13 @@ class LocalStorageProvider:
             return object_path.read_bytes()
         except OSError as exc:
             raise StorageError("Stored media is unavailable") from exc
+
+    def delete(self, key: str) -> None:
+        object_path = (self.root / key).resolve()
+        root = self.root.resolve()
+        if object_path != root and root not in object_path.parents:
+            raise StorageError("Storage object key escapes the configured media root")
+        try:
+            object_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise StorageError("Stored media could not be deleted") from exc

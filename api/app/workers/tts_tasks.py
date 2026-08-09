@@ -72,6 +72,22 @@ def generate_voice_preview(task: Task, preview_id: str) -> dict[str, str]:
             asset_key=asset_key,
             content_type=result.content_type,
             filename=f"voice-preview-{preview.id}.{result.extension}",
+            generated_usage_units=(
+                result.usage.generated_units if result.usage else None
+            ),
+            account_used_units=(
+                result.usage.account_used_units if result.usage else None
+            ),
+            account_limit_units=(
+                result.usage.account_limit_units if result.usage else None
+            ),
+            account_remaining_units=(
+                result.usage.account_remaining_units if result.usage else None
+            ),
+            usage_resets_at_unix=(
+                result.usage.resets_at_unix if result.usage else None
+            ),
+            usage_unit=result.usage.unit if result.usage else None,
             claim_token=claim_token,
         )
         return {

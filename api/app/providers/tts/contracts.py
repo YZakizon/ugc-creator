@@ -18,6 +18,26 @@ class TTSResult:
     content_type: str
     extension: str
     provider_request_id: str | None = None
+    usage: "TTSUsage | None" = None
+
+
+@dataclass(frozen=True)
+class TTSUsage:
+    generated_units: int | None = None
+    account_used_units: int | None = None
+    account_limit_units: int | None = None
+    account_remaining_units: int | None = None
+    resets_at_unix: int | None = None
+    unit: str = "characters"
+
+
+@dataclass(frozen=True)
+class TTSVoice:
+    voice_id: str
+    name: str
+    category: str | None = None
+    description: str | None = None
+    preview_url: str | None = None
 
 
 class TTSProvider(Protocol):

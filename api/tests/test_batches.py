@@ -285,6 +285,7 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
     queued: list[str] = []
     monkeypatch.setattr("app.api.routes.generate_voice_preview.delay", queued.append)
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
@@ -299,11 +300,16 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
                 "extra_settings": {"output_format": "mp3_44100_128"},
             },
         )
+        account_usage = await client.get("/api/v1/tts-providers/elevenlabs/usage")
+        voices = await client.get("/api/v1/tts-providers/elevenlabs/voices")
         created = await client.post(
             f"/api/v1/voice-profiles/{voice.json()['id']}/previews",
             json={"text": "This is a speech preview."},
         )
         preview = repository.voice_previews[next(iter(repository.voice_previews))]
+        queued_delete = await client.delete(f"/api/v1/voice-previews/{preview.id}")
+        preview.status = "generating"
+        generating_delete = await client.delete(f"/api/v1/voice-previews/{preview.id}")
         preview.status = "completed"
         preview.asset_key = f"voice-previews/{preview.id}/speech.mp3"
         preview.content_type = "audio/mpeg"
@@ -312,14 +318,32 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
         (tmp_path / preview.asset_key).write_bytes(b"ID3preview")
         polled = await client.get(f"/api/v1/voice-previews/{preview.id}")
         audio = await client.get(f"/api/v1/voice-previews/{preview.id}/audio")
+        history = await client.get(
+            f"/api/v1/voice-profiles/{voice.json()['id']}/previews"
+        )
+        deleted = await client.delete(f"/api/v1/voice-previews/{preview.id}")
+        history_after_delete = await client.get(
+            f"/api/v1/voice-profiles/{voice.json()['id']}/previews"
+        )
 
     assert created.status_code == 202
+    assert account_usage.json()["remaining_units"] == 9_875
+    assert voices.json()["items"][0]["voice_id"] == "fake-voice-hope"
     assert created.json()["status"] == "queued"
     assert queued == [created.json()["id"]]
+    assert queued_delete.status_code == 409
+    assert queued_delete.json()["detail"]["code"] == "voice_preview_in_progress"
+    assert generating_delete.status_code == 409
+    assert generating_delete.json()["detail"]["code"] == "voice_preview_in_progress"
     assert polled.json()["download_url"].endswith(f"/{preview.id}/audio")
     assert audio.status_code == 200
     assert audio.content == b"ID3preview"
     assert audio.headers["content-type"] == "audio/mpeg"
+    assert history.status_code == 200
+    assert [item["id"] for item in history.json()["items"]] == [str(preview.id)]
+    assert deleted.status_code == 204
+    assert history_after_delete.json() == {"items": [], "total": 0}
+    assert not (tmp_path / preview.asset_key).exists()
 
 
 @pytest.mark.asyncio

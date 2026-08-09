@@ -386,6 +386,30 @@ class InMemoryConfigurationRepository:
     def get_voice_preview(self, preview_id: UUID) -> VoicePreview | None:
         return self.voice_previews.get(preview_id)
 
+    def list_voice_previews(self, profile_id: UUID) -> tuple[list[VoicePreview], int]:
+        items = sorted(
+            (
+                preview
+                for preview in self.voice_previews.values()
+                if preview.voice_profile_id == profile_id
+            ),
+            key=lambda preview: preview.created_at,
+            reverse=True,
+        )
+        return items, len(items)
+
+    def delete_voice_preview(self, preview_id: UUID) -> tuple[bool, str | None]:
+        preview = self.voice_previews.pop(preview_id, None)
+        return (preview is not None, preview.asset_key if preview else None)
+
+    def get_latest_voice_preview_usage(self) -> VoicePreview | None:
+        previews = [
+            preview
+            for preview in self.voice_previews.values()
+            if preview.account_remaining_units is not None
+        ]
+        return max(previews, key=lambda preview: preview.updated_at, default=None)
+
     def create_render_profile(self, payload: RenderProfileCreate) -> RenderProfile:
         now = utc_now()
         if payload.character_id not in self.characters:
@@ -854,6 +878,36 @@ class SqlAlchemyConfigurationRepository:
                 raise LookupError("Voice preview not found")
             return current.status, 0
 
+    def list_voice_previews(self, profile_id: UUID) -> tuple[list[VoicePreview], int]:
+        with self.factory() as session:
+            items = list(
+                session.scalars(
+                    select(VoicePreview)
+                    .where(VoicePreview.voice_profile_id == profile_id)
+                    .order_by(VoicePreview.created_at.desc())
+                ).all()
+            )
+            return items, len(items)
+
+    def delete_voice_preview(self, preview_id: UUID) -> tuple[bool, str | None]:
+        with self.factory() as session:
+            preview = session.get(VoicePreview, preview_id)
+            if preview is None:
+                return False, None
+            asset_key = preview.asset_key
+            session.delete(preview)
+            session.commit()
+            return True, asset_key
+
+    def get_latest_voice_preview_usage(self) -> VoicePreview | None:
+        with self.factory() as session:
+            return session.scalar(
+                select(VoicePreview)
+                .where(VoicePreview.account_remaining_units.is_not(None))
+                .order_by(VoicePreview.updated_at.desc())
+                .limit(1)
+            )
+
     def update_voice_preview(
         self,
         preview_id: UUID,
@@ -864,6 +918,12 @@ class SqlAlchemyConfigurationRepository:
         content_type: str | None = None,
         filename: str | None = None,
         error_message: str | None = None,
+        generated_usage_units: int | None = None,
+        account_used_units: int | None = None,
+        account_limit_units: int | None = None,
+        account_remaining_units: int | None = None,
+        usage_resets_at_unix: int | None = None,
+        usage_unit: str | None = None,
         claim_token: UUID,
     ) -> VoicePreview | None:
         with self.factory() as session:
@@ -882,6 +942,12 @@ class SqlAlchemyConfigurationRepository:
                         content_type=content_type,
                         filename=filename,
                         error_message=error_message,
+                        generated_usage_units=generated_usage_units,
+                        account_used_units=account_used_units,
+                        account_limit_units=account_limit_units,
+                        account_remaining_units=account_remaining_units,
+                        usage_resets_at_unix=usage_resets_at_unix,
+                        usage_unit=usage_unit,
                         claim_token=None,
                         claim_expires_at=None,
                         updated_at=utc_now(),
@@ -1277,6 +1343,12 @@ def voice_preview_to_dict(preview: VoicePreview) -> dict[str, object]:
         "status": preview.status,
         "provider": preview.provider,
         "provider_request_id": preview.provider_request_id,
+        "generated_usage_units": preview.generated_usage_units,
+        "account_used_units": preview.account_used_units,
+        "account_limit_units": preview.account_limit_units,
+        "account_remaining_units": preview.account_remaining_units,
+        "usage_resets_at_unix": preview.usage_resets_at_unix,
+        "usage_unit": preview.usage_unit,
         "content_type": preview.content_type,
         "filename": preview.filename,
         "error_message": preview.error_message,

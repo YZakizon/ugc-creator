@@ -21,6 +21,87 @@ test.describe("workspace customer journeys", () => {
     await expect(page.getByRole("heading", { name: "Good morning, Your Name" })).toBeVisible();
   });
 
+  test("switches between generated speech preview and history", async ({ page }) => {
+    const profileName = `Playwright voice ${Date.now()}`;
+    const createResponse = await page.request.post("/api/v1/voice-profiles", {
+      data: {
+        name: profileName,
+        provider: "elevenlabs",
+        provider_voice_id: "playwright-voice-id",
+        provider_model: "eleven_multilingual_v2",
+        speed: 1,
+        stability: 0.5,
+        similarity: 0.75,
+        style_exaggeration: 0.5,
+        extra_settings: { voice_name: "Playwright Voice" },
+      },
+    });
+    expect(createResponse.status()).toBe(201);
+
+    await page.route("**/api/v1/voice-profiles/*/previews", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [{
+            id: "playwright-preview",
+            voice_profile_id: "playwright-profile",
+            text: "Playwright generated speech history check",
+            status: "completed",
+            provider: "elevenlabs",
+            provider_request_id: "fake-request",
+            generated_usage_units: 42,
+            account_used_units: 100,
+            account_limit_units: 10000,
+            account_remaining_units: 9900,
+            usage_resets_at_unix: null,
+            usage_unit: "characters",
+            content_type: "audio/mpeg",
+            filename: "preview.mp3",
+            error_message: null,
+            download_url: "/api/v1/voice-previews/playwright-preview/audio",
+            created_at: "2026-08-09T07:00:00Z",
+            updated_at: "2026-08-09T07:00:01Z",
+          }],
+          total: 1,
+        }),
+      });
+    });
+
+    await page.goto("/voice-profiles");
+    await page.getByRole("button", { name: `Show ${profileName} details` }).click();
+
+    const tabList = page.getByRole("tablist", { name: "Generated speech sections" });
+    const previewTab = page.getByRole("tab", { name: "Preview" });
+    const historyTab = page.getByRole("tab", { name: "History" });
+    const previewPanel = page.getByRole("tabpanel", { name: "Preview" });
+
+    await expect(previewTab).toHaveAttribute("aria-selected", "true");
+    await expect(previewPanel.getByRole("heading", { name: "Preview to generate speech" })).toBeVisible();
+    const tabBox = await tabList.boundingBox();
+    const panelBox = await previewPanel.boundingBox();
+    expect(tabBox).not.toBeNull();
+    expect(panelBox).not.toBeNull();
+    expect((panelBox?.y ?? 0) > (tabBox?.y ?? 0) + (tabBox?.height ?? 0)).toBe(true);
+    expect(Math.abs((panelBox?.width ?? 0) - (tabBox?.width ?? 0))).toBeLessThan(2);
+
+    await historyTab.click();
+    await expect(historyTab).toHaveAttribute("aria-selected", "true");
+    const historyPanel = page.getByRole("tabpanel", { name: "History" });
+    await expect(historyPanel.getByRole("heading", { name: "Generated speech history" })).toBeVisible();
+    await expect(previewPanel).toBeHidden();
+    const downloadBox = await historyPanel.getByRole("link", { name: "Download audio" }).boundingBox();
+    const deleteBox = await historyPanel.getByRole("button", { name: "Delete generated speech" }).boundingBox();
+    expect(downloadBox).not.toBeNull();
+    expect(deleteBox).not.toBeNull();
+    expect(downloadBox?.width).toBe(deleteBox?.width);
+    expect(downloadBox?.height).toBe(deleteBox?.height);
+  });
+
   test("imports a workflow, creates a profile, and creates a multi-topic batch", async ({ page }) => {
     test.setTimeout(90_000);
     await page.getByRole("link", { name: "Workflows" }).click();

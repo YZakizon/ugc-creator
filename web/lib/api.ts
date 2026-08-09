@@ -76,12 +76,36 @@ export type VoicePreview = {
   status: "queued" | "generating" | "completed" | "failed";
   provider: string;
   provider_request_id: string | null;
+  generated_usage_units: number | null;
+  account_used_units: number | null;
+  account_limit_units: number | null;
+  account_remaining_units: number | null;
+  usage_resets_at_unix: number | null;
+  usage_unit: string | null;
   content_type: string | null;
   filename: string | null;
   error_message: string | null;
   download_url: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TTSAccountUsage = {
+  provider: "elevenlabs";
+  configured: boolean;
+  used_units: number | null;
+  limit_units: number | null;
+  remaining_units: number | null;
+  resets_at_unix: number | null;
+  unit: string;
+};
+
+export type ElevenLabsVoice = {
+  voice_id: string;
+  name: string;
+  category: string | null;
+  description: string | null;
+  preview_url: string | null;
 };
 
 export type Character = {
@@ -283,6 +307,22 @@ export function createVoicePreview(input: { voiceProfileId: string; text: string
 
 export function getVoicePreview(previewId: string): Promise<VoicePreview> {
   return request<VoicePreview>(`/api/v1/voice-previews/${previewId}`);
+}
+
+export function getVoicePreviews(voiceProfileId: string): Promise<{ items: VoicePreview[]; total: number }> {
+  return request<{ items: VoicePreview[]; total: number }>(`/api/v1/voice-profiles/${voiceProfileId}/previews`);
+}
+
+export function deleteVoicePreview(previewId: string): Promise<void> {
+  return request<void>(`/api/v1/voice-previews/${previewId}`, { method: "DELETE" });
+}
+
+export function getElevenLabsUsage(): Promise<TTSAccountUsage> {
+  return request<TTSAccountUsage>("/api/v1/tts-providers/elevenlabs/usage");
+}
+
+export function getElevenLabsVoices(): Promise<{ items: ElevenLabsVoice[]; total: number }> {
+  return request<{ items: ElevenLabsVoice[]; total: number }>("/api/v1/tts-providers/elevenlabs/voices");
 }
 
 export function createCharacter(input: {
