@@ -161,6 +161,14 @@ export type RenderNode = {
   updated_at: string;
 };
 
+export type ContentPromptSettings = {
+  provider: "openai";
+  prompt_template: string;
+  prompt_version: string;
+  default_prompt_template: string;
+  supported_placeholders: string[];
+};
+
 export type MediaAsset = {
   id: string;
   job_id: string;
@@ -444,6 +452,17 @@ export function uploadWorkflowMedia(input: {
 
 export function getRenderNodes(): Promise<{ items: RenderNode[]; total: number }> {
   return request<{ items: RenderNode[]; total: number }>("/api/v1/render-nodes");
+}
+
+export function getContentPromptSettings(): Promise<ContentPromptSettings> {
+  return request<ContentPromptSettings>("/api/v1/settings/content-generation");
+}
+
+export function updateContentPromptSettings(promptTemplate: string): Promise<ContentPromptSettings> {
+  return request<ContentPromptSettings>("/api/v1/settings/content-generation", {
+    method: "PUT",
+    body: JSON.stringify({ prompt_template: promptTemplate }),
+  });
 }
 
 export function createRenderNode(input: { name: string; base_url: string; is_active: boolean }): Promise<RenderNode> {

@@ -4,6 +4,11 @@ from typing import Any
 
 import httpx
 
+from app.core.content_prompts import (
+    DEFAULT_CONTENT_PROMPT_TEMPLATE,
+    content_prompt_version,
+    validate_content_prompt_template,
+)
 from app.providers.llm.contracts import (
     LLMProvider,
     LLMProviderError,
@@ -44,11 +49,7 @@ UGC_CONTENT_SCHEMA: dict[str, Any] = {
 
 
 class OpenAIResponsesProvider(LLMProvider):
-    default_prompt_template = (
-        "You write conversational UGC scripts. Return content for Instagram and "
-        "TikTok. Keep the speech natural and target about "
-        "{{TARGET_DURATION_SECONDS}} seconds."
-    )
+    default_prompt_template = DEFAULT_CONTENT_PROMPT_TEMPLATE
 
     def __init__(
         self,
@@ -61,13 +62,11 @@ class OpenAIResponsesProvider(LLMProvider):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.model = model or os.getenv("OPENAI_MODEL") or "gpt-5.6"
         self.client = client
-        self.prompt_template = (
-            prompt_template
-            or os.getenv("OPENAI_PROMPT_TEMPLATE")
-            or self.default_prompt_template
+        self.prompt_template = validate_content_prompt_template(
+            prompt_template or self.default_prompt_template
         )
-        self.prompt_version = (
-            prompt_version or os.getenv("OPENAI_PROMPT_VERSION") or "ugc-v1"
+        self.prompt_version = prompt_version or content_prompt_version(
+            self.prompt_template
         )
 
     async def generate_ugc_content(

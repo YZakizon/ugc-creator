@@ -181,6 +181,14 @@ class RenderNode(TimestampMixin, Base):
     health_checked_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
 
+class ContentPromptSetting(TimestampMixin, Base):
+    __tablename__ = "content_prompt_settings"
+
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    prompt_template: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 class RenderAttempt(TimestampMixin, Base):
     __tablename__ = "render_attempts"
     __table_args__ = (
