@@ -90,6 +90,24 @@ export type VoicePreview = {
   updated_at: string;
 };
 
+export type TTSAccountUsage = {
+  provider: "elevenlabs";
+  configured: boolean;
+  used_units: number | null;
+  limit_units: number | null;
+  remaining_units: number | null;
+  resets_at_unix: number | null;
+  unit: string;
+};
+
+export type ElevenLabsVoice = {
+  voice_id: string;
+  name: string;
+  category: string | null;
+  description: string | null;
+  preview_url: string | null;
+};
+
 export type Character = {
   id: string;
   name: string;
@@ -297,6 +315,14 @@ export function getVoicePreviews(voiceProfileId: string): Promise<{ items: Voice
 
 export function deleteVoicePreview(previewId: string): Promise<void> {
   return request<void>(`/api/v1/voice-previews/${previewId}`, { method: "DELETE" });
+}
+
+export function getElevenLabsUsage(): Promise<TTSAccountUsage> {
+  return request<TTSAccountUsage>("/api/v1/tts-providers/elevenlabs/usage");
+}
+
+export function getElevenLabsVoices(): Promise<{ items: ElevenLabsVoice[]; total: number }> {
+  return request<{ items: ElevenLabsVoice[]; total: number }>("/api/v1/tts-providers/elevenlabs/voices");
 }
 
 export function createCharacter(input: {

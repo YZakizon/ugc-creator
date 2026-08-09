@@ -91,6 +91,57 @@ async def test_elevenlabs_adapter_keeps_audio_when_usage_lookup_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_elevenlabs_adapter_gets_account_balance() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/user/subscription"
+        return httpx.Response(
+            200,
+            json={
+                "character_count": 2_500,
+                "character_limit": 10_000,
+                "next_character_count_reset_unix": 1_800_000_000,
+            },
+        )
+
+    usage = await ElevenLabsTTSProvider(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    ).get_account_usage()
+
+    assert usage.account_used_units == 2_500
+    assert usage.account_limit_units == 10_000
+    assert usage.account_remaining_units == 7_500
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_adapter_lists_saved_voices_with_previews() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/voices"
+        assert request.url.params["voice_type"] == "saved"
+        return httpx.Response(
+            200,
+            json={
+                "voices": [
+                    {
+                        "voice_id": "voice-hope",
+                        "name": "Hope",
+                        "category": "generated",
+                        "description": "Warm and clear",
+                        "preview_url": "https://example.test/hope.mp3",
+                    }
+                ]
+            },
+        )
+
+    voices = await ElevenLabsTTSProvider(
+        api_key="secret", transport=httpx.MockTransport(handler)
+    ).list_voices()
+
+    assert len(voices) == 1
+    assert voices[0].voice_id == "voice-hope"
+    assert voices[0].preview_url == "https://example.test/hope.mp3"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status_code", "expected_category", "expected_retriable"),
     [

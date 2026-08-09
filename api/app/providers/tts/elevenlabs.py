@@ -8,6 +8,7 @@ from app.providers.tts.contracts import (
     TTSRequest,
     TTSResult,
     TTSUsage,
+    TTSVoice,
 )
 
 SUPPORTED_OUTPUT_FORMATS = {
@@ -135,23 +136,125 @@ class ElevenLabsTTSProvider:
                 headers={"xi-api-key": self.api_key or ""},
             )
             response.raise_for_status()
-            payload = response.json()
-            used = _optional_int(payload.get("character_count"))
-            limit = _optional_int(payload.get("character_limit"))
-            remaining = (
-                max(limit - used, 0) if used is not None and limit is not None else None
-            )
-            return TTSUsage(
-                generated_units=generated_units,
-                account_used_units=used,
-                account_limit_units=limit,
-                account_remaining_units=remaining,
-                resets_at_unix=_optional_int(
-                    payload.get("next_character_count_reset_unix")
-                ),
-            )
+            return _usage_from_subscription(response.json(), generated_units)
         except (httpx.HTTPError, ValueError, AttributeError):
             return TTSUsage(generated_units=generated_units)
+
+    async def get_account_usage(self) -> TTSUsage:
+        if not self.api_key:
+            raise TTSProviderError(
+                "ElevenLabs is not configured. Set ELEVENLABS_API_KEY on the server.",
+                category="provider_auth_error",
+                retriable=False,
+            )
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=httpx.Timeout(20),
+                transport=self.transport,
+            ) as client:
+                response = await client.get(
+                    "/v1/user/subscription",
+                    headers={"xi-api-key": self.api_key},
+                )
+            response.raise_for_status()
+            return _usage_from_subscription(response.json())
+        except httpx.TimeoutException as exc:
+            raise TTSProviderError(
+                "ElevenLabs account usage timed out.",
+                category="provider_timeout",
+                retriable=True,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise TTSProviderError(
+                "ElevenLabs account usage is unavailable.",
+                category="provider_unavailable",
+                retriable=True,
+            ) from exc
+        except (ValueError, AttributeError) as exc:
+            raise TTSProviderError(
+                "ElevenLabs returned malformed account usage.",
+                category="provider_rejected",
+                retriable=False,
+            ) from exc
+
+    async def list_voices(self) -> list[TTSVoice]:
+        if not self.api_key:
+            raise TTSProviderError(
+                "ElevenLabs is not configured. Set ELEVENLABS_API_KEY on the server.",
+                category="provider_auth_error",
+                retriable=False,
+            )
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=httpx.Timeout(20),
+                transport=self.transport,
+            ) as client:
+                response = await client.get(
+                    "/v2/voices",
+                    params={"page_size": 100, "voice_type": "saved"},
+                    headers={"xi-api-key": self.api_key},
+                )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(
+                payload.get("voices"), list
+            ):
+                raise ValueError("Voices response must contain a list")
+            voices: list[TTSVoice] = []
+            for item in payload["voices"]:
+                if not isinstance(item, dict):
+                    continue
+                voice_id = item.get("voice_id")
+                name = item.get("name")
+                if not isinstance(voice_id, str) or not isinstance(name, str):
+                    continue
+                voices.append(
+                    TTSVoice(
+                        voice_id=voice_id,
+                        name=name,
+                        category=item.get("category")
+                        if isinstance(item.get("category"), str)
+                        else None,
+                        description=item.get("description")
+                        if isinstance(item.get("description"), str)
+                        else None,
+                        preview_url=item.get("preview_url")
+                        if isinstance(item.get("preview_url"), str)
+                        else None,
+                    )
+                )
+            return voices
+        except httpx.HTTPError as exc:
+            raise TTSProviderError(
+                "ElevenLabs voices are unavailable.",
+                category="provider_unavailable",
+                retriable=True,
+            ) from exc
+        except (ValueError, AttributeError) as exc:
+            raise TTSProviderError(
+                "ElevenLabs returned malformed voices.",
+                category="provider_rejected",
+                retriable=False,
+            ) from exc
+
+
+def _usage_from_subscription(
+    payload: object, generated_units: int | None = None
+) -> TTSUsage:
+    if not isinstance(payload, dict):
+        raise ValueError("Subscription response must be an object")
+    used = _optional_int(payload.get("character_count"))
+    limit = _optional_int(payload.get("character_limit"))
+    remaining = max(limit - used, 0) if used is not None and limit is not None else None
+    return TTSUsage(
+        generated_units=generated_units,
+        account_used_units=used,
+        account_limit_units=limit,
+        account_remaining_units=remaining,
+        resets_at_unix=_optional_int(payload.get("next_character_count_reset_unix")),
+    )
 
 
 def _optional_int(value: object) -> int | None:

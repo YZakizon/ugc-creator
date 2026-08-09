@@ -31,6 +31,15 @@ class TTSUsage:
     unit: str = "characters"
 
 
+@dataclass(frozen=True)
+class TTSVoice:
+    voice_id: str
+    name: str
+    category: str | None = None
+    description: str | None = None
+    preview_url: str | None = None
+
+
 class TTSProvider(Protocol):
     async def synthesize(self, request: TTSRequest) -> TTSResult: ...
 

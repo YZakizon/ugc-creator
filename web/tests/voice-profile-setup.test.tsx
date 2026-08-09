@@ -95,6 +95,12 @@ describe("voice profile setup", () => {
   it("queues speech generation and exposes playback and download", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
+      if (url.includes("tts-providers/elevenlabs/usage")) {
+        return new Response(JSON.stringify({ provider: "elevenlabs", configured: true, used_units: 125, limit_units: 10000, remaining_units: 9875, resets_at_unix: null, unit: "characters" }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("tts-providers/elevenlabs/voices")) {
+        return new Response(JSON.stringify({ items: [{ voice_id: "voice-catalog-1", name: "Catalog Hope", category: "generated", description: "Warm and clear", preview_url: "https://example.test/hope.mp3" }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (init?.method === "POST" && url.includes("/previews")) {
         return new Response(JSON.stringify({
           id: "preview-1", voice_profile_id: "voice-1", text: "Preview me", status: "queued", provider: "elevenlabs", provider_request_id: null, content_type: null, filename: null, error_message: null, download_url: null, created_at: "2026-08-07T12:00:00Z", updated_at: "2026-08-07T12:00:00Z",
@@ -114,7 +120,14 @@ describe("voice profile setup", () => {
     });
 
     render(<Providers><VoiceProfileSetup /></Providers>);
+    expect(await screen.findByText("9,875")).toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Show Hope voice details" }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose from ElevenLabs My Voices" }));
+    expect(await screen.findByRole("dialog", { name: "ElevenLabs My Voices" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preview Catalog Hope" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use voice" }));
+    expect(screen.getAllByLabelText("Voice name")[1]).toHaveValue("Catalog Hope");
+    expect(screen.getAllByLabelText("Voice ID")[1]).toHaveValue("voice-catalog-1");
     const previewText = await screen.findByPlaceholderText("Enter text to generate speech…");
     const generateButton = screen.getByRole("button", { name: "Generate speech" });
     expect(previewText.compareDocumentPosition(generateButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -126,6 +139,6 @@ describe("voice profile setup", () => {
     expect(download).toHaveTextContent("");
     expect(screen.getByText("10 characters")).toBeInTheDocument();
     expect(screen.getByText("9,875 of 10,000 characters")).toBeInTheDocument();
-    expect(document.querySelector("audio")).toHaveAttribute("src", "/api/v1/voice-previews/preview-1/audio");
+    expect(Array.from(document.querySelectorAll("audio")).some((audio) => audio.getAttribute("src") === "/api/v1/voice-previews/preview-1/audio")).toBe(true);
   });
 });

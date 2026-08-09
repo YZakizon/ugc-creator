@@ -285,6 +285,7 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
     queued: list[str] = []
     monkeypatch.setattr("app.api.routes.generate_voice_preview.delay", queued.append)
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
@@ -299,6 +300,8 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
                 "extra_settings": {"output_format": "mp3_44100_128"},
             },
         )
+        account_usage = await client.get("/api/v1/tts-providers/elevenlabs/usage")
+        voices = await client.get("/api/v1/tts-providers/elevenlabs/voices")
         created = await client.post(
             f"/api/v1/voice-profiles/{voice.json()['id']}/previews",
             json={"text": "This is a speech preview."},
@@ -321,6 +324,8 @@ async def test_voice_preview_is_queued_polled_and_downloaded(
         )
 
     assert created.status_code == 202
+    assert account_usage.json()["remaining_units"] == 9_875
+    assert voices.json()["items"][0]["voice_id"] == "fake-voice-hope"
     assert created.json()["status"] == "queued"
     assert queued == [created.json()["id"]]
     assert polled.json()["download_url"].endswith(f"/{preview.id}/audio")

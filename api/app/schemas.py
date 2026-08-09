@@ -226,6 +226,29 @@ class VoicePreviewList(BaseModel):
     total: int
 
 
+class TTSAccountUsageRead(BaseModel):
+    provider: str
+    configured: bool
+    used_units: int | None
+    limit_units: int | None
+    remaining_units: int | None
+    resets_at_unix: int | None
+    unit: str
+
+
+class TTSVoiceRead(BaseModel):
+    voice_id: str
+    name: str
+    category: str | None
+    description: str | None
+    preview_url: str | None
+
+
+class TTSVoiceList(BaseModel):
+    items: list[TTSVoiceRead]
+    total: int
+
+
 class RenderProfileList(BaseModel):
     items: list[RenderProfileRead]
     total: int
