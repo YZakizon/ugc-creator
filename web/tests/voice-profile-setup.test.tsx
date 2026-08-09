@@ -99,7 +99,7 @@ describe("voice profile setup", () => {
         return new Response(JSON.stringify({ provider: "elevenlabs", configured: true, used_units: 125, limit_units: 10000, remaining_units: 9875, resets_at_unix: null, unit: "characters" }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("tts-providers/elevenlabs/voices")) {
-        return new Response(JSON.stringify({ items: [{ voice_id: "voice-catalog-1", name: "Catalog Hope", category: "generated", description: "Warm and clear", preview_url: "https://example.test/hope.mp3" }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ voice_id: "voice-catalog-1", name: "Catalog Hope", category: "generated", description: "Warm and clear", preview_url: "https://example.test/hope.mp3" }, { voice_id: "voice-catalog-2", name: "Catalog Joy", category: "cloned", description: "Bright and lively", preview_url: "https://example.test/joy.mp3" }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (init?.method === "POST" && url.includes("/previews")) {
         return new Response(JSON.stringify({
@@ -124,8 +124,13 @@ describe("voice profile setup", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Show Hope voice details" }));
     fireEvent.click(screen.getByRole("button", { name: "Choose from ElevenLabs My Voices" }));
     expect(await screen.findByRole("dialog", { name: "ElevenLabs My Voices" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preview Catalog Hope" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Use voice" }));
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Preview Catalog Hope" }));
+    fireEvent.click(screen.getByRole("button", { name: "Preview Catalog Joy" }));
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(pause).toHaveBeenCalled();
+    fireEvent.click(screen.getAllByRole("button", { name: "Use voice" })[0]);
     expect(screen.getAllByLabelText("Voice name")[1]).toHaveValue("Catalog Hope");
     expect(screen.getAllByLabelText("Voice ID")[1]).toHaveValue("voice-catalog-1");
     const previewText = await screen.findByPlaceholderText("Enter text to generate speech…");

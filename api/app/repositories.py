@@ -402,6 +402,14 @@ class InMemoryConfigurationRepository:
         preview = self.voice_previews.pop(preview_id, None)
         return (preview is not None, preview.asset_key if preview else None)
 
+    def get_latest_voice_preview_usage(self) -> VoicePreview | None:
+        previews = [
+            preview
+            for preview in self.voice_previews.values()
+            if preview.account_remaining_units is not None
+        ]
+        return max(previews, key=lambda preview: preview.updated_at, default=None)
+
     def create_render_profile(self, payload: RenderProfileCreate) -> RenderProfile:
         now = utc_now()
         if payload.character_id not in self.characters:
@@ -890,6 +898,15 @@ class SqlAlchemyConfigurationRepository:
             session.delete(preview)
             session.commit()
             return True, asset_key
+
+    def get_latest_voice_preview_usage(self) -> VoicePreview | None:
+        with self.factory() as session:
+            return session.scalar(
+                select(VoicePreview)
+                .where(VoicePreview.account_remaining_units.is_not(None))
+                .order_by(VoicePreview.updated_at.desc())
+                .limit(1)
+            )
 
     def update_voice_preview(
         self,

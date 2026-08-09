@@ -1,6 +1,6 @@
 "use client";
 
-import React, { FormEvent, useEffect, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -267,6 +267,7 @@ function voiceProfileConflictDetail(error: Error): VoiceProfileInUseDetail | nul
 
 function VoiceFields({ values, onChange, voices, voicesLoading }: { values: VoiceForm; onChange: (field: keyof VoiceForm, value: string | boolean) => void; voices: ElevenLabsVoice[]; voicesLoading: boolean }) {
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
+  const voiceNameId = useId();
   const selectedVoice = voices.find((voice) => voice.voice_id === values.voiceId);
   return <>
     <section className="profile-form-section">
@@ -274,7 +275,7 @@ function VoiceFields({ values, onChange, voices, voicesLoading }: { values: Voic
       <div className="profile-form-fields">
         <label>Voice profile name<input required value={values.profileName} onChange={(event) => onChange("profileName", event.target.value)} placeholder="Elena — Hope" /></label>
         <label>Provider / renderer<div className="eleven-setting-select disabled"><span className="eleven-provider-mark">E</span><strong>ElevenLabs</strong></div></label>
-        <label>Voice name<div className="eleven-setting-input"><span className="eleven-voice-orb" /><input required value={values.voiceName} onChange={(event) => onChange("voiceName", event.target.value)} placeholder="Hope — upbeat and clear" />{selectedVoice?.preview_url && <VoiceCatalogPreview voice={selectedVoice} />}<button className="voice-catalog-button" type="button" aria-label="Choose from ElevenLabs My Voices" title="Choose from ElevenLabs My Voices" onClick={() => setVoicePickerOpen(true)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18v-5a8 8 0 0 1 16 0v5M4 18h3v-6H4v6Zm13 0h3v-6h-3v6Z" /></svg></button></div></label>
+        <div className="voice-name-field"><span className="voice-name-heading"><label htmlFor={voiceNameId}>Voice name</label><button className="voice-catalog-button" type="button" aria-label="Choose from ElevenLabs My Voices" title="Choose from ElevenLabs My Voices" onClick={() => setVoicePickerOpen(true)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18v-5a8 8 0 0 1 16 0v5M4 18h3v-6H4v6Zm13 0h3v-6h-3v6Z" /></svg></button></span><div className="eleven-setting-input"><span className="eleven-voice-orb" /><input id={voiceNameId} required value={values.voiceName} onChange={(event) => onChange("voiceName", event.target.value)} placeholder="Hope — upbeat and clear" />{selectedVoice?.preview_url && <VoiceCatalogPreview voice={selectedVoice} />}</div></div>
         <label>Voice ID<input required value={values.voiceId} onChange={(event) => onChange("voiceId", event.target.value)} placeholder="ElevenLabs voice ID" /></label>
         <label className="profile-field-wide">Model<select value={values.model} onChange={(event) => onChange("model", event.target.value)}><option value="eleven_multilingual_v2">Eleven Multilingual v2</option><option value="eleven_turbo_v2_5">Eleven Turbo v2.5</option><option value="eleven_v3">Eleven v3</option></select></label>
       </div>
@@ -299,7 +300,16 @@ function VoiceFields({ values, onChange, voices, voicesLoading }: { values: Voic
 
 function VoiceCatalogPreview({ voice }: { voice: ElevenLabsVoice }) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  return <><audio ref={audioRef} src={voice.preview_url ?? undefined} preload="none" /><button className="voice-preview-icon" type="button" aria-label={`Preview ${voice.name}`} title={`Preview ${voice.name}`} onClick={() => void audioRef.current?.play()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z" /></svg></button></>;
+  function playPreview() {
+    document.querySelectorAll<HTMLAudioElement>("audio[data-voice-catalog-preview]").forEach((audio) => {
+      if (audio !== audioRef.current) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+    });
+    void audioRef.current?.play();
+  }
+  return <><audio ref={audioRef} data-voice-catalog-preview src={voice.preview_url ?? undefined} preload="none" /><button className="voice-preview-icon" type="button" aria-label={`Preview ${voice.name}`} title={`Preview ${voice.name}`} onClick={playPreview}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z" /></svg></button></>;
 }
 
 function VoiceSlider({ label, low, high, min, max, step, value, suffix = "", onChange }: { label: string; low: string; high: string; min: string; max: string; step: string; value: string; suffix?: string; onChange: (value: string) => void }) {

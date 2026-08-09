@@ -77,7 +77,7 @@ router = APIRouter(prefix="/api/v1")
 
 
 @router.get("/tts-providers/elevenlabs/usage", response_model=TTSAccountUsageRead)
-async def get_elevenlabs_usage() -> TTSAccountUsageRead:
+async def get_elevenlabs_usage(request: Request) -> TTSAccountUsageRead:
     if os.getenv("UGC_FAKE_PROVIDERS") == "1":
         usage = TTSUsage(
             account_used_units=125,
@@ -100,11 +100,29 @@ async def get_elevenlabs_usage() -> TTSAccountUsageRead:
         try:
             usage = await provider.get_account_usage()
             configured = True
-        except TTSProviderError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail={"code": exc.category, "message": str(exc)},
-            ) from exc
+        except TTSProviderError:
+            repo = cast(
+                ConfigurationRepository, request.app.state.configuration_repository
+            )
+            latest = repo.get_latest_voice_preview_usage()
+            if latest is None:
+                return TTSAccountUsageRead(
+                    provider="elevenlabs",
+                    configured=True,
+                    used_units=None,
+                    limit_units=None,
+                    remaining_units=None,
+                    resets_at_unix=None,
+                    unit="characters",
+                )
+            usage = TTSUsage(
+                account_used_units=latest.account_used_units,
+                account_limit_units=latest.account_limit_units,
+                account_remaining_units=latest.account_remaining_units,
+                resets_at_unix=latest.usage_resets_at_unix,
+                unit=latest.usage_unit or "characters",
+            )
+            configured = True
     return TTSAccountUsageRead(
         provider="elevenlabs",
         configured=configured,
