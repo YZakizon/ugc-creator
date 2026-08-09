@@ -63,7 +63,8 @@ Kling.
    worker. Services restart automatically after Docker or the host restarts;
    `make docker-stop` still removes them explicitly.
    When the development Traefik stack is running, it is also available at
-   <http://web.ugccreator.localhost>. The web container joins the shared `traefik-proxy`
+   <http://web.ugc.localhost> (with <http://ugc.localhost> as an alias). The web
+   container joins the shared `traefik-proxy`
    network; the API remains private and is reached through the web app's
    same-origin proxy.
 
@@ -72,7 +73,8 @@ Kling.
    ```dotenv
    TRAEFIK_ENABLE=true
    TRAEFIK_ENVIRONMENT=dev
-   TRAEFIK_HOST=web.ugccreator.localhost
+   TRAEFIK_HOST=web.ugc.localhost
+   TRAEFIK_HOST_ALIAS=ugc.localhost
    TRAEFIK_ENTRYPOINT=web
    ```
 

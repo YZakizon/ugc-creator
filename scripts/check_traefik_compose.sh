@@ -5,7 +5,7 @@ docker compose config --format json | jq -e '
   .services.web.labels["traefik.enable"] == "true" and
   .services.web.labels["traefik.environment"] == "dev" and
   .services.web.labels["traefik.docker.network"] == "traefik-proxy" and
-  .services.web.labels["traefik.http.routers.ugc-creator.rule"] == "Host(`web.ugccreator.localhost`)" and
+  .services.web.labels["traefik.http.routers.ugc-creator.rule"] == "Host(`web.ugc.localhost`) || Host(`ugc.localhost`)" and
   .services.web.labels["traefik.http.routers.ugc-creator.entrypoints"] == "web" and
   .services.web.labels["traefik.http.services.ugc-creator.loadbalancer.server.port"] == "3010" and
   (.services.web.networks | has("default")) and
