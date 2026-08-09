@@ -109,9 +109,24 @@ services:
     depends_on:
       - api
     command: node node_modules/next/dist/bin/next dev --hostname 0.0.0.0 --port 3010
+    networks:
+      - default
+      - traefik-proxy
+    labels:
+      traefik.enable: "${TRAEFIK_ENABLE:-true}"
+      traefik.environment: "${TRAEFIK_ENVIRONMENT:-dev}"
+      traefik.docker.network: "traefik-proxy"
+      traefik.http.routers.ugc-creator.rule: "Host(`${TRAEFIK_HOST:-ugc.localhost}`)"
+      traefik.http.routers.ugc-creator.entrypoints: "${TRAEFIK_ENTRYPOINT:-web}"
+      traefik.http.services.ugc-creator.loadbalancer.server.port: "3010"
 
 volumes:
   postgres-data:
   redis-data:
   minio-data:
   workflow-media:
+
+networks:
+  traefik-proxy:
+    external: true
+    name: traefik-proxy

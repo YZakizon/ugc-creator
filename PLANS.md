@@ -141,6 +141,10 @@ redis
 minio          # when S3-compatible local storage is enabled
 ```
 
+The web service may join the shared `traefik-proxy` network and expose the
+application through Traefik. The API remains internal behind the Next.js
+same-origin proxy; direct random host ports remain available for diagnostics.
+
 ComfyUI should not be tightly coupled to the Compose project. It can run:
 - on localhost;
 - on another LAN GPU machine;
