@@ -145,8 +145,6 @@ export type RenderProfile = {
   voice_profile_id: string | null;
   renderer_provider: string;
   workflow_template_id: string | null;
-  prompt_template?: string;
-  default_parameters?: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -217,13 +215,6 @@ export type MediaAsset = {
   created_at: string;
 };
 
-export type RenderedWorkflowControl = {
-  label: string;
-  node_id: string;
-  input_name: string;
-  value: unknown;
-};
-
 export type RenderAttempt = {
   id: string;
   job_id: string;
@@ -238,7 +229,12 @@ export type RenderAttempt = {
   output_filename: string | null;
   output_deleted_at: string | null;
   effective_values: Record<string, unknown>;
-  rendered_controls: RenderedWorkflowControl[];
+  rendered_controls: Array<{
+    label: string;
+    node_id: string;
+    input_name: string;
+    value: unknown;
+  }>;
   created_at: string;
   updated_at: string;
   assets: MediaAsset[];

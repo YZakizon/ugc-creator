@@ -551,18 +551,7 @@ describe("home page", () => {
         return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Elena LTX", voice_profile_id: "voice-profile-1", workflow_template_id: "workflow-1", is_active: true }, { id: "profile-2", name: "Elena Studio", voice_profile_id: "voice-profile-2", workflow_template_id: "workflow-2", is_active: true }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("workflow-templates")) {
-        const workflowDefaults = { logical_id: "logical-1", description: null, renderer_provider: "comfyui", metadata_json: { default_workflow_media: { source_image: "workflow-media/elena.png", audio: "workflow-media/default.mp3" } }, version: 1, checksum: "checksum", bindings: [], created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:00:00Z" };
-        const workflowJson = {
-          "269": { class_type: "LoadImage", inputs: { image: "{{SOURCE_IMAGE}}" } },
-          "276": { class_type: "LoadAudio", inputs: { audio: "{{AUDIO}}" } },
-          "340:319": { _meta: { title: "Prompt" }, class_type: "PrimitiveStringMultiline", inputs: { value: "Keep Elena in the same composition.\n\nElena speaks directly to the camera:\n\n\"{{SCRIPT}}\"\n\nAfter the supplied audio ends, Elena closes her mouth naturally." } },
-          "340:323": { _meta: { title: "Frame Rate" }, class_type: "PrimitiveInt", inputs: { value: 30 } },
-          "340:331": { _meta: { title: "Duration" }, class_type: "PrimitiveFloat", inputs: { value: 25 } },
-          "340:286": { class_type: "RandomNoise", inputs: { noise_seed: 42 } },
-          "340:330": { _meta: { title: "Width" }, class_type: "PrimitiveInt", inputs: { value: 576 } },
-          "340:324": { _meta: { title: "Height" }, class_type: "PrimitiveInt", inputs: { value: 1024 } },
-        };
-        return new Response(JSON.stringify({ items: [{ ...workflowDefaults, id: "workflow-1", name: "LTX workflow", workflow_json: workflowJson }, { ...workflowDefaults, id: "workflow-2", name: "LTX workflow 2", workflow_json: workflowJson }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ id: "workflow-1", name: "LTX workflow", renderer_provider: "comfyui" }, { id: "workflow-2", name: "LTX workflow 2", renderer_provider: "comfyui" }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("voice-profiles")) {
         const voiceDefaults = { provider: "elevenlabs", provider_voice_id: "voice-id", provider_model: "eleven_multilingual_v2", speed: 1, stability: 0.5, similarity: 0.75, style_exaggeration: 0.5, extra_settings: { voice_name: "Elena" }, created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:00:00Z" };
@@ -619,20 +608,19 @@ describe("home page", () => {
     expect(jobCard.getAllByText("47%").length).toBeGreaterThan(0);
     expect(jobCard.queryByText("earlier-video.mp4")).not.toBeInTheDocument();
     expect(jobCard.queryByText("Deleted")).not.toBeInTheDocument();
-    const renderedSettingsButton = jobCard.getByRole("button", { name: "Next render settings" });
+    const renderedSettingsButton = jobCard.getByRole("button", { name: "Rendered settings" });
     expect(renderedSettingsButton.parentElement).toContainElement(jobCard.getByRole("button", { name: "Generate New Video" }));
     fireEvent.click(renderedSettingsButton);
-    const paramsDialog = screen.getByRole("dialog", { name: "Next LTX 2.3 render settings" });
+    const paramsDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 settings" });
     expect(within(paramsDialog).getByText("Image source")).toBeVisible();
-    expect(within(paramsDialog).getByText("elena.png")).toBeVisible();
+    expect(within(paramsDialog).getByText("attempt-image.png")).toBeVisible();
     expect(within(paramsDialog).getByText("Prompt")).toBeVisible();
-    expect(within(paramsDialog).getByText(/Keep Elena in the same composition[\s\S]*This is the generated speech[\s\S]*After the supplied audio ends/)).toBeVisible();
-    expect(within(paramsDialog).queryByText(/\{\{SCRIPT\}\}/)).not.toBeInTheDocument();
+    expect(within(paramsDialog).getByText("Elena says: This is the generated speech.")).toBeVisible();
     expect(within(paramsDialog).getByText("FPS")).toBeVisible();
     expect(within(paramsDialog).getByText("30")).toBeVisible();
     expect(within(paramsDialog).getByText("Seed")).toBeVisible();
-    expect(within(paramsDialog).getByText("Automatic — generated when rendering")).toBeVisible();
-    fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close next render settings" }));
+    expect(within(paramsDialog).getByText("987654")).toBeVisible();
+    fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered LTX settings" }));
     fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
     fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));

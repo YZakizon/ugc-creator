@@ -1749,9 +1749,6 @@ Append decisions here as implementation clarifies unknowns.
 - Each ComfyUI execution copy receives fresh values for unbound scalar seed
   inputs. Explicit seed bindings remain authoritative, and resolved automatic
   seeds are persisted with the attempt's effective values for reproducibility.
-- The Render ComfyUI action previews the currently selected workflow with current
-  content variables expanded; it does not present an older attempt as the next
-  render configuration.
 - The ComfyUI adapter owns `/prompt`, `/history`, `/system_stats`, `/ws` progress,
   upload, and interrupt transport details behind the normalized `VideoRenderer`
   contract. Workers persist prompt-scoped percentages for normal API polling.
