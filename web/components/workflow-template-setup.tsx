@@ -239,6 +239,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
     try {
       const workflowJson = JSON.parse(workflow) as Record<string, unknown>;
       const bindingJson = parseBindings(bindings);
+      validateLtxDimensions(workflowJson);
       validateBindingTargets(workflowJson, bindingJson);
       mutation.mutate({
         templateId: editingTemplateId,
@@ -378,9 +379,10 @@ type InlineWorkflowFieldEditorProps = {
 function InlineWorkflowFieldEditor({ field, fieldTextareaRef, fieldSelectionRef, onUpdateField, onInsertVariable }: InlineWorkflowFieldEditorProps) {
   const stringValue = typeof field.value === "string" ? field.value : null;
   const isLargeText = stringValue !== null && (stringValue.includes("\n") || stringValue.length > 120 || isPromptInput(field.classType, field.inputName, field.title));
+  const isDimension = isLtxDimensionField(field);
 
   return <div className={`workflow-inline-editor${isLargeText ? " large" : ""}`}>
-    {stringValue !== null ? isLargeText ? <textarea ref={fieldTextareaRef} value={stringValue} rows={8} onChange={(event) => onUpdateField(field.nodeId, field.inputName, event.target.value)} onSelect={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onKeyUp={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onMouseUp={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onBlur={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} /> : <input className="workflow-field-value" type="text" value={stringValue} onChange={(event) => onUpdateField(field.nodeId, field.inputName, event.target.value)} /> : <input className="workflow-field-value" type={typeof field.value === "number" ? "number" : "text"} value={String(field.value ?? "")} onChange={(event) => onUpdateField(field.nodeId, field.inputName, typeof field.value === "number" ? Number(event.target.value) : event.target.value)} />}
+    {stringValue !== null ? isLargeText ? <textarea ref={fieldTextareaRef} value={stringValue} rows={8} onChange={(event) => onUpdateField(field.nodeId, field.inputName, event.target.value)} onSelect={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onKeyUp={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onMouseUp={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onBlur={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} /> : <input className="workflow-field-value" type="text" value={stringValue} onChange={(event) => onUpdateField(field.nodeId, field.inputName, event.target.value)} /> : <input className="workflow-field-value" type={typeof field.value === "number" ? "number" : "text"} min={isDimension ? 1 : undefined} step={isDimension ? 1 : undefined} value={String(field.value ?? "")} onChange={(event) => onUpdateField(field.nodeId, field.inputName, typeof field.value === "number" ? Number(event.target.value) : event.target.value)} />}
     {isLargeText && isPromptInput(field.classType, field.inputName, field.title) && <span className="prompt-template-vars"><small>Select text, then replace it with:</small>{supportedTemplateVariables.map((variable) => <button className="prompt-var" type="button" key={variable} onClick={() => onInsertVariable(variable)}>+ {`{{${variable}}}`}</button>)}</span>}
   </div>;
 }
@@ -533,6 +535,16 @@ function ltxWorkflowNodes(nodes: WorkflowTreeNode[]): WorkflowTreeNode[] {
       field: fields.find((field) => field.editable && typeof field.value === "number" && (/duration/i.test(field.title ?? "") || /^duration$/i.test(field.inputName))),
     },
     {
+      label: "Width",
+      field: fields.find((field) => field.editable && typeof field.value === "number" && /^width$/i.test(field.title?.trim() ?? ""))
+        ?? fields.find((field) => field.editable && typeof field.value === "number" && /^width$/i.test(field.inputName)),
+    },
+    {
+      label: "Height",
+      field: fields.find((field) => field.editable && typeof field.value === "number" && /^height$/i.test(field.title?.trim() ?? ""))
+        ?? fields.find((field) => field.editable && typeof field.value === "number" && /^height$/i.test(field.inputName)),
+    },
+    {
       label: "Seed",
       field: primaryLtxSeedField(nodes),
     },
@@ -574,6 +586,34 @@ function workflowFieldKey(field: WorkflowField): string {
 
 function isEditableWorkflowValue(value: unknown): value is string | number | boolean {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function isLtxDimensionField(field: WorkflowField): boolean {
+  return field.label === "Width" || field.label === "Height";
+}
+
+function validateLtxDimensions(workflow: Record<string, unknown>) {
+  if (detectWorkflowKind(workflow) !== "ltx-2.3") return;
+  const dimensions: Array<{ label: "Width" | "Height"; value: unknown }> = [];
+
+  for (const node of Object.values(workflow)) {
+    if (!isRecord(node) || !isRecord(node.inputs)) continue;
+    const title = nodeTitle(node)?.trim().toLowerCase();
+    if (title === "width" || title === "height") {
+      dimensions.push({ label: title === "width" ? "Width" : "Height", value: node.inputs.value });
+    }
+    for (const [inputName, value] of Object.entries(node.inputs)) {
+      if ((/^width$/i.test(inputName) || /^height$/i.test(inputName)) && !Array.isArray(value)) {
+        dimensions.push({ label: /^width$/i.test(inputName) ? "Width" : "Height", value });
+      }
+    }
+  }
+
+  for (const dimension of dimensions) {
+    if (typeof dimension.value !== "number" || !Number.isInteger(dimension.value) || dimension.value <= 0) {
+      throw new Error(`${dimension.label} must be a positive integer.`);
+    }
+  }
 }
 
 function formatWorkflowValue(value: string | number | boolean | null): string {

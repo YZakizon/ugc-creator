@@ -85,7 +85,8 @@ describe("workflow template setup", () => {
     expect(window.location.pathname).toBe("/workflows");
   });
 
-  it("edits an LTX control in the same row instead of a nested second row", () => {
+  it("edits and validates LTX controls in the same row instead of a nested second row", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     window.sessionStorage.setItem("workflow-template-edit", JSON.stringify({
       id: "workflow-ltx",
       logical_id: "workflow-ltx",
@@ -102,6 +103,9 @@ describe("workflow template setup", () => {
         "340:308": { _meta: { title: "ManualSigmas" }, class_type: "ManualSigmas", inputs: { sigmas: "1.0, 0.99375, 0.0" } },
         "340:310": { _meta: { title: "SamplerCustomAdvanced" }, class_type: "SamplerCustomAdvanced", inputs: { noise: ["340:285", 0], sigmas: ["340:289", 0] } },
         "340:346": { _meta: { title: "Generate LTX2 Prompt" }, class_type: "TextGenerateLTX2Prompt", inputs: { "sampling_mode.seed": 0 } },
+        "340:324": { _meta: { title: "Height" }, class_type: "PrimitiveInt", inputs: { value: 1280 } },
+        "340:330": { _meta: { title: "Width" }, class_type: "PrimitiveInt", inputs: { value: 768 } },
+        "340:350": { _meta: { title: "Empty LTX Video Latent" }, class_type: "EmptyLTXVLatentVideo", inputs: { width: ["340:330", 0], height: ["340:324", 0] } },
       },
       metadata_json: { workflow_kind: "ltx-2.3" },
       version: 1,
@@ -124,6 +128,19 @@ describe("workflow template setup", () => {
     expect((controls as Node).compareDocumentPosition(jsonDetails as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: /Seed.*473920259086225/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Seed.*0$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Width.*768/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Height.*1280/i }));
+    const heightInput = screen.getByDisplayValue("1280");
+    expect(heightInput).toHaveAttribute("min", "1");
+    expect(heightInput).toHaveAttribute("step", "1");
+    fireEvent.change(heightInput, { target: { value: "1920" } });
+    expect((screen.getByLabelText("ComfyUI API workflow JSON") as HTMLTextAreaElement).value).toContain('"value": 1920');
+    for (const invalidHeight of ["", "-1", "1.5"]) {
+      fireEvent.change(heightInput, { target: { value: invalidHeight } });
+      fireEvent.submit(screen.getByRole("button", { name: "Update workflow" }).closest("form") as HTMLFormElement);
+      expect(screen.getByRole("alert")).toHaveTextContent("Height must be a positive integer.");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /Image source.*source\.png/i }));
     const input = screen.getByDisplayValue("source.png");
     const row = input.closest(".workflow-ltx-control");
