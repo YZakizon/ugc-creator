@@ -18,9 +18,14 @@ ALLOWED_PLACEHOLDERS = frozenset(
         "CHARACTER_NAME",
         "SOURCE_IMAGE",
         "AUDIO",
+        "AUDIO_DURATION",
     }
 )
 PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Z0-9_]+)\}\}")
+TEMPLATE_TOKEN_PATTERN = re.compile(r"\{\{([^{}]+)\}\}")
+AUDIO_DURATION_EXPRESSION_PATTERN = re.compile(
+    r"\{\{\s*AUDIO_DURATION(?:\s*([+-])\s*(\d+(?:\.\d+)?))?\s*\}\}"
+)
 SEMANTIC_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 
 
@@ -31,6 +36,16 @@ class WorkflowValidationError(ValueError):
 def workflow_checksum(workflow: Mapping[str, object]) -> str:
     canonical = json.dumps(workflow, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def workflow_uses_audio_duration(value: object) -> bool:
+    if isinstance(value, str):
+        return AUDIO_DURATION_EXPRESSION_PATTERN.search(value) is not None
+    if isinstance(value, Mapping):
+        return any(workflow_uses_audio_duration(item) for item in value.values())
+    if isinstance(value, list):
+        return any(workflow_uses_audio_duration(item) for item in value)
+    return False
 
 
 def validate_workflow(workflow: Mapping[str, object]) -> None:
@@ -160,10 +175,15 @@ def _coerce_value(semantic_key: str, value: object, value_type: str) -> object:
 
 def _validate_placeholders(value: object) -> None:
     if isinstance(value, str):
-        for placeholder in PLACEHOLDER_PATTERN.findall(value):
-            if placeholder not in ALLOWED_PLACEHOLDERS:
+        for raw_token in TEMPLATE_TOKEN_PATTERN.findall(value):
+            placeholder = raw_token.strip()
+            if (
+                placeholder not in ALLOWED_PLACEHOLDERS
+                and AUDIO_DURATION_EXPRESSION_PATTERN.fullmatch("{{" + raw_token + "}}")
+                is None
+            ):
                 raise WorkflowValidationError(
-                    f"Unknown workflow placeholder: {{{{{placeholder}}}}}"
+                    f"Unknown workflow placeholder: {{{{{raw_token}}}}}"
                 )
     elif isinstance(value, dict):
         for item in value.values():
@@ -188,7 +208,24 @@ def _render_placeholders(value: Any, values: Mapping[str, object]) -> None:
                 _render_placeholders(item, values)
 
 
-def _render_string(value: str, values: Mapping[str, object]) -> str:
+def _render_string(value: str, values: Mapping[str, object]) -> object:
+    def replace_duration(match: re.Match[str]) -> str:
+        raw_duration = values.get("audio_duration")
+        if isinstance(raw_duration, bool) or not isinstance(raw_duration, (int, float)):
+            raise WorkflowValidationError(
+                "Missing workflow placeholder value: AUDIO_DURATION"
+            )
+        operator, raw_offset = match.groups()
+        result = float(raw_duration)
+        if operator and raw_offset:
+            offset = float(raw_offset)
+            result = result + offset if operator == "+" else result - offset
+        if result <= 0:
+            raise WorkflowValidationError("AUDIO_DURATION expression must be positive")
+        return str(int(result)) if result.is_integer() else str(result)
+
+    rendered = AUDIO_DURATION_EXPRESSION_PATTERN.sub(replace_duration, value)
+
     def replace(match: re.Match[str]) -> str:
         key = match.group(1)
         replacement = values.get(key.lower())
@@ -196,4 +233,8 @@ def _render_string(value: str, values: Mapping[str, object]) -> str:
             raise WorkflowValidationError(f"Missing workflow placeholder value: {key}")
         return str(replacement)
 
-    return PLACEHOLDER_PATTERN.sub(replace, value)
+    rendered = PLACEHOLDER_PATTERN.sub(replace, rendered)
+    if AUDIO_DURATION_EXPRESSION_PATTERN.fullmatch(value):
+        numeric = float(rendered)
+        return int(numeric) if numeric.is_integer() else numeric
+    return rendered

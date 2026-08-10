@@ -46,21 +46,26 @@ describe("workflow template setup", () => {
       updated_at: "2026-08-07T12:00:00Z",
     }));
 
-    render(<Providers><WorkflowTemplateSetup /></Providers>);
+    const view = render(<Providers><WorkflowTemplateSetup /></Providers>);
+    const editor = within(view.container);
 
-    const workflowJson = await screen.findByLabelText("ComfyUI API workflow JSON");
-    expect(screen.getByText("saved-image.png")).toBeInTheDocument();
-    expect(screen.getByText("saved-audio.mp3")).toBeInTheDocument();
-    expect(screen.queryByText("Semantic bindings")).not.toBeInTheDocument();
+    const workflowJson = await editor.findByLabelText("ComfyUI API workflow JSON");
+    expect(editor.getByText("saved-image.png")).toBeInTheDocument();
+    expect(editor.getByText("saved-audio.mp3")).toBeInTheDocument();
+    fireEvent.click(within(editor.getByText("Default source image").closest("label") as HTMLElement).getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(editor.getByText("Default audio").closest("label") as HTMLElement).getByRole("button", { name: "Remove" }));
+    expect(editor.getByText("No default image saved. Used only when the content does not provide an image.")).toBeInTheDocument();
+    expect(editor.getByText("No default audio saved. Used only when the content does not provide audio.")).toBeInTheDocument();
+    expect(editor.queryByText("Semantic bindings")).not.toBeInTheDocument();
     fireEvent.change(workflowJson, {
       target: { value: JSON.stringify({ "27": { class_type: "KSampler", inputs: { seed: 99, steps: 25 } } }, null, 2) },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Update workflow" }));
+    fireEvent.click(editor.getByRole("button", { name: "Update workflow" }));
 
     await waitFor(() => expect(submitted).not.toBeNull());
-    expect(submitted).toMatchObject({ bindings: [{ semantic_key: "kling.camera_strength", node_id: "27", input_name: "seed", value_type: "integer", required: true }] });
-    expect(screen.getByRole("button", { name: "Update workflow" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Import workflow" })).not.toBeInTheDocument();
+    expect(submitted).toMatchObject({ metadata_json: { default_workflow_media: {} }, bindings: [{ semantic_key: "kling.camera_strength", node_id: "27", input_name: "seed", value_type: "integer", required: true }] });
+    expect(editor.getByRole("button", { name: "Update workflow" })).toBeInTheDocument();
+    expect(editor.queryByRole("button", { name: "Import workflow" })).not.toBeInTheDocument();
   });
 
   it("opens saved workflow editing in place on the workflows page", async () => {
@@ -95,6 +100,8 @@ describe("workflow template setup", () => {
       renderer_provider: "comfyui",
       workflow_json: {
         "269": { class_type: "LoadImage", inputs: { image: "source.png" } },
+        "270": { class_type: "LoadAudio", inputs: { audio: "voice.wav" } },
+        "271": { _meta: { title: "Duration" }, class_type: "PrimitiveFloat", inputs: { value: 30 } },
         "340:319": { _meta: { title: "LTX 2.3 Prompt" }, class_type: "PrimitiveStringMultiline", inputs: { value: "Elena speaks." } },
         "340:285": { _meta: { title: "RandomNoise" }, class_type: "RandomNoise", inputs: { noise_seed: 42 } },
         "340:286": { _meta: { title: "RandomNoise" }, class_type: "RandomNoise", inputs: { noise_seed: 473920259086225 } },
@@ -129,6 +136,15 @@ describe("workflow template setup", () => {
     expect(screen.getByRole("button", { name: /Seed.*473920259086225/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Seed.*0$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Width.*768/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Image source.*source\.png/i }));
+    expect(screen.getByRole("button", { name: /SOURCE_IMAGE/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Audio source.*voice\.wav/i }));
+    expect(screen.getByRole("button", { name: /\{\{AUDIO\}\}/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Duration.*30/i }));
+    fireEvent.click(screen.getByRole("button", { name: /AUDIO_DURATION/ }));
+    const durationInput = screen.getByDisplayValue("{{AUDIO_DURATION}}");
+    fireEvent.change(durationInput, { target: { value: "{{AUDIO_DURATION + 1}}" } });
+    expect((screen.getByLabelText("ComfyUI API workflow JSON") as HTMLTextAreaElement).value).toContain("{{AUDIO_DURATION + 1}}");
     fireEvent.click(screen.getByRole("button", { name: /Height.*1280/i }));
     const heightInput = screen.getByDisplayValue("1280");
     expect(heightInput).toHaveAttribute("min", "1");

@@ -212,7 +212,8 @@ def test_job_tts_uses_profile_voice_and_persists_render_audio(
         assert asset.generation_metadata["model"] == "eleven_multilingual_v2"
         assert asset.generation_metadata["settings"] == saved.tts_settings
         assert len(str(asset.generation_metadata["script_sha256"])) == 64
-        assert (tmp_path / asset.object_key).read_bytes().startswith(b"ID3")
+        assert asset.content_type == "audio/wav"
+        assert (tmp_path / asset.object_key).read_bytes().startswith(b"RIFF")
 
 
 def test_job_tts_uses_job_voice_override(

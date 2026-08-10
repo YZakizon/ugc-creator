@@ -14,7 +14,12 @@ from app.providers.render.comfyui import (
 from app.providers.render.contracts import RenderOutput, RenderRequest
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
-from app.services.workflow_service import WorkflowValidationError, prepare_workflow
+from app.services.media_service import MediaProcessingError, probe_audio_duration
+from app.services.workflow_service import (
+    WorkflowValidationError,
+    prepare_workflow,
+    workflow_uses_audio_duration,
+)
 from app.workers.celery_app import celery_app
 
 
@@ -42,6 +47,8 @@ async def apply_default_workflow_media(
     metadata: dict[str, object],
     renderer: ComfyUIRenderer,
     storage: LocalStorageProvider,
+    *,
+    measure_audio_duration: bool = False,
 ) -> None:
     media = metadata.get("default_workflow_media", metadata.get("workflow_media", {}))
     if not isinstance(media, dict):
@@ -52,6 +59,14 @@ async def apply_default_workflow_media(
         asset_key = media.get(key)
         if isinstance(asset_key, str) and asset_key:
             content = storage.get(asset_key)
+            if (
+                key == "audio"
+                and measure_audio_duration
+                and "audio_duration" not in values
+            ):
+                values["audio_duration"] = probe_audio_duration(
+                    content, PurePath(asset_key).name
+                )
             values[key] = await renderer.upload(
                 PurePath(asset_key).name, content, input_type
             )
@@ -117,6 +132,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         monitor_render.apply_async(args=[str(attempt_id)], countdown=1)
         return
     values = dict(profile.default_parameters)
+    needs_audio_duration = workflow_uses_audio_duration(attempt.workflow_snapshot)
     values.update(
         {
             "script": job.speech_script or job.topic,
@@ -132,13 +148,22 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     )
     if audio_asset is not None:
         storage = LocalStorageProvider()
+        audio_content = storage.get(audio_asset.object_key)
+        if needs_audio_duration:
+            values["audio_duration"] = probe_audio_duration(
+                audio_content, audio_asset.filename
+            )
         values["audio"] = await renderer.upload(
             audio_asset.filename,
-            storage.get(audio_asset.object_key),
+            audio_content,
             "audio",
         )
     await apply_default_workflow_media(
-        values, template.metadata_json, renderer, LocalStorageProvider()
+        values,
+        template.metadata_json,
+        renderer,
+        LocalStorageProvider(),
+        measure_audio_duration=needs_audio_duration,
     )
     workflow = prepare_workflow(
         attempt.workflow_snapshot, attempt.binding_snapshot, values
@@ -171,6 +196,7 @@ def submit_render(attempt_id: str) -> dict[str, str]:
     except (
         ComfyUIProviderError,
         WorkflowValidationError,
+        MediaProcessingError,
         StorageError,
         ValueError,
         LookupError,

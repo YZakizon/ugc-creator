@@ -27,6 +27,7 @@ from app.providers.render.comfyui import (
 from app.providers.render.contracts import RenderOutput
 from app.render_repository import RenderExecutionRepository
 from app.schemas import RenderNodeCreate
+from app.services.media_service import MediaProcessingError
 from app.workers.render_tasks import (
     _prepare_and_submit,
     apply_default_workflow_media,
@@ -62,6 +63,36 @@ def test_unknown_submission_outcome_stays_reconcilable(
 
     assert result == {"attempt_id": str(attempt_id), "status": "reconciling"}
     assert scheduled == [([str(attempt_id)], 5)]
+
+
+def test_media_processing_failure_persists_safe_render_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    updates: list[tuple[object, str, int, str]] = []
+
+    async def fail_to_measure(_attempt_id: object) -> None:
+        raise MediaProcessingError("Audio duration could not be measured.")
+
+    class FakeRepository:
+        def update_progress(
+            self,
+            stored_attempt_id: object,
+            status: str,
+            progress: int,
+            message: str,
+        ) -> None:
+            updates.append((stored_attempt_id, status, progress, message))
+
+    monkeypatch.setattr("app.workers.render_tasks._prepare_and_submit", fail_to_measure)
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+
+    result = submit_render(str(attempt_id))
+
+    assert result == {"attempt_id": str(attempt_id), "status": "failed"}
+    assert updates == [
+        (attempt_id, "failed", 0, "Audio duration could not be measured.")
+    ]
 
 
 @pytest.mark.asyncio
@@ -267,6 +298,30 @@ async def test_workflow_media_is_used_only_as_a_missing_value_fallback() -> None
     assert values["audio"] == "comfy-default.mp3"
     storage.get.assert_called_once_with("workflow-media/default.mp3")
     renderer.upload.assert_awaited_once_with("default.mp3", b"audio", "audio")
+
+
+@pytest.mark.asyncio
+async def test_default_audio_duration_is_measured_when_workflow_uses_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: dict[str, object] = {}
+    renderer = AsyncMock()
+    renderer.upload.return_value = "comfy-default.mp3"
+    storage = Mock()
+    storage.get.return_value = b"audio"
+    probe = Mock(return_value=4.5)
+    monkeypatch.setattr("app.workers.render_tasks.probe_audio_duration", probe)
+
+    await apply_default_workflow_media(
+        values,
+        {"default_workflow_media": {"audio": "workflow-media/default.mp3"}},
+        renderer,
+        storage,
+        measure_audio_duration=True,
+    )
+
+    assert values["audio_duration"] == 4.5
+    probe.assert_called_once_with(b"audio", "default.mp3")
 
 
 def test_render_monitor_timeout_is_bounded() -> None:
