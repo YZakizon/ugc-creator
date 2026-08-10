@@ -162,6 +162,17 @@ export function VoiceProfileSetup() {
     }
   }, [previewQuery.data?.status, queryClient]);
 
+  useEffect(() => {
+    const profileId = window.location.hash.match(/^#voice-profile-(.+)$/)?.[1];
+    const profile = voicesQuery.data?.items.find((item) => item.id === profileId);
+    if (!profile) return;
+    setActiveTab("list");
+    if (expandedId !== profile.id) toggle(profile);
+    window.setTimeout(() => document.getElementById(`voice-profile-${profile.id}`)?.scrollIntoView({ block: "center" }), 0);
+    // The hash is an external navigation instruction; process it once after loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voicesQuery.data]);
+
   function updateForm(field: keyof VoiceForm, value: string | boolean) {
     const next = { ...formRef.current, [field]: value } as VoiceForm;
     formRef.current = next;
@@ -203,7 +214,7 @@ export function VoiceProfileSetup() {
 
     <div className="profile-tab-panel" role="tabpanel" hidden={activeTab !== "list"}>
       {voicesQuery.isLoading ? <div className="profile-empty compact-profile-empty"><p>Loading voice profiles…</p></div> : voicesQuery.isError ? <div className="profile-empty compact-profile-empty"><p className="form-error">Voice profiles are unavailable: {voicesQuery.error.message}</p></div> : voicesQuery.data?.items.length ? <div className="profile-list">
-        {voicesQuery.data.items.map((profile) => <article className={`saved-profile${expandedId === profile.id ? " expanded" : ""}`} key={profile.id}>
+        {voicesQuery.data.items.map((profile) => <article id={`voice-profile-${profile.id}`} className={`saved-profile${expandedId === profile.id ? " expanded" : ""}`} key={profile.id}>
           <div className="saved-profile-header"><button className="saved-profile-toggle" type="button" aria-label={`${expandedId === profile.id ? "Hide" : "Show"} ${profile.name} details`} aria-expanded={expandedId === profile.id} onClick={() => toggle(profile)}>
               <span className="profile-list-icon">◒</span>
               <span className="saved-profile-summary"><strong>{profile.name}</strong><small>Created <HumanDate value={profile.created_at} /> · Updated <HumanDate value={profile.updated_at} /></small></span>

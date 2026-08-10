@@ -195,13 +195,13 @@ describe("home page", () => {
         return new Response(JSON.stringify({ items: [{ id: "batch-1", name: "August launch", jobs: [] }], total: 1, limit: 100, offset: 0 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("render-profiles")) {
-        return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Elena LTX", is_active: true }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Elena LTX", voice_profile_id: "voice-profile-1", workflow_template_id: "workflow-1", is_active: true }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("workflow-templates")) {
-        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ id: "workflow-1", name: "LTX workflow", renderer_provider: "comfyui" }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("voice-profiles")) {
-        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ id: "voice-profile-1", name: "Hope voice" }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({
         in_progress: 0,
@@ -214,6 +214,8 @@ describe("home page", () => {
           topic: "A useful reminder",
           status: "completed",
           render_profile_id: "profile-1",
+          voice_profile_id: "voice-profile-1",
+          workflow_template_id: "workflow-1",
           target_duration_seconds: 30,
           error_message: null,
           speech_script: "This is the generated speech.",
@@ -273,6 +275,16 @@ describe("home page", () => {
       "href",
       "/api/v1/assets/asset-1/download",
     );
+    expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toHaveValue("voice-profile-1");
+    expect(jobCard.getByRole("link", { name: "Open voice profile details", hidden: true })).toHaveAttribute("href", "/voice-profiles#voice-profile-voice-profile-1");
+    fireEvent.click(jobCard.getByRole("tab", { name: "Render ComfyUI" }));
+    expect(jobCard.getByRole("combobox", { name: "Workflow" })).toHaveValue("workflow-1");
+    expect(jobCard.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", "/workflows#workflow-workflow-1");
+    expect(jobCard.getAllByText("speech.mp3").some((element) => !element.closest("[hidden]"))).toBe(true);
+    expect(jobCard.getByText("Upload different audio")).toBeVisible();
+    fireEvent.click(jobCard.getByRole("button", { name: "Preview finished.mp4" }));
+    expect(card!.querySelector("video")).toHaveAttribute("src", "/api/v1/assets/asset-1/download?inline=true");
+    expect(jobCard.getByRole("button", { name: "Delete finished.mp4" })).toBeInTheDocument();
   });
 
   it("changes a job render profile from the Render ComfyUI tab", async () => {

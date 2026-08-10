@@ -45,8 +45,11 @@ from app.schemas import (
     ContentPromptSettingsRead,
     ContentPromptSettingsUpdate,
     DashboardSummary,
+    JobAudioUpload,
     JobRead,
     JobRenderProfileUpdate,
+    JobVoiceProfileUpdate,
+    JobWorkflowTemplateUpdate,
     RenderAttemptList,
     RenderAttemptRead,
     RenderNodeCreate,
@@ -356,7 +359,9 @@ def list_render_attempts(
 
 @router.get("/assets/{asset_id}/download")
 def download_asset(
-    asset_id: UUID, repo: RenderExecutionRepository = Depends(render_repository)
+    asset_id: UUID,
+    inline: bool = Query(default=False),
+    repo: RenderExecutionRepository = Depends(render_repository),
 ) -> Response:
     asset = repo.get_asset(asset_id)
     if asset is None:
@@ -370,8 +375,42 @@ def download_asset(
     return Response(
         content=content,
         media_type=asset.content_type or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{asset.filename}"'},
+        headers={
+            "Content-Disposition": (
+                f'{"inline" if inline else "attachment"}; filename="{asset.filename}"'
+            )
+        },
     )
+
+
+@router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_video_asset(
+    asset_id: UUID, repo: RenderExecutionRepository = Depends(render_repository)
+) -> None:
+    asset = repo.get_asset(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Media asset not found")
+    if asset.kind != "video" or asset.render_attempt_id is None:
+        raise HTTPException(
+            status_code=422, detail="Only generated videos can be deleted"
+        )
+    attempt = repo.get_attempt(asset.render_attempt_id)
+    if attempt is None or attempt.status != "completed":
+        raise HTTPException(
+            status_code=409, detail="Video cannot be deleted before rendering completes"
+        )
+    try:
+        LocalStorageProvider().delete(asset.object_key)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media storage is unavailable"
+        ) from exc
+    try:
+        deleted = repo.delete_video_asset(asset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Media asset not found")
 
 
 @router.post("/batches", response_model=BatchRead, status_code=status.HTTP_201_CREATED)
@@ -449,8 +488,153 @@ def update_job_render_profile(
     profile = config_repo.get_render_profile(payload.render_profile_id)
     if profile is None or not profile.is_active:
         raise HTTPException(status_code=422, detail="Active render profile not found")
-    updated = repo.update_job_render_profile(job_id, profile.id)
+    updated = repo.update_job_render_profile(job_id, profile)
     if updated is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(updated))
+
+
+@router.patch("/jobs/{job_id}/voice-profile", response_model=JobRead)
+def update_job_voice_profile(
+    job_id: UUID,
+    payload: JobVoiceProfileUpdate,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in {
+        JobStatus.GENERATING_TTS.value,
+        JobStatus.QUEUED.value,
+        JobStatus.SUBMITTING_RENDER.value,
+        JobStatus.RENDERING.value,
+        JobStatus.DOWNLOADING_OUTPUT.value,
+        JobStatus.COMPLETED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Voice profile cannot change while speech or video is active "
+                "or completed"
+            ),
+        )
+    voice = config_repo.get_voice_profile(payload.voice_profile_id)
+    if voice is None:
+        raise HTTPException(status_code=422, detail="Voice profile not found")
+    profile = (
+        config_repo.get_render_profile(job.render_profile_id)
+        if job.render_profile_id
+        else None
+    )
+    current_voice_id = job.voice_profile_id or (
+        profile.voice_profile_id if profile else None
+    )
+    if current_voice_id == voice.id:
+        return JobRead.model_validate(job_to_dict(job))
+    updated = repo.update_job_voice_profile(job_id, voice.id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(updated))
+
+
+@router.patch("/jobs/{job_id}/workflow-template", response_model=JobRead)
+def update_job_workflow_template(
+    job_id: UUID,
+    payload: JobWorkflowTemplateUpdate,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in {
+        JobStatus.QUEUED.value,
+        JobStatus.SUBMITTING_RENDER.value,
+        JobStatus.RENDERING.value,
+        JobStatus.DOWNLOADING_OUTPUT.value,
+        JobStatus.COMPLETED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Workflow cannot change while this job is active or completed",
+        )
+    workflow = config_repo.get_workflow_template(payload.workflow_template_id)
+    if workflow is None:
+        raise HTTPException(status_code=422, detail="Workflow not found")
+    profile = (
+        config_repo.get_render_profile(job.render_profile_id)
+        if job.render_profile_id
+        else None
+    )
+    if profile is None:
+        raise HTTPException(status_code=422, detail="Job has no render profile")
+    if workflow.renderer_provider != profile.renderer_provider:
+        raise HTTPException(
+            status_code=422,
+            detail="Workflow provider does not match the render profile provider",
+        )
+    updated = repo.update_job_workflow_template(job_id, workflow.id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(updated))
+
+
+@router.post("/jobs/{job_id}/audio", response_model=JobRead)
+def upload_job_audio(
+    job_id: UUID,
+    payload: JobAudioUpload,
+    repo: BatchRepository = Depends(repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in {
+        JobStatus.GENERATING_TTS.value,
+        JobStatus.QUEUED.value,
+        JobStatus.SUBMITTING_RENDER.value,
+        JobStatus.RENDERING.value,
+        JobStatus.DOWNLOADING_OUTPUT.value,
+        JobStatus.COMPLETED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Audio cannot change while speech or video is active or completed",
+        )
+    filename = PurePath(payload.filename).name
+    if not filename or filename in {".", ".."}:
+        raise HTTPException(status_code=422, detail="A safe audio filename is required")
+    if not payload.content_type.lower().startswith("audio/"):
+        raise HTTPException(status_code=422, detail="Select a supported audio file")
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Audio content is not valid base64"
+        ) from exc
+    if not content:
+        raise HTTPException(status_code=422, detail="Audio file cannot be empty")
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413, detail="Audio file must be 25 MB or smaller"
+        )
+    object_key = f"batches/{job.batch_id}/jobs/{job.id}/audio/{uuid4()}-{filename}"
+    storage = LocalStorageProvider()
+    try:
+        storage.put(object_key, content)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media storage is unavailable"
+        ) from exc
+    updated = repo.replace_job_audio(
+        job_id,
+        object_key=object_key,
+        filename=filename,
+        content_type=payload.content_type,
+        size_bytes=len(content),
+    )
+    if updated is None:
+        storage.delete(object_key)
         raise HTTPException(status_code=404, detail="Job not found")
     return JobRead.model_validate(job_to_dict(updated))
 
@@ -511,14 +695,17 @@ def queue_tts_generation(
                 "retriable": False,
             },
         )
-    if job.render_profile_id is None:
-        raise HTTPException(status_code=422, detail="Job has no render profile")
-    profile = config_repo.get_render_profile(job.render_profile_id)
-    if profile is None or profile.voice_profile_id is None:
-        raise HTTPException(
-            status_code=422, detail="Render profile has no voice profile"
-        )
-    if config_repo.get_voice_profile(profile.voice_profile_id) is None:
+    profile = (
+        config_repo.get_render_profile(job.render_profile_id)
+        if job.render_profile_id
+        else None
+    )
+    voice_profile_id = job.voice_profile_id or (
+        profile.voice_profile_id if profile else None
+    )
+    if voice_profile_id is None:
+        raise HTTPException(status_code=422, detail="Job has no voice profile")
+    if config_repo.get_voice_profile(voice_profile_id) is None:
         raise HTTPException(status_code=422, detail="Voice profile is unavailable")
     try:
         queued = repo.queue_job_for_tts(job_id)

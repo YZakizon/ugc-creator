@@ -1,3 +1,4 @@
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
@@ -22,6 +23,7 @@ from app.schemas import (
     RenderProfileSetupCreate,
     RenderProfileUpdate,
     VoiceProfileCreate,
+    WorkflowTemplateCreate,
 )
 
 
@@ -109,6 +111,103 @@ async def test_job_render_profile_can_change_before_rendering() -> None:
     assert response.json()["render_profile_id"] == str(second.id)
     assert batches.get_job(batch.jobs[0].id).render_profile_id == second.id
     assert locked.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_job_voice_and_workflow_can_override_profile_defaults() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    first_voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="First voice", provider="elevenlabs", provider_voice_id="voice-1"
+        )
+    )
+    second_voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Second voice", provider="elevenlabs", provider_voice_id="voice-2"
+        )
+    )
+    first_workflow = configuration.create_workflow_template(
+        WorkflowTemplateCreate(
+            name="First workflow",
+            workflow_json={"1": {"class_type": "Text", "inputs": {"text": "one"}}},
+        ),
+        "first-checksum",
+    )
+    second_workflow = configuration.create_workflow_template(
+        WorkflowTemplateCreate(
+            name="Second workflow",
+            workflow_json={"1": {"class_type": "Text", "inputs": {"text": "two"}}},
+        ),
+        "second-checksum",
+    )
+    profile = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Shelf",
+            character_name="Elena",
+            voice_profile_id=first_voice.id,
+            workflow_template_id=first_workflow.id,
+        )
+    )
+    batch = batches.create_batch(
+        BatchCreate(
+            name="Overrides",
+            topics=["One topic"],
+            default_render_profile_id=profile.id,
+        )
+    )
+    job = batch.jobs[0]
+    job.status = "content_ready"
+    job.speech_script = "Ready speech"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        voice_response = await client.patch(
+            f"/api/v1/jobs/{job.id}/voice-profile",
+            json={"voice_profile_id": str(second_voice.id)},
+        )
+        workflow_response = await client.patch(
+            f"/api/v1/jobs/{job.id}/workflow-template",
+            json={"workflow_template_id": str(second_workflow.id)},
+        )
+
+    assert voice_response.status_code == 200
+    assert voice_response.json()["voice_profile_id"] == str(second_voice.id)
+    assert workflow_response.status_code == 200
+    assert workflow_response.json()["workflow_template_id"] == str(second_workflow.id)
+
+
+@pytest.mark.asyncio
+async def test_job_audio_upload_becomes_render_input(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    batch = batches.create_batch(BatchCreate(name="Audio", topics=["One topic"]))
+    job = batch.jobs[0]
+    job.status = "content_ready"
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            f"/api/v1/jobs/{job.id}/audio",
+            json={
+                "filename": "replacement.mp3",
+                "content_type": "audio/mpeg",
+                "content_base64": base64.b64encode(b"audio bytes").decode(),
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready_to_render"
+    assert response.json()["audio_asset"]["filename"] == "replacement.mp3"
+    assert list(tmp_path.rglob("*replacement.mp3"))
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from app.db.models import (
     Batch,
     Character,
     ContentPromptSetting,
+    MediaAsset,
     RenderAttempt,
     RenderProfile,
     TopicJob,
@@ -162,12 +163,94 @@ class InMemoryBatchRepository:
         return job
 
     def update_job_render_profile(
-        self, job_id: UUID, render_profile_id: UUID
+        self, job_id: UUID, profile: RenderProfile
     ) -> TopicJob | None:
         job = self.jobs.get(job_id)
         if job is not None:
-            job.render_profile_id = render_profile_id
+            replaced_audio = False
+            for asset in job.__dict__.get("media_assets", []):
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+                    replaced_audio = True
+            job.render_profile_id = profile.id
+            job.voice_profile_id = profile.voice_profile_id
+            job.workflow_template_id = profile.workflow_template_id
+            if replaced_audio and job.speech_script:
+                job.status = JobStatus.CONTENT_READY.value
+                job.tts_provider = None
+                job.tts_voice_id = None
+                job.tts_model = None
+                job.tts_settings = None
+                job.tts_provider_request_id = None
             job.updated_at = utc_now()
+        return job
+
+    def update_job_voice_profile(
+        self, job_id: UUID, voice_profile_id: UUID
+    ) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is not None:
+            job.voice_profile_id = voice_profile_id
+            job.error_message = None
+            if job.speech_script and job.status in {
+                JobStatus.FAILED.value,
+                JobStatus.READY_TO_RENDER.value,
+                JobStatus.TTS_READY.value,
+            }:
+                job.status = JobStatus.CONTENT_READY.value
+            for asset in job.__dict__.get("media_assets", []):
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+            job.tts_provider = None
+            job.tts_voice_id = None
+            job.tts_model = None
+            job.tts_settings = None
+            job.tts_provider_request_id = None
+            job.updated_at = utc_now()
+        return job
+
+    def update_job_workflow_template(
+        self, job_id: UUID, workflow_template_id: UUID
+    ) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is not None:
+            job.workflow_template_id = workflow_template_id
+            job.updated_at = utc_now()
+        return job
+
+    def replace_job_audio(
+        self,
+        job_id: UUID,
+        *,
+        object_key: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+    ) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        assets = job.__dict__.setdefault("media_assets", [])
+        for asset in assets:
+            if asset.kind == "audio":
+                asset.kind = "audio_archive"
+        assets.append(
+            MediaAsset(
+                id=uuid4(),
+                job_id=job.id,
+                render_attempt_id=None,
+                kind="audio",
+                object_key=object_key,
+                filename=filename,
+                content_type=content_type,
+                size_bytes=size_bytes,
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+        )
+        job.status = JobStatus.READY_TO_RENDER.value
+        job.error_message = None
+        job.updated_at = utc_now()
         return job
 
     def list_jobs(self, limit: int = 5) -> list[TopicJob]:
@@ -273,13 +356,120 @@ class SqlAlchemyBatchRepository:
             )
 
     def update_job_render_profile(
-        self, job_id: UUID, render_profile_id: UUID
+        self, job_id: UUID, profile: RenderProfile
+    ) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+            if job is None:
+                return None
+            replaced_audio = False
+            for asset in job.media_assets:
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+                    replaced_audio = True
+            job.render_profile_id = profile.id
+            job.voice_profile_id = profile.voice_profile_id
+            job.workflow_template_id = profile.workflow_template_id
+            if replaced_audio and job.speech_script:
+                job.status = JobStatus.CONTENT_READY.value
+                job.tts_provider = None
+                job.tts_voice_id = None
+                job.tts_model = None
+                job.tts_settings = None
+                job.tts_provider_request_id = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def update_job_voice_profile(
+        self, job_id: UUID, voice_profile_id: UUID
+    ) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+            if job is None:
+                return None
+            job.voice_profile_id = voice_profile_id
+            job.error_message = None
+            if job.speech_script and job.status in {
+                JobStatus.FAILED.value,
+                JobStatus.READY_TO_RENDER.value,
+                JobStatus.TTS_READY.value,
+            }:
+                job.status = JobStatus.CONTENT_READY.value
+            for asset in job.media_assets:
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+            job.tts_provider = None
+            job.tts_voice_id = None
+            job.tts_model = None
+            job.tts_settings = None
+            job.tts_provider_request_id = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def update_job_workflow_template(
+        self, job_id: UUID, workflow_template_id: UUID
     ) -> TopicJob | None:
         with self.factory() as session:
             job = session.get(TopicJob, job_id)
             if job is None:
                 return None
-            job.render_profile_id = render_profile_id
+            job.workflow_template_id = workflow_template_id
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def replace_job_audio(
+        self,
+        job_id: UUID,
+        *,
+        object_key: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+    ) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+            if job is None:
+                return None
+            for asset in job.media_assets:
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+            session.add(
+                MediaAsset(
+                    job_id=job.id,
+                    render_attempt_id=None,
+                    kind="audio",
+                    object_key=object_key,
+                    filename=filename,
+                    content_type=content_type,
+                    size_bytes=size_bytes,
+                )
+            )
+            job.status = JobStatus.READY_TO_RENDER.value
+            job.error_message = None
             session.commit()
             return session.scalar(
                 select(TopicJob)
@@ -1401,6 +1591,8 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
         "topic": job.topic,
         "status": job.status,
         "render_profile_id": job.render_profile_id,
+        "voice_profile_id": job.voice_profile_id,
+        "workflow_template_id": job.workflow_template_id,
         "target_duration_seconds": job.target_duration_seconds,
         "error_message": job.error_message,
         "speech_script": job.speech_script,

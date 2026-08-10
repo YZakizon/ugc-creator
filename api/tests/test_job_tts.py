@@ -145,6 +145,59 @@ def test_job_tts_uses_profile_voice_and_persists_render_audio(
         assert (tmp_path / asset.object_key).read_bytes().startswith(b"ID3")
 
 
+def test_job_tts_uses_job_voice_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        profile_voice = VoiceProfile(
+            name="Profile voice", provider="elevenlabs", provider_voice_id="profile"
+        )
+        job_voice = VoiceProfile(
+            name="Job voice", provider="elevenlabs", provider_voice_id="override"
+        )
+        character = Character(name="Elena", slug="override-elena")
+        session.add_all([profile_voice, job_voice, character])
+        session.flush()
+        profile = RenderProfile(
+            name="Profile",
+            character_id=character.id,
+            voice_profile_id=profile_voice.id,
+            renderer_provider="comfyui",
+        )
+        batch = Batch(name="Batch")
+        session.add_all([profile, batch])
+        session.flush()
+        job = TopicJob(
+            batch_id=batch.id,
+            topic="Topic",
+            status=JobStatus.GENERATING_TTS.value,
+            render_profile_id=profile.id,
+            voice_profile_id=job_voice.id,
+            speech_script="Override this voice.",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    monkeypatch.setattr(tts_tasks, "create_database_engine", lambda: engine)
+    monkeypatch.setattr(tts_tasks, "tts_provider", lambda _provider: FakeTTSProvider())
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+
+    tts_tasks.generate_job_tts.run(str(job_id))
+
+    with factory() as session:
+        saved = session.get(TopicJob, job_id)
+        assert saved is not None
+        assert saved.tts_voice_id == "override"
+
+
 def test_stale_paid_tts_claim_requires_manual_retry() -> None:
     engine = create_engine(
         "sqlite://",
