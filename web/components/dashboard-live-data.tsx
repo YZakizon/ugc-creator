@@ -167,7 +167,7 @@ function TopicContents({ topic, contentGenerationReady, speechGenerationReady }:
   const items = contents.data?.items ?? [];
   if (!items.length && contentOffset > 0) return <div className="empty-state compact-empty"><p>Returning to the previous content page…</p></div>;
   return <>
-    <RecentJobs contentGenerationReady={contentGenerationReady} speechGenerationReady={speechGenerationReady} detailed jobsOverride={items} topicNameOverride={topic.name} />
+    <RecentJobs contentGenerationReady={contentGenerationReady} speechGenerationReady={speechGenerationReady} detailed jobsOverride={items} topicNameOverride={topic.name} contentTotal={contents.data?.total} />
     {contents.data && contents.data.total > contentLimit && <nav className="topic-history-pagination" aria-label={`Content history pages for ${topic.name}`}><button className="button button-secondary button-small" type="button" disabled={contentOffset === 0} onClick={() => setContentOffset((current) => Math.max(0, current - contentLimit))}>Previous content</button><span>Content {contentOffset + 1}–{Math.min(contentOffset + items.length, contents.data.total)} of {contents.data.total}</span><button className="button button-secondary button-small" type="button" disabled={contentOffset + contentLimit >= contents.data.total} onClick={() => setContentOffset((current) => current + contentLimit)}>Next content</button></nav>}
   </>;
 }
@@ -208,7 +208,7 @@ function readFileBase64(file: File): Promise<string> {
   });
 }
 
-export function RecentJobs({ contentGenerationReady, speechGenerationReady, detailed = false, jobsOverride, topicNameOverride }: { contentGenerationReady: boolean; speechGenerationReady: boolean; detailed?: boolean; jobsOverride?: Job[]; topicNameOverride?: string }) {
+export function RecentJobs({ contentGenerationReady, speechGenerationReady, detailed = false, jobsOverride, topicNameOverride, contentTotal }: { contentGenerationReady: boolean; speechGenerationReady: boolean; detailed?: boolean; jobsOverride?: Job[]; topicNameOverride?: string; contentTotal?: number }) {
   const queryClient = useQueryClient();
   const [contentTabs, setContentTabs] = useState<Record<string, ContentTab>>({});
   const [generationTabs, setGenerationTabs] = useState<Record<string, GenerationTab>>({});
@@ -409,7 +409,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
             </summary>
             <div className="job-card-details">
               <div className="job-context"><div><span>Content</span><div className="job-name-with-id"><strong>Content {job.content_number}</strong><InlineId label="Content ID" value={job.id} /></div></div><div><span>Topic</span><div className="job-name-with-id"><strong>{batchName}</strong><InlineId label="Topic ID" value={job.batch_id} /></div></div><div><span>Render profile</span><div className="job-name-with-id"><strong>{profileName}</strong>{job.render_profile_id && <InlineId label="Render profile ID" value={job.render_profile_id} />}</div></div><div><span>Content model</span><strong>{job.llm_provider && job.llm_model ? `${job.llm_provider} · ${job.llm_model}` : "Not generated"}</strong></div></div>
-              <div className="content-record-actions"><span>Content created <HumanDate value={job.created_at} /></span><button className="job-media-icon danger" type="button" aria-label={`Delete content ${job.id}`} title={jobsOverride?.length === 1 ? "Delete the topic to remove its only content" : "Delete content and all files"} disabled={ACTIVE_JOB_STATUSES.includes(job.status) || jobsOverride?.length === 1} onClick={() => setPendingContentDelete(job)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div>
+              <div className="content-record-actions"><span>Content created <HumanDate value={job.created_at} /></span><button className="job-media-icon danger" type="button" aria-label={`Delete content ${job.id}`} title={contentTotal === 1 ? "Delete the topic to remove its only content" : "Delete content and all files"} disabled={ACTIVE_JOB_STATUSES.includes(job.status) || contentTotal === 1} onClick={() => setPendingContentDelete(job)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div>
               {failureMessage && <p className="job-error" role="alert">{failureMessage}</p>}
               <section className="job-results job-content-section" aria-label={`Content results for ${job.topic}`}>
                 <div className="job-tabs" role="tablist" aria-label="Generated content">

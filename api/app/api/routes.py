@@ -631,12 +631,11 @@ def delete_topic(
     topic_id: UUID, repo: BatchRepository = Depends(repository)
 ) -> Response:
     try:
-        deleted = repo.delete_topic(topic_id)
+        deleted = repo.delete_topic(topic_id, _delete_object_keys)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if deleted is None:
+    if not deleted:
         raise HTTPException(status_code=404, detail="Topic not found")
-    _delete_object_keys(deleted.object_keys)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -645,12 +644,11 @@ def delete_content(
     content_id: UUID, repo: BatchRepository = Depends(repository)
 ) -> Response:
     try:
-        deleted = repo.delete_content(content_id)
+        deleted = repo.delete_content(content_id, _delete_object_keys)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if deleted is None:
+    if not deleted:
         raise HTTPException(status_code=404, detail="Content not found")
-    _delete_object_keys(deleted.object_keys)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

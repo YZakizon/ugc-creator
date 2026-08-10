@@ -253,6 +253,90 @@ describe("home page", () => {
     expect(requestedOffsets).toContain("20");
   });
 
+  it("allows deleting the only visible content on a later page", async () => {
+    const makeContent = (number: number): Job => ({
+      id: `content-${number}`,
+      batch_id: "topic-1",
+      topic: "Long-running topic",
+      content_number: number,
+      status: "completed",
+      render_profile_id: null,
+      voice_profile_id: null,
+      workflow_template_id: null,
+      target_duration_seconds: 30,
+      error_message: null,
+      speech_script: `Script ${number}`,
+      hook: null,
+      instagram_metadata: null,
+      tiktok_metadata: null,
+      llm_provider: "openai",
+      llm_model: "gpt-test",
+      prompt_version: "ugc-v1",
+      tts_provider: null,
+      tts_voice_id: null,
+      tts_model: null,
+      tts_provider_request_id: null,
+      audio_asset: null,
+      audio_assets: [],
+      created_at: "2026-08-10T00:00:00Z",
+      updated_at: "2026-08-10T00:00:00Z",
+    });
+    let deleted = false;
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      requests.push(`${method} ${url}`);
+      if (url.includes("/topics/topic-1/contents?") && method === "GET") {
+        const offset = new URL(url, "http://testserver").searchParams.get("offset");
+        const items = offset === "20" && !deleted ? [makeContent(21)] : offset === "0" ? [makeContent(1)] : [];
+        return new Response(JSON.stringify({ items, total: deleted ? 20 : 21, limit: 20, offset: Number(offset) }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/contents/content-21") && method === "DELETE") {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes("/topics?")) {
+        return new Response(JSON.stringify({
+          items: [{
+            id: "topic-1",
+            name: "Long-running topic",
+            status: "completed",
+            default_render_profile_id: null,
+            target_duration_seconds: 30,
+            auto_fit_duration: true,
+            content_count: deleted ? 20 : 21,
+            created_at: "2026-08-10T00:00:00Z",
+            updated_at: "2026-08-10T00:00:00Z",
+          }],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("render-attempts") || url.includes("render-nodes") || url.includes("render-profiles") || url.includes("voice-profiles") || url.includes("workflow-templates")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    });
+
+    const { container } = render(<Providers><TopicHistory contentGenerationReady speechGenerationReady /></Providers>);
+    await screen.findByText("Long-running topic");
+    fireEvent.click(container.querySelector(".topic-history-card > summary")!);
+    await screen.findAllByText("Content 1");
+    fireEvent.click(screen.getByRole("button", { name: "Next content" }));
+    await screen.findAllByText("Content 21");
+
+    const contentCard = Array.from(container.querySelectorAll("details.job-card")).find((card) => card.textContent?.includes("Content 21"))!;
+    fireEvent.click(contentCard.querySelector("summary")!);
+    const deleteButton = within(contentCard as HTMLElement).getByRole("button", { name: "Delete content content-21" });
+    expect(deleteButton).toBeEnabled();
+    fireEvent.click(deleteButton);
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete content" }));
+
+    await waitFor(() => expect(requests).toContain("DELETE /api/v1/contents/content-21"));
+  });
+
   it("returns to the prior topic page when a later page becomes empty", async () => {
     let firstPageRequests = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {

@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.main import app
-from app.providers.storage.local import LocalStorageProvider
+from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.repositories import (
     InMemoryBatchRepository,
     InMemoryConfigurationRepository,
@@ -236,7 +236,7 @@ def test_content_numbers_use_high_water_mark_and_topic_defaults() -> None:
     second = batches.create_content(topic.id)
     assert second is not None
     second.status = "content_ready"
-    assert batches.delete_content(second.id)
+    assert batches.delete_content(second.id, lambda _object_keys: None)
 
     third = batches.create_content(topic.id)
 
@@ -324,6 +324,82 @@ async def test_content_and_topic_delete_all_stored_assets(
     assert not (tmp_path / first_key).exists()
     assert not (tmp_path / second_key).exists()
     assert batches.get_batch(topic.id) is None
+
+
+@pytest.mark.asyncio
+async def test_storage_failure_keeps_content_and_topic_history_retryable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    storage = LocalStorageProvider()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    first = topic.jobs[0]
+    second = batches.create_content(topic.id)
+    assert second is not None
+    first_key = f"topics/{topic.id}/contents/{first.id}/audio/first.mp3"
+    second_key = f"topics/{topic.id}/contents/{second.id}/video/second.mp4"
+    storage.put(first_key, b"audio")
+    storage.put(second_key, b"video")
+    first.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=first.id,
+            kind="audio",
+            object_key=first_key,
+            filename="first.mp3",
+            content_type="audio/mpeg",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+    second.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=second.id,
+            kind="video",
+            object_key=second_key,
+            filename="second.mp4",
+            content_type="video/mp4",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+    original_delete = LocalStorageProvider.delete
+
+    def fail_delete(_storage: LocalStorageProvider, _key: str) -> None:
+        raise StorageError("Storage unavailable")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        monkeypatch.setattr(LocalStorageProvider, "delete", fail_delete)
+        failed_content = await client.delete(f"/api/v1/contents/{first.id}")
+        assert failed_content.status_code == 503
+        assert batches.get_job(first.id) is not None
+        assert (tmp_path / first_key).exists()
+
+        monkeypatch.setattr(LocalStorageProvider, "delete", original_delete)
+        deleted_content = await client.delete(f"/api/v1/contents/{first.id}")
+        assert deleted_content.status_code == 204
+
+        monkeypatch.setattr(LocalStorageProvider, "delete", fail_delete)
+        failed_topic = await client.delete(f"/api/v1/topics/{topic.id}")
+        assert failed_topic.status_code == 503
+        assert batches.get_batch(topic.id) is not None
+        assert (tmp_path / second_key).exists()
+
+        monkeypatch.setattr(LocalStorageProvider, "delete", original_delete)
+        deleted_topic = await client.delete(f"/api/v1/topics/{topic.id}")
+
+    assert deleted_topic.status_code == 204
+    assert batches.get_batch(topic.id) is None
+    assert not (tmp_path / first_key).exists()
+    assert not (tmp_path / second_key).exists()
 
 
 @pytest.mark.asyncio
@@ -1180,7 +1256,7 @@ def test_sqlalchemy_topics_are_transactional_and_keep_content_high_water_mark() 
     assert [topic.jobs[0].content_number for topic in topics] == [1, 1]
     second = repository.create_content(topics[0].id)
     assert second is not None
-    assert repository.delete_content(second.id)
+    assert repository.delete_content(second.id, lambda _object_keys: None)
     third = repository.create_content(topics[0].id)
 
     assert third is not None
