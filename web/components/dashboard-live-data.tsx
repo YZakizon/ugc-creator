@@ -31,6 +31,15 @@ export function renderProgressLabel(
   return `${attempt.progress}%`;
 }
 
+export function speechScriptLines(script: string): string[] {
+  return script
+    .replace(/\r\n?/g, "\n")
+    .split(/\n+/)
+    .flatMap((paragraph) => paragraph.match(/[^.!?]+(?:[.!?]+[”"']?|$)/g) ?? [])
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function StatCard({ label, value, hint, icon, tone }: {
   label: string;
   value: number | string;
@@ -171,7 +180,7 @@ export function RecentJobs({ contentGenerationReady, detailed = false }: { conte
                 <h3>Content results</h3>
                 {!hasGeneratedContent && <p className="field-hint">No generated content yet.</p>}
                 {job.hook && <div className="job-result-block"><h4>Hook</h4><p>{job.hook}</p></div>}
-                {job.speech_script && <div className="job-result-block"><h4>Speech script</h4><p className="job-script">{job.speech_script}</p></div>}
+                {job.speech_script && <div className="job-result-block"><h4>Speech script</h4><div className="job-script">{speechScriptLines(job.speech_script).map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div></div>}
                 <JobResult title="Instagram" value={job.instagram_metadata} />
                 <JobResult title="TikTok" value={job.tiktok_metadata} />
               </section>

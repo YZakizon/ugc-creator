@@ -196,7 +196,8 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .job-result-block { min-width: 0; padding: 12px; border: 1px solid #e9e7f0; border-radius: 9px; background: #fff; }
 .job-result-block h4 { margin: 0 0 7px; color: #696a77; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
 .job-result-block p { margin: 0; color: #4f505c; font-size: 13px; line-height: 1.55; }
-.job-result-block .job-script { white-space: pre-wrap; }
+.job-result-block .job-script { display: grid; gap: 8px; }
+.job-result-block .job-script p { margin: 0; }
 .job-result-block pre { max-height: 280px; margin: 0; overflow: auto; color: #555663; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
 .job-card-details > .job-error { margin: 0; color: #b44242; font-size: 13px; }
 .health-panel { min-height: 290px; }
