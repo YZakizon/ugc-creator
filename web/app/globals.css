@@ -265,9 +265,6 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .job-render-status strong { color: #555663; font-size: 12.5px; text-transform: capitalize; }
 .job-render-status > span { color: #6b58cf; font-size: 12px; font-weight: 700; }
 .job-render-status > p, .job-render-status > .job-output-list { grid-column: 1 / -1; }
-.job-deleted-output { display: flex; min-width: 0; grid-column: 1 / -1; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #ebe8f1; border-radius: 7px; background: #f7f6fa; }
-.job-deleted-output > span { min-width: 0; overflow: hidden; color: #858591; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.job-deleted-output > b { margin-left: auto; padding: 3px 7px; border-radius: 999px; color: #8b6670; background: #eee5e8; font-size: 10px; letter-spacing: .03em; text-transform: uppercase; }
 .job-results > h3 { margin: 0; color: #434450; font-size: 14px; }
 .job-result-block { min-width: 0; padding: 12px; border: 1px solid #e9e7f0; border-radius: 9px; background: #fff; }
 .job-result-block h4 { margin: 0 0 7px; color: #696a77; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }

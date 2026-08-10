@@ -587,8 +587,8 @@ describe("home page", () => {
     expect(within(selectors).getByRole("combobox", { name: "Render profile" })).toBeInTheDocument();
     expect(within(selectors).getByRole("combobox", { name: "Workflow" })).toBeInTheDocument();
     expect(jobCard.getByRole("button", { name: "Generate New Video" })).toHaveClass("job-generate-video-action");
-    expect(jobCard.getByText("earlier-video.mp4")).toBeVisible();
-    expect(jobCard.getByText("Deleted")).toBeVisible();
+    expect(jobCard.queryByText("earlier-video.mp4")).not.toBeInTheDocument();
+    expect(jobCard.queryByText("Deleted")).not.toBeInTheDocument();
     fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
     fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));
