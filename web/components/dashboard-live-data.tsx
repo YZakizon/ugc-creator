@@ -370,7 +370,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
               title={speechGenerationReady ? undefined : "Set ELEVENLABS_API_KEY in the root .env file and restart Docker"}
               onClick={() => speechMutation.mutate(job.id)}
             >
-              {speechMutation.isPending && speechMutation.variables === job.id ? "Queuing…" : speechGenerationReady ? failedSpeech ? "Retry speech" : job.audio_asset ? "Generate audio again" : "Generate speech" : "ElevenLabs setup required"}
+              {speechMutation.isPending && speechMutation.variables === job.id ? "Queuing…" : speechGenerationReady ? failedSpeech ? "Retry speech" : job.audio_asset ? "Generate audio" : "Generate speech" : "ElevenLabs setup required"}
             </button>
           )}
         </>;
