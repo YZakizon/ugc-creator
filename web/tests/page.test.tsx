@@ -197,6 +197,12 @@ describe("home page", () => {
       if (url.includes("render-profiles")) {
         return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Elena LTX", is_active: true }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (url.includes("workflow-templates")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("voice-profiles")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       return new Response(JSON.stringify({
         in_progress: 0,
         ready_to_render: 0,
@@ -239,7 +245,7 @@ describe("home page", () => {
 
     const { container } = render(<Providers><RecentJobs contentGenerationReady speechGenerationReady detailed /></Providers>);
 
-    expect(await screen.findByText("A useful reminder")).toBeInTheDocument();
+    expect((await screen.findAllByText("A useful reminder")).length).toBeGreaterThan(0);
     expect(await screen.findAllByText("August launch")).not.toHaveLength(0);
     expect(screen.getAllByText("Elena LTX")).not.toHaveLength(0);
     const card = container.querySelector("details.job-card");
@@ -251,7 +257,12 @@ describe("home page", () => {
     expect(jobCard.getByRole("tab", { name: "Hook + Speech Script" })).toHaveAttribute("aria-selected", "true");
     fireEvent.click(jobCard.getByRole("tab", { name: "Instagram" }));
     expect(jobCard.getByText(/Instagram title/)).toBeVisible();
-    fireEvent.click(jobCard.getByLabelText("Reveal technical IDs"));
+    expect(jobCard.queryByText("Technical IDs")).not.toBeInTheDocument();
+    expect(jobCard.queryByText("job-1")).not.toBeInTheDocument();
+    expect(jobCard.getByRole("button", { name: "Show Batch ID" })).toBeInTheDocument();
+    expect(jobCard.getByRole("button", { name: "Show Render profile ID" })).toBeInTheDocument();
+    fireEvent.click(jobCard.getByRole("button", { name: "Show Job ID" }));
+    expect(jobCard.getByText("job-1")).toBeVisible();
     fireEvent.click(jobCard.getByRole("button", { name: "Copy Job ID" }));
     expect(writeText).toHaveBeenCalledWith("job-1");
     expect(jobCard.getByRole("link", { name: "Download generated speech" })).toHaveAttribute(
@@ -277,6 +288,12 @@ describe("home page", () => {
       if (url.includes("render-profiles")) {
         return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Shelf", is_active: true }, { id: "profile-2", name: "Studio", is_active: true }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
+      if (url.includes("workflow-templates")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("voice-profiles")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       const job = { id: "job-1", batch_id: "batch-1", topic: "Change scene", status: "content_ready", render_profile_id: url.includes("render-profile") ? "profile-2" : "profile-1", target_duration_seconds: 30, error_message: null, speech_script: "Ready script.", hook: "Hook", instagram_metadata: null, tiktok_metadata: null, llm_provider: "openai", llm_model: "gpt-test", prompt_version: "ugc-v1", tts_provider: null, tts_voice_id: null, tts_model: null, tts_provider_request_id: null, audio_asset: null, created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:01:00Z" };
       if (url.includes("/render-profile")) {
         updateBody = String(init?.body);
@@ -286,7 +303,7 @@ describe("home page", () => {
     });
 
     const { container } = render(<Providers><RecentJobs contentGenerationReady speechGenerationReady detailed /></Providers>);
-    await screen.findByText("Change scene");
+    expect((await screen.findAllByText("Change scene")).length).toBeGreaterThan(0);
     const card = container.querySelector("details.job-card")!;
     fireEvent.click(card.querySelector("summary")!);
     const jobCard = within(card as HTMLElement);
