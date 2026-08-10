@@ -203,7 +203,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
                 {job.speech_script && <div className="job-result-block"><h4>Speech script</h4><div className="job-script">{speechScriptLines(job.speech_script).map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div></div>}
                 <JobResult title="Instagram" value={job.instagram_metadata} />
                 <JobResult title="TikTok" value={job.tiktok_metadata} />
-                {job.audio_asset && <div className="job-result-block"><h4>Generated speech</h4><audio controls preload="none" src={job.audio_asset.download_url}>Your browser does not support audio playback.</audio><a className="button button-secondary" href={job.audio_asset.download_url} download={job.audio_asset.filename}>Download audio</a></div>}
+                {job.audio_asset && <div className="job-result-block"><h4>Generated speech</h4><audio controls preload="none" src={job.audio_asset.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={job.audio_asset.download_url} download={job.audio_asset.filename} aria-label="Download generated speech" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></div>}
               </section>
               <section className="job-results" aria-label={`Render results for ${job.topic}`}>
                 <h3>Render results</h3>

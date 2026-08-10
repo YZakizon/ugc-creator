@@ -53,8 +53,7 @@ def view_output() -> Response:
     return Response(b"fake-mp4-output", media_type="video/mp4")
 
 
-@app.post("/upload/{input_type}")
-async def upload_input(input_type: str, request: Request) -> dict[str, str]:
+@app.post("/upload/image")
+async def upload_input(request: Request) -> dict[str, str]:
     await request.body()
-    filename = "source.png" if input_type == "image" else "voice.wav"
-    return {"name": f"{input_type}/{filename}"}
+    return {"name": "uploaded-input"}

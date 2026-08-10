@@ -209,6 +209,20 @@ describe("home page", () => {
           llm_provider: "openai",
           llm_model: "gpt-test",
           prompt_version: "ugc-v1",
+          tts_provider: "elevenlabs",
+          tts_voice_id: "voice-1",
+          tts_model: "eleven_multilingual_v2",
+          tts_provider_request_id: "tts-request-1",
+          audio_asset: {
+            id: "audio-1",
+            job_id: "job-1",
+            kind: "audio",
+            filename: "speech.mp3",
+            content_type: "audio/mpeg",
+            size_bytes: 512,
+            download_url: "/api/v1/assets/audio-1/download",
+            created_at: "2026-08-10T00:00:30Z",
+          },
           created_at: "2026-08-10T00:00:00Z",
           updated_at: "2026-08-10T00:01:00Z",
         }],
@@ -222,6 +236,10 @@ describe("home page", () => {
     expect(card).not.toHaveAttribute("open");
     expect(screen.getByText("This is the generated speech.")).toBeInTheDocument();
     expect(screen.getByText(/Instagram title/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download generated speech" })).toHaveAttribute(
+      "href",
+      "/api/v1/assets/audio-1/download",
+    );
     expect(screen.getByRole("link", { name: "Download finished.mp4" })).toHaveAttribute(
       "href",
       "/api/v1/assets/asset-1/download",
