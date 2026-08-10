@@ -49,6 +49,12 @@ class TopicJob(TimestampMixin, Base):
         String(40), default=JobStatus.DRAFT.value, nullable=False
     )
     render_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    voice_profile_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("voice_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    workflow_template_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("workflow_templates.id", ondelete="SET NULL"), nullable=True
+    )
     target_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     speech_script: Mapped[str | None] = mapped_column(Text, nullable=True)

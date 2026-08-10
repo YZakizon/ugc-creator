@@ -67,6 +67,8 @@ class JobRead(BaseModel):
     topic: str
     status: JobStatus
     render_profile_id: UUID | None
+    voice_profile_id: UUID | None
+    workflow_template_id: UUID | None
     target_duration_seconds: int
     error_message: str | None
     speech_script: str | None
@@ -87,6 +89,20 @@ class JobRead(BaseModel):
 
 class JobRenderProfileUpdate(BaseModel):
     render_profile_id: UUID
+
+
+class JobVoiceProfileUpdate(BaseModel):
+    voice_profile_id: UUID
+
+
+class JobWorkflowTemplateUpdate(BaseModel):
+    workflow_template_id: UUID
+
+
+class JobAudioUpload(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=35_000_000)
+    content_type: str = Field(default="audio/mpeg", min_length=1, max_length=100)
 
 
 class BatchRead(BaseModel):

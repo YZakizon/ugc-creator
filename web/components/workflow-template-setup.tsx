@@ -57,6 +57,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
   const [mediaUploadPending, setMediaUploadPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: ToastVariant } | null>(null);
+
   const currentDefaultImage = selectedImage ?? mediaAssets.source_image;
   const currentDefaultAudio = selectedAudio ?? mediaAssets.audio;
   const mutation = useMutation<WorkflowTemplate, Error, { templateId: string | null; payload: WorkflowTemplateInput }>({
@@ -413,6 +414,14 @@ export function SavedWorkflowTemplates() {
   const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: ToastVariant } | null>(null);
 
+  useEffect(() => {
+    const templateId = window.location.hash.match(/^#workflow-(.+)$/)?.[1];
+    const template = templatesQuery.data?.items.find((item) => item.id === templateId);
+    if (!template) return;
+    setExpandedTemplateId(template.logical_id);
+    window.setTimeout(() => document.getElementById(`workflow-${template.id}`)?.scrollIntoView({ block: "center" }), 0);
+  }, [templatesQuery.data]);
+
   function deleteTemplate(template: WorkflowTemplate) {
     setPendingDelete(template);
   }
@@ -429,7 +438,7 @@ export function SavedWorkflowTemplates() {
       {!templatesQuery.isLoading && !templatesQuery.isError && templatesQuery.data?.items.length === 0 && <p className="field-hint">No workflows yet. <Link className="text-link" href="/workflows#workflow-editor">Import workflow</Link>.</p>}
       {templatesQuery.data?.items.map((template) => {
         const isExpanded = expandedTemplateId === template.logical_id;
-        return <article className={`saved-workflow saved-workflow-collapsible${isExpanded ? " expanded" : ""}`} key={template.logical_id}>
+        return <article id={`workflow-${template.id}`} className={`saved-workflow saved-workflow-collapsible${isExpanded ? " expanded" : ""}`} key={template.logical_id}>
           <div className="saved-workflow-header">
             <button className="saved-workflow-toggle" type="button" aria-label={`${isExpanded ? "Hide" : "Show"} ${template.name} details`} aria-expanded={isExpanded} aria-controls={`workflow-details-${template.logical_id}`} onClick={() => setExpandedTemplateId(isExpanded ? null : template.logical_id)}>
               <span className="profile-list-icon">⌘</span>

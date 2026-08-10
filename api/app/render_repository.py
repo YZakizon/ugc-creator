@@ -96,12 +96,17 @@ class RenderExecutionRepository:
             if job.render_profile_id is None:
                 raise ValueError("Job has no render profile")
             profile = session.get(RenderProfile, job.render_profile_id)
-            if profile is None or profile.workflow_template_id is None:
-                raise ValueError("Render profile has no workflow template")
+            if profile is None:
+                raise ValueError("Render profile is unavailable")
+            workflow_template_id = (
+                job.workflow_template_id or profile.workflow_template_id
+            )
+            if workflow_template_id is None:
+                raise ValueError("Job has no workflow template")
             workflow = session.scalar(
                 select(WorkflowTemplate)
                 .options(selectinload(WorkflowTemplate.bindings))
-                .where(WorkflowTemplate.id == profile.workflow_template_id)
+                .where(WorkflowTemplate.id == workflow_template_id)
             )
             if workflow is None:
                 raise ValueError("Render profile workflow template is unavailable")
@@ -131,7 +136,7 @@ class RenderExecutionRepository:
                 job_id=job.id,
                 render_profile_id=profile.id,
                 render_node_id=node.id,
-                workflow_template_id=profile.workflow_template_id,
+                workflow_template_id=workflow_template_id,
                 provider=node.provider,
                 client_id=f"ugc-creator-{attempt_id}",
                 status="queued",
@@ -468,3 +473,30 @@ class RenderExecutionRepository:
     def get_asset(self, asset_id: UUID) -> MediaAsset | None:
         with self.factory() as session:
             return session.get(MediaAsset, asset_id)
+
+    def delete_video_asset(self, asset_id: UUID) -> bool:
+        with self.factory() as session:
+            asset = session.scalar(
+                select(MediaAsset)
+                .options(selectinload(MediaAsset.render_attempt))
+                .where(MediaAsset.id == asset_id)
+            )
+            if asset is None:
+                return False
+            if asset.kind != "video" or asset.render_attempt is None:
+                raise ValueError("Only generated video assets can be deleted")
+            if asset.render_attempt.status != "completed":
+                raise ValueError("Video cannot be deleted before rendering completes")
+            job = session.get(TopicJob, asset.job_id)
+            session.delete(asset)
+            session.flush()
+            remaining = session.scalar(
+                select(MediaAsset.id)
+                .where(MediaAsset.job_id == asset.job_id, MediaAsset.kind == "video")
+                .limit(1)
+            )
+            if job is not None and remaining is None:
+                job.status = JobStatus.READY_TO_RENDER.value
+                job.error_message = None
+            session.commit()
+            return True

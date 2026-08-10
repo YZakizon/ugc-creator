@@ -357,6 +357,79 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
     assert completed.error_message is None
     assert len(completed.assets) == 1
     assert completed.assets[0].object_key == "jobs/video.mp4"
+    assert repo.delete_video_asset(completed.assets[0].id)
+    with factory() as session:
+        reset_job = session.get(TopicJob, job_id)
+        assert reset_job is not None
+        assert reset_job.status == "ready_to_render"
+
+
+def test_job_workflow_override_is_snapshotted_for_render() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        voice = VoiceProfile(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice"
+        )
+        character = Character(name="Elena", slug="workflow-override")
+        default_workflow = WorkflowTemplate(
+            name="Default",
+            renderer_provider="comfyui",
+            workflow_json={"1": {"class_type": "Text", "inputs": {"text": "default"}}},
+            checksum="default",
+        )
+        override_workflow = WorkflowTemplate(
+            name="Override",
+            renderer_provider="comfyui",
+            workflow_json={"2": {"class_type": "Text", "inputs": {"text": "override"}}},
+            checksum="override",
+        )
+        session.add_all([voice, character, default_workflow, override_workflow])
+        session.flush()
+        profile = RenderProfile(
+            name="Profile",
+            character_id=character.id,
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+            workflow_template_id=default_workflow.id,
+        )
+        batch = Batch(name="Batch")
+        session.add_all([profile, batch])
+        session.flush()
+        job = TopicJob(
+            batch_id=batch.id,
+            topic="Topic",
+            render_profile_id=profile.id,
+            workflow_template_id=override_workflow.id,
+        )
+        job.media_assets = [
+            MediaAsset(
+                kind="audio",
+                object_key="audio.mp3",
+                filename="audio.mp3",
+                content_type="audio/mpeg",
+                size_bytes=5,
+            )
+        ]
+        session.add(job)
+        session.commit()
+        job_id = job.id
+        override_id = override_workflow.id
+
+    repo = RenderExecutionRepository(factory)
+    node = repo.create_node(
+        RenderNodeCreate(name="Local", base_url="http://comfyui:8188")
+    )
+    attempt = repo.queue_attempt(job_id, node.id)
+
+    assert attempt.workflow_template_id == override_id
+    assert attempt.workflow_snapshot == {
+        "2": {"class_type": "Text", "inputs": {"text": "override"}}
+    }
 
 
 def test_render_submission_claim_allows_only_one_concurrent_worker(tmp_path) -> None:

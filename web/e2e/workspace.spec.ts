@@ -131,9 +131,11 @@ test.describe("workspace customer journeys", () => {
     await page.getByLabel("Profile name").fill("Elena Shelf");
     await page.getByLabel("Character").fill("Elena");
     const voiceOption = page.getByLabel("Voice profile").locator("option").filter({ hasText: "Elena voice" });
-    await page.getByLabel("Voice profile").selectOption(await voiceOption.getAttribute("value") ?? "");
+    const voiceProfileId = await voiceOption.getAttribute("value") ?? "";
+    await page.getByLabel("Voice profile").selectOption(voiceProfileId);
     const workflowOption = page.getByLabel("Workflow template").locator("option").filter({ hasText: "Shelf workflow" });
-    await page.getByLabel("Workflow template").selectOption(await workflowOption.getAttribute("value") ?? "");
+    const workflowTemplateId = await workflowOption.getAttribute("value") ?? "";
+    await page.getByLabel("Workflow template").selectOption(workflowTemplateId);
     await page.getByRole("button", { name: "Create profile" }).click();
     await expect(page.getByText("Render profile created successfully.")).toBeVisible();
 
@@ -176,6 +178,8 @@ test.describe("workspace customer journeys", () => {
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
 
     await firstJob.locator(".job-card-summary").click();
+    await expect(firstJob.getByRole("combobox", { name: "Voice profile", exact: true })).toHaveValue(voiceProfileId);
+    await expect(firstJob.getByRole("link", { name: "Open voice profile details" })).toHaveAttribute("href", `/voice-profiles#voice-profile-${voiceProfileId}`);
     const jobSpeechResponse = page.waitForResponse((response) => response.url().includes("generate-tts") && response.request().method() === "POST");
     await firstJob.getByRole("button", { name: "Generate speech" }).click();
     expect((await jobSpeechResponse).status()).toBe(202);
@@ -188,6 +192,10 @@ test.describe("workspace customer journeys", () => {
     await firstJob.locator(".job-card-summary").click();
     await expect(firstJob.getByRole("link", { name: "Download generated speech" })).toBeVisible();
     await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
+    await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toHaveValue(workflowTemplateId);
+    await expect(firstJob.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", `/workflows#workflow-${workflowTemplateId}`);
+    await expect(firstJob.locator(".job-render-audio").getByText(/speech-.*\.mp3/)).toBeVisible();
+    await expect(firstJob.getByText("Upload different audio")).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,
@@ -197,11 +205,21 @@ test.describe("workspace customer journeys", () => {
       timeout: 30_000,
       intervals: [1000, 2000],
     }).toContain("completed");
+    await expect(firstJob.getByRole("button", { name: /Preview .*\.mp4/ })).toBeVisible();
+    await expect(firstJob.getByRole("link", { name: /Download .*\.mp4/ })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: /Delete .*\.mp4/ })).toBeVisible();
 
     await page.getByRole("tab", { name: "Library" }).click();
-    await expect(page.getByText("ugc-preview.mp4", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText("ugc-preview.mp4", { exact: true })).toBeVisible();
     const videoDownload = page.getByRole("link", { name: "Download video" }).first();
     const videoResponse = await page.request.get(await videoDownload.getAttribute("href") ?? "");
     expect(videoResponse.status()).toBe(200);
+
+    await page.getByRole("tab", { name: "Jobs" }).click();
+    const deleteResponse = page.waitForResponse((response) => response.url().includes("/api/v1/assets/") && response.request().method() === "DELETE");
+    await firstJob.getByRole("button", { name: "Delete ugc-preview.mp4" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    expect((await deleteResponse).status()).toBe(204);
+    await expect(firstJob.getByText("No output files yet.")).toBeVisible();
   });
 });

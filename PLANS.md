@@ -1770,6 +1770,19 @@ Append decisions here as implementation clarifies unknowns.
 - Render profile creation uses one transactional setup endpoint so a failed
   setup cannot leave a voice profile or character orphaned.
 
+## 40.6 Per-job generation selections
+
+- A TopicJob may select a VoiceProfile and WorkflowTemplate independently of its
+  RenderProfile. Null selections inherit the profile defaults; explicit selections
+  drive the next TTS or render attempt.
+- Render attempts continue to snapshot the selected workflow. Changing a voice or
+  render profile archives the current speech asset and returns generated content to
+  the speech stage so audio from one voice is never mislabeled as another.
+- User-uploaded render audio is stored as a job MediaAsset and replaces the active
+  audio input without mutating the workflow template.
+- Deleting a completed video removes its MediaAsset and returns a job with no other
+  video output to `ready_to_render`; the completed RenderAttempt remains as history.
+
 Format:
 
 ```text

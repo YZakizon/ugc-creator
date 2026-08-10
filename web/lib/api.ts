@@ -20,6 +20,8 @@ export type Job = {
   topic: string;
   status: JobStatus;
   render_profile_id: string | null;
+  voice_profile_id: string | null;
+  workflow_template_id: string | null;
   target_duration_seconds: number;
   error_message: string | null;
   speech_script: string | null;
@@ -273,6 +275,35 @@ export function updateJobRenderProfile(jobId: string, renderProfileId: string): 
     method: "PATCH",
     body: JSON.stringify({ render_profile_id: renderProfileId }),
   });
+}
+
+export function updateJobVoiceProfile(jobId: string, voiceProfileId: string): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/voice-profile`, {
+    method: "PATCH",
+    body: JSON.stringify({ voice_profile_id: voiceProfileId }),
+  });
+}
+
+export function updateJobWorkflowTemplate(jobId: string, workflowTemplateId: string): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/workflow-template`, {
+    method: "PATCH",
+    body: JSON.stringify({ workflow_template_id: workflowTemplateId }),
+  });
+}
+
+export function uploadJobAudio(jobId: string, input: {
+  filename: string;
+  content_base64: string;
+  content_type: string;
+}): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/audio`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteMediaAsset(assetId: string): Promise<void> {
+  return request<void>(`/api/v1/assets/${assetId}`, { method: "DELETE" });
 }
 
 export function generateJobContent(jobId: string): Promise<Job> {

@@ -1,11 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
-import { generateJobContent, generateJobSpeech, getBatches, getDashboardSummary, getRenderAttempts, getRenderNodes, getRenderProfiles, queueJobRender, updateJobRenderProfile } from "@/lib/api";
-import type { Job, RenderAttempt } from "@/lib/api";
+import { ConfirmDialog } from "@/components/feedback";
+import { deleteMediaAsset, generateJobContent, generateJobSpeech, getBatches, getDashboardSummary, getRenderAttempts, getRenderNodes, getRenderProfiles, getVoiceProfiles, getWorkflowTemplates, queueJobRender, updateJobRenderProfile, updateJobVoiceProfile, updateJobWorkflowTemplate, uploadJobAudio } from "@/lib/api";
+import type { Job, MediaAsset, RenderAttempt } from "@/lib/api";
 
 export function failedJobRetryKind(
   job: Pick<Job, "status" | "speech_script">,
@@ -111,11 +113,28 @@ function InlineId({ label, value }: { label: string; value: string }) {
 type ContentTab = "script" | "instagram" | "tiktok";
 type GenerationTab = "speech" | "render";
 
+function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const encoded = typeof reader.result === "string" ? reader.result.split(",", 2)[1] : null;
+      if (encoded) resolve(encoded);
+      else reject(new Error("The audio file could not be encoded."));
+    };
+    reader.onerror = () => reject(new Error("The audio file could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function RecentJobs({ contentGenerationReady, speechGenerationReady, detailed = false }: { contentGenerationReady: boolean; speechGenerationReady: boolean; detailed?: boolean }) {
   const queryClient = useQueryClient();
   const [contentTabs, setContentTabs] = useState<Record<string, ContentTab>>({});
   const [generationTabs, setGenerationTabs] = useState<Record<string, GenerationTab>>({});
   const [profileSelections, setProfileSelections] = useState<Record<string, string>>({});
+  const [voiceSelections, setVoiceSelections] = useState<Record<string, string>>({});
+  const [workflowSelections, setWorkflowSelections] = useState<Record<string, string>>({});
+  const [previewVideoIds, setPreviewVideoIds] = useState<Record<string, boolean>>({});
+  const [pendingVideoDelete, setPendingVideoDelete] = useState<MediaAsset | null>(null);
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-summary"],
     queryFn: getDashboardSummary,
@@ -125,6 +144,8 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
   const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
   const batches = useQuery({ queryKey: ["batches"], queryFn: getBatches, enabled: detailed });
   const profiles = useQuery({ queryKey: ["render-profiles"], queryFn: getRenderProfiles, enabled: detailed });
+  const voices = useQuery({ queryKey: ["voice-profiles"], queryFn: getVoiceProfiles, enabled: detailed });
+  const workflows = useQuery({ queryKey: ["workflow-templates"], queryFn: getWorkflowTemplates, enabled: detailed });
   const contentMutation = useMutation({
     mutationFn: generateJobContent,
     onSuccess: () => {
@@ -149,6 +170,30 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["batches"] });
+    },
+  });
+  const voiceMutation = useMutation({
+    mutationFn: ({ jobId, voiceProfileId }: { jobId: string; voiceProfileId: string }) => updateJobVoiceProfile(jobId, voiceProfileId),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
+  });
+  const workflowMutation = useMutation({
+    mutationFn: ({ jobId, workflowTemplateId }: { jobId: string; workflowTemplateId: string }) => updateJobWorkflowTemplate(jobId, workflowTemplateId),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
+  });
+  const audioMutation = useMutation({
+    mutationFn: async ({ jobId, file }: { jobId: string; file: File }) => uploadJobAudio(jobId, {
+      filename: file.name,
+      content_base64: await readFileBase64(file),
+      content_type: file.type || "audio/mpeg",
+    }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
+  });
+  const videoDeleteMutation = useMutation({
+    mutationFn: deleteMediaAsset,
+    onSuccess: () => {
+      setPendingVideoDelete(null);
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["render-attempts"] });
     },
   });
   const jobs = data?.recent_jobs ?? [];
@@ -222,6 +267,14 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
           const selectedProfileId = profileSelections[job.id] ?? job.render_profile_id ?? "";
           const profileChanged = selectedProfileId !== (job.render_profile_id ?? "");
           const profileLocked = ["queued", "submitting_render", "rendering", "downloading_output", "completed"].includes(job.status);
+          const effectiveVoiceId = job.voice_profile_id ?? profile?.voice_profile_id ?? "";
+          const selectedVoiceId = voiceSelections[job.id] ?? effectiveVoiceId;
+          const voiceChanged = selectedVoiceId !== effectiveVoiceId;
+          const voiceLocked = ["generating_tts", "queued", "submitting_render", "rendering", "downloading_output", "completed"].includes(job.status);
+          const effectiveWorkflowId = job.workflow_template_id ?? profile?.workflow_template_id ?? "";
+          const selectedWorkflowId = workflowSelections[job.id] ?? effectiveWorkflowId;
+          const workflowChanged = selectedWorkflowId !== effectiveWorkflowId;
+          const selectedWorkflow = workflows.data?.items?.find((item) => item.id === selectedWorkflowId);
           return <details className="job-card" key={job.id}>
             <summary className="job-card-summary">
               <span className="job-status-dot" />
@@ -246,8 +299,20 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
               </section>
               <section className="job-results job-generation-section" aria-label={`Generation steps for ${job.topic}`}>
                 <div className="job-tabs generation-tabs" role="tablist" aria-label="Generation steps"><button type="button" role="tab" aria-selected={generationTab === "speech"} className={generationTab === "speech" ? "active" : ""} onClick={() => setGenerationTabs((current) => ({ ...current, [job.id]: "speech" }))}>Generate speech</button><button type="button" role="tab" aria-selected={generationTab === "render"} className={generationTab === "render" ? "active" : ""} onClick={() => setGenerationTabs((current) => ({ ...current, [job.id]: "render" }))}>Render ComfyUI</button></div>
-                <div className="job-generation-panel" role="tabpanel" hidden={generationTab !== "speech"}><p className="field-hint">Create ElevenLabs speech from the generated script.</p>{speechAction}{job.audio_asset && <div className="job-audio-result"><audio controls preload="none" src={job.audio_asset.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={job.audio_asset.download_url} download={job.audio_asset.filename} aria-label="Download generated speech" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></div>}</div>
-                <div className="job-generation-panel" role="tabpanel" hidden={generationTab !== "render"}><label className="job-profile-select"><span>Render profile</span><select value={selectedProfileId} disabled={profileLocked || profiles.isLoading || profileMutation.isPending} onChange={(event) => setProfileSelections((current) => ({ ...current, [job.id]: event.target.value }))}><option value="" disabled>Select a render profile</option>{(profiles.data?.items ?? []).filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{profileChanged && <button className="job-action" type="button" disabled={!selectedProfileId || profileMutation.isPending} onClick={() => profileMutation.mutate({ jobId: job.id, profileId: selectedProfileId })}>{profileMutation.isPending ? "Saving…" : "Save render profile"}</button>}{profileLocked && <p className="field-hint">The render profile is locked while this job is active or completed.</p>}{renderAction}{!attempt && <p className="field-hint">No render attempt yet.</p>}{attempt && <div className="job-render-status"><strong>{attempt.provider} · {attempt.status.replaceAll("_", " ")}</strong><span>{renderProgressLabel(attempt)}</span><div className="job-render-identifiers"><InlineId label="Render attempt ID" value={attempt.id} />{attempt.external_job_id && <InlineId label="ComfyUI prompt ID" value={attempt.external_job_id} />}</div>{attempt.error_message && <p className="job-error" role="alert">{attempt.error_message}</p>}{attempt.assets.length > 0 ? <div className="job-output-list">{attempt.assets.map((asset) => <a className="button button-secondary" href={asset.download_url} download={asset.filename} key={asset.id}>Download {asset.filename}</a>)}</div> : <p className="field-hint">No output files yet.</p>}</div>}</div>
+                <div className="job-generation-panel" role="tabpanel" hidden={generationTab !== "speech"}>
+                  <div className="job-generation-selector"><label><span>Voice profile</span><select value={selectedVoiceId} disabled={voiceLocked || voices.isLoading || voiceMutation.isPending} onChange={(event) => setVoiceSelections((current) => ({ ...current, [job.id]: event.target.value }))}><option value="" disabled>Select a voice profile</option>{voices.data?.items?.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedVoiceId && <Link className="job-detail-link" href={`/voice-profiles#voice-profile-${selectedVoiceId}`} aria-label="Open voice profile details" title="Open voice profile details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" /></svg></Link>}</div>
+                  {voiceChanged && <button className="job-action" type="button" disabled={!selectedVoiceId || voiceMutation.isPending} onClick={() => voiceMutation.mutate({ jobId: job.id, voiceProfileId: selectedVoiceId })}>{voiceMutation.isPending ? "Saving…" : "Save voice profile"}</button>}
+                  {voiceLocked && <p className="field-hint">The voice profile is locked while speech or video is active or completed.</p>}
+                  <p className="field-hint">Create ElevenLabs speech from the generated script.</p>{speechAction}{job.audio_asset && <div className="job-audio-result"><span>{job.audio_asset.filename}</span><audio controls preload="none" src={`${job.audio_asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={job.audio_asset.download_url} download={job.audio_asset.filename} aria-label="Download generated speech" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></div>}
+                </div>
+                <div className="job-generation-panel" role="tabpanel" hidden={generationTab !== "render"}>
+                  <div className="job-generation-selector"><label><span>Render profile</span><select value={selectedProfileId} disabled={profileLocked || profiles.isLoading || profileMutation.isPending} onChange={(event) => setProfileSelections((current) => ({ ...current, [job.id]: event.target.value }))}><option value="" disabled>Select a render profile</option>{(profiles.data?.items ?? []).filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div>
+                  {profileChanged && <button className="job-action" type="button" disabled={!selectedProfileId || profileMutation.isPending} onClick={() => profileMutation.mutate({ jobId: job.id, profileId: selectedProfileId })}>{profileMutation.isPending ? "Saving…" : "Save render profile"}</button>}
+                  <div className="job-generation-selector"><label><span>Workflow</span><select value={selectedWorkflowId} disabled={profileLocked || workflows.isLoading || workflowMutation.isPending} onChange={(event) => setWorkflowSelections((current) => ({ ...current, [job.id]: event.target.value }))}><option value="" disabled>Select a workflow</option>{workflows.data?.items?.filter((item) => item.renderer_provider === "comfyui").map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{selectedWorkflow && <Link className="job-detail-link" href={`/workflows#workflow-${selectedWorkflow.id}`} aria-label="Open workflow details" title="Open workflow details"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M19 14v5H5V5h5" /></svg></Link>}</div>
+                  {workflowChanged && <button className="job-action" type="button" disabled={!selectedWorkflowId || workflowMutation.isPending} onClick={() => workflowMutation.mutate({ jobId: job.id, workflowTemplateId: selectedWorkflowId })}>{workflowMutation.isPending ? "Saving…" : "Save workflow"}</button>}
+                  <div className="job-render-audio"><strong>Render audio</strong>{job.audio_asset ? <><span>{job.audio_asset.filename}</span><audio controls preload="metadata" src={`${job.audio_asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><a className="job-media-icon" href={job.audio_asset.download_url} download={job.audio_asset.filename} aria-label="Download render audio" title="Download render audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></> : <span>No speech file selected.</span>}<label className="job-upload-audio"><input type="file" accept="audio/*" disabled={profileLocked || audioMutation.isPending} onChange={(event) => { const file = event.target.files?.[0]; if (file) audioMutation.mutate({ jobId: job.id, file }); event.target.value = ""; }} /><span>{audioMutation.isPending && audioMutation.variables?.jobId === job.id ? "Uploading…" : "Upload different audio"}</span></label></div>
+                  {profileLocked && <p className="field-hint">Render settings are locked while this job is active or completed.</p>}{renderAction}{!attempt && <p className="field-hint">No render attempt yet.</p>}{attempt && <div className="job-render-status"><strong>{attempt.provider} · {attempt.status.replaceAll("_", " ")}</strong><span>{renderProgressLabel(attempt)}</span><div className="job-render-identifiers"><InlineId label="Render attempt ID" value={attempt.id} />{attempt.external_job_id && <InlineId label="ComfyUI prompt ID" value={attempt.external_job_id} />}</div>{attempt.error_message && <p className="job-error" role="alert">{attempt.error_message}</p>}{attempt.assets.length > 0 ? <div className="job-output-list">{attempt.assets.map((asset) => <div className="job-video-output" key={asset.id}><span>{asset.filename}</span><div className="job-video-actions"><button className="job-media-icon" type="button" aria-label={`Preview ${asset.filename}`} title="Preview video" onClick={() => setPreviewVideoIds((current) => ({ ...current, [asset.id]: !current[asset.id] }))}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7Z" /></svg></button><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" onClick={() => setPendingVideoDelete(asset)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div>{previewVideoIds[asset.id] && <video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video>}</div>)}</div> : <p className="field-hint">No output files yet.</p>}</div>}
+                </div>
               </section>
             </div>
           </details>;
@@ -271,7 +336,12 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
       {speechMutation.isError && <p className="form-error" role="alert">{speechMutation.error.message}</p>}
       {renderMutation.isError && <p className="form-error" role="alert">{renderMutation.error.message}</p>}
       {profileMutation.isError && <p className="form-error" role="alert">{profileMutation.error.message}</p>}
+      {voiceMutation.isError && <p className="form-error" role="alert">{voiceMutation.error.message}</p>}
+      {workflowMutation.isError && <p className="form-error" role="alert">{workflowMutation.error.message}</p>}
+      {audioMutation.isError && <p className="form-error" role="alert">{audioMutation.error.message}</p>}
+      {videoDeleteMutation.isError && <p className="form-error" role="alert">{videoDeleteMutation.error.message}</p>}
       {!nodes.isLoading && nodes.data?.items.length === 0 && <p className="field-hint">Add a ComfyUI render node in Settings before rendering.</p>}
+      <ConfirmDialog open={pendingVideoDelete !== null} title="Delete generated video?" message={pendingVideoDelete ? `“${pendingVideoDelete.filename}” will be permanently removed from media storage. The job will become ready to render again.` : ""} confirmLabel="Delete" onCancel={() => setPendingVideoDelete(null)} onConfirm={() => { if (pendingVideoDelete) videoDeleteMutation.mutate(pendingVideoDelete.id); }} />
     </div>
   );
 }

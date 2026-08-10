@@ -61,12 +61,17 @@ class JobTTSRepository:
                     job.tts_claim_expires_at = None
                     session.commit()
                 return None
-            if job.render_profile_id is None:
-                raise ValueError("Job has no render profile")
-            profile = session.get(RenderProfile, job.render_profile_id)
-            if profile is None or profile.voice_profile_id is None:
-                raise ValueError("Render profile has no voice profile")
-            voice = session.get(VoiceProfile, profile.voice_profile_id)
+            profile = (
+                session.get(RenderProfile, job.render_profile_id)
+                if job.render_profile_id
+                else None
+            )
+            voice_profile_id = job.voice_profile_id or (
+                profile.voice_profile_id if profile else None
+            )
+            if voice_profile_id is None:
+                raise ValueError("Job has no voice profile")
+            voice = session.get(VoiceProfile, voice_profile_id)
             if voice is None:
                 raise ValueError("Voice profile is unavailable")
             result = cast(
