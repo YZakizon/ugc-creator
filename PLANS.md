@@ -1791,7 +1791,8 @@ Append decisions here as implementation clarifies unknowns.
   Topic's only Content is removed by deleting the Topic so no unusable empty Topic
   history remains.
 - Legacy `/batches` and `/jobs` routes remain available while new user-facing flows
-  use `/topics` and `/contents`.
+  use `/topics` and `/contents`. Migration splits legacy multi-topic Batches into one
+  Topic per existing job so unrelated ideas are not presented as Content versions.
 
 Format:
 

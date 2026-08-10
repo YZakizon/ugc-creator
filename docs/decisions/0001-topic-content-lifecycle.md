@@ -22,6 +22,9 @@ compatible.
 more content creates a new row and never overwrites prior generated content. One
 Content owns multiple archived audio assets and multiple RenderAttempts.
 
+Migration converts every job in a legacy multi-topic Batch into its own Topic so
+unrelated historical topics are not mislabeled as versions of one idea.
+
 Generated media uses a sanitized topic prefix and stable content/output numbers:
 
 ```text
