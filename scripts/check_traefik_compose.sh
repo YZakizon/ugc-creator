@@ -11,7 +11,13 @@ docker compose config --format json | jq -e '
   (.services.web.networks | has("default")) and
   (.services.web.networks | has("traefik-proxy")) and
   .networks["traefik-proxy"].external == true and
-  .networks["traefik-proxy"].name == "traefik-proxy"
+  .networks["traefik-proxy"].name == "traefik-proxy" and
+  ([.services[] | .restart] | all(. == "unless-stopped")) and
+  .services.worker.depends_on.postgres.condition == "service_healthy" and
+  .services.worker.depends_on.redis.condition == "service_healthy" and
+  .services.worker.healthcheck.test[0] == "CMD-SHELL" and
+  (.services.worker.healthcheck.test[1] | contains("inspect ping")) and
+  (.services.worker.healthcheck.test[1] | contains("celery@$$HOSTNAME"))
 ' >/dev/null
 
-printf 'Traefik Compose routing is valid.\n'
+printf 'Compose routing and worker recovery settings are valid.\n'

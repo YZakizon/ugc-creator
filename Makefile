@@ -50,11 +50,11 @@ web-dev:
 dev: docker-build-run
 
 docker-build-run: ensure-traefik-network
->docker compose up -d --build
+>docker compose up -d --build --wait --wait-timeout 180
 >$(MAKE) capture-docker-ports
 
 docker-run: ensure-traefik-network
->docker compose up -d
+>docker compose up -d --wait --wait-timeout 180
 >$(MAKE) capture-docker-ports
 
 ensure-traefik-network:

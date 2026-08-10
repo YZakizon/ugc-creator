@@ -7,6 +7,7 @@ import { Providers } from "../app/providers";
 import {
   failedJobRetryKind,
   jobFailureMessage,
+  RecentJobs,
   renderProgressLabel,
 } from "../components/dashboard-live-data";
 
@@ -93,5 +94,76 @@ describe("home page", () => {
     expect(
       jobFailureMessage({ status: "content_ready", error_message: "stale" }),
     ).toBeNull();
+  });
+
+  it("shows job details and downloadable results in a collapsed job card", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("render-attempts")) {
+        return new Response(JSON.stringify({ items: [{
+          id: "attempt-1",
+          job_id: "job-1",
+          render_profile_id: "profile-1",
+          render_node_id: "node-1",
+          workflow_template_id: "workflow-1",
+          provider: "comfyui",
+          status: "completed",
+          progress: 100,
+          external_job_id: "prompt-1",
+          error_message: null,
+          created_at: "2026-08-10T00:00:00Z",
+          updated_at: "2026-08-10T00:01:00Z",
+          assets: [{
+            id: "asset-1",
+            job_id: "job-1",
+            kind: "video",
+            filename: "finished.mp4",
+            content_type: "video/mp4",
+            size_bytes: 1024,
+            download_url: "/api/v1/assets/asset-1/download",
+            created_at: "2026-08-10T00:01:00Z",
+          }],
+        }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("render-nodes")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        in_progress: 0,
+        ready_to_render: 0,
+        completed_videos: 1,
+        render_profiles: 1,
+        recent_jobs: [{
+          id: "job-1",
+          batch_id: "batch-1",
+          topic: "A useful reminder",
+          status: "completed",
+          render_profile_id: "profile-1",
+          target_duration_seconds: 30,
+          error_message: null,
+          speech_script: "This is the generated speech.",
+          hook: "Start here.",
+          instagram_metadata: { title: "Instagram title" },
+          tiktok_metadata: { title: "TikTok title" },
+          llm_provider: "openai",
+          llm_model: "gpt-test",
+          prompt_version: "ugc-v1",
+          created_at: "2026-08-10T00:00:00Z",
+          updated_at: "2026-08-10T00:01:00Z",
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const { container } = render(<Providers><RecentJobs contentGenerationReady detailed /></Providers>);
+
+    expect(await screen.findByText("A useful reminder")).toBeInTheDocument();
+    const card = container.querySelector("details.job-card");
+    expect(card).not.toHaveAttribute("open");
+    expect(screen.getByText("This is the generated speech.")).toBeInTheDocument();
+    expect(screen.getByText(/Instagram title/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download finished.mp4" })).toHaveAttribute(
+      "href",
+      "/api/v1/assets/asset-1/download",
+    );
   });
 });
