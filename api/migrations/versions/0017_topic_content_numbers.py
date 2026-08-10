@@ -53,15 +53,15 @@ def upgrade() -> None:
 
     for batch_id, jobs in jobs_by_batch.items():
         first = jobs[0]
-        first_name = str(first["topic"]).splitlines()[0].strip()[:160] or "Untitled topic"
+        first_name = (
+            str(first["topic"]).splitlines()[0].strip()[:160] or "Untitled topic"
+        )
         connection.execute(
             sa.text("UPDATE batches SET name = :name WHERE id = :batch_id"),
             {"name": first_name, "batch_id": batch_id},
         )
         connection.execute(
-            sa.text(
-                "UPDATE topic_jobs SET content_number = 1 WHERE id = :job_id"
-            ),
+            sa.text("UPDATE topic_jobs SET content_number = 1 WHERE id = :job_id"),
             {"job_id": first["job_id"]},
         )
         for job in jobs[1:]:
@@ -105,9 +105,7 @@ def upgrade() -> None:
                 {"batch_id": new_batch_id, "job_id": job["job_id"]},
             )
 
-    op.execute(
-        "UPDATE topic_jobs SET content_number = 1 WHERE content_number IS NULL"
-    )
+    op.execute("UPDATE topic_jobs SET content_number = 1 WHERE content_number IS NULL")
     op.alter_column(
         "topic_jobs",
         "content_number",
