@@ -150,6 +150,13 @@ export type RenderProfile = {
   updated_at: string;
 };
 
+export type RenderedWorkflowControl = {
+  label: string;
+  node_id: string;
+  input_name: string;
+  value: unknown;
+};
+
 export type WorkflowTemplate = {
   id: string;
   logical_id: string;
@@ -229,12 +236,7 @@ export type RenderAttempt = {
   output_filename: string | null;
   output_deleted_at: string | null;
   effective_values: Record<string, unknown>;
-  rendered_controls: Array<{
-    label: string;
-    node_id: string;
-    input_name: string;
-    value: unknown;
-  }>;
+  rendered_controls: RenderedWorkflowControl[];
   created_at: string;
   updated_at: string;
   assets: MediaAsset[];

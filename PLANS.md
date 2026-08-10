@@ -1746,6 +1746,8 @@ Append decisions here as implementation clarifies unknowns.
   renderer call.
 - Template bindings expand matching placeholders in place, preserving surrounding
   model instructions such as the LTX direct-to-camera prompt wrapper.
+- The Rendered settings view expands current workflow variables for inspection
+  without changing configured workflow values such as the seed.
 - The ComfyUI adapter owns `/prompt`, `/history`, `/system_stats`, `/ws` progress,
   upload, and interrupt transport details behind the normalized `VideoRenderer`
   contract. Workers persist prompt-scoped percentages for normal API polling.
