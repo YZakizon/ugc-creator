@@ -564,6 +564,8 @@ describe("home page", () => {
     expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toHaveValue("voice-profile-1");
     expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toBeEnabled();
     expect(jobCard.getByRole("link", { name: "Open voice profile details", hidden: true })).toHaveAttribute("href", "/voice-profiles#voice-profile-voice-profile-1");
+    fireEvent.click(jobCard.getByRole("button", { name: "Generate audio again" }));
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));
     fireEvent.change(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true }), { target: { value: "voice-profile-2" } });
     fireEvent.click(jobCard.getByRole("button", { name: "Save voice profile", hidden: true }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/voice-profile") && request.body === JSON.stringify({ voice_profile_id: "voice-profile-2" }))).toBe(true));
