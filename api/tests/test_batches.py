@@ -60,7 +60,7 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_job_render_profile_can_change_before_rendering() -> None:
+async def test_completed_job_render_profile_can_change_before_rerendering() -> None:
     batches = InMemoryBatchRepository()
     configuration = InMemoryConfigurationRepository()
     app.state.batch_repository = batches
@@ -93,6 +93,8 @@ async def test_job_render_profile_can_change_before_rendering() -> None:
             default_render_profile_id=first.id,
         )
     )
+    batch.jobs[0].status = "completed"
+    batch.jobs[0].speech_script = "Finished speech"
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
@@ -109,6 +111,7 @@ async def test_job_render_profile_can_change_before_rendering() -> None:
 
     assert response.status_code == 200
     assert response.json()["render_profile_id"] == str(second.id)
+    assert response.json()["status"] == "ready_to_render"
     assert batches.get_job(batch.jobs[0].id).render_profile_id == second.id
     assert locked.status_code == 409
 
@@ -154,30 +157,34 @@ async def test_job_voice_and_workflow_can_override_profile_defaults() -> None:
     batch = batches.create_batch(
         BatchCreate(
             name="Overrides",
-            topics=["One topic"],
+            topics=["Voice topic", "Workflow topic"],
             default_render_profile_id=profile.id,
         )
     )
-    job = batch.jobs[0]
-    job.status = "content_ready"
-    job.speech_script = "Ready speech"
+    voice_job, workflow_job = batch.jobs
+    voice_job.status = "completed"
+    voice_job.speech_script = "Finished voice speech"
+    workflow_job.status = "completed"
+    workflow_job.speech_script = "Finished workflow speech"
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         voice_response = await client.patch(
-            f"/api/v1/jobs/{job.id}/voice-profile",
+            f"/api/v1/jobs/{voice_job.id}/voice-profile",
             json={"voice_profile_id": str(second_voice.id)},
         )
         workflow_response = await client.patch(
-            f"/api/v1/jobs/{job.id}/workflow-template",
+            f"/api/v1/jobs/{workflow_job.id}/workflow-template",
             json={"workflow_template_id": str(second_workflow.id)},
         )
 
     assert voice_response.status_code == 200
     assert voice_response.json()["voice_profile_id"] == str(second_voice.id)
+    assert voice_response.json()["status"] == "content_ready"
     assert workflow_response.status_code == 200
     assert workflow_response.json()["workflow_template_id"] == str(second_workflow.id)
+    assert workflow_response.json()["status"] == "ready_to_render"
 
 
 @pytest.mark.asyncio
@@ -189,7 +196,7 @@ async def test_job_audio_upload_becomes_render_input(
     app.state.configuration_repository = InMemoryConfigurationRepository()
     batch = batches.create_batch(BatchCreate(name="Audio", topics=["One topic"]))
     job = batch.jobs[0]
-    job.status = "content_ready"
+    job.status = "completed"
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
 
     async with httpx.AsyncClient(

@@ -163,13 +163,17 @@ class InMemoryBatchRepository:
         return job
 
     def update_job_render_profile(
-        self, job_id: UUID, profile: RenderProfile
+        self,
+        existing_job: TopicJob,
+        profile: RenderProfile,
+        *,
+        archive_audio: bool,
     ) -> TopicJob | None:
-        job = self.jobs.get(job_id)
+        job = self.jobs.get(existing_job.id)
         if job is not None:
             replaced_audio = False
             for asset in job.__dict__.get("media_assets", []):
-                if asset.kind == "audio":
+                if archive_audio and asset.kind == "audio":
                     asset.kind = "audio_archive"
                     replaced_audio = True
             job.render_profile_id = profile.id
@@ -182,6 +186,9 @@ class InMemoryBatchRepository:
                 job.tts_model = None
                 job.tts_settings = None
                 job.tts_provider_request_id = None
+            elif job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
+                job.error_message = None
             job.updated_at = utc_now()
         return job
 
@@ -196,6 +203,7 @@ class InMemoryBatchRepository:
                 JobStatus.FAILED.value,
                 JobStatus.READY_TO_RENDER.value,
                 JobStatus.TTS_READY.value,
+                JobStatus.COMPLETED.value,
             }:
                 job.status = JobStatus.CONTENT_READY.value
             for asset in job.__dict__.get("media_assets", []):
@@ -215,6 +223,9 @@ class InMemoryBatchRepository:
         job = self.jobs.get(job_id)
         if job is not None:
             job.workflow_template_id = workflow_template_id
+            if job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
+                job.error_message = None
             job.updated_at = utc_now()
         return job
 
@@ -356,19 +367,23 @@ class SqlAlchemyBatchRepository:
             )
 
     def update_job_render_profile(
-        self, job_id: UUID, profile: RenderProfile
+        self,
+        existing_job: TopicJob,
+        profile: RenderProfile,
+        *,
+        archive_audio: bool,
     ) -> TopicJob | None:
         with self.factory() as session:
             job = session.scalar(
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
-                .where(TopicJob.id == job_id)
+                .where(TopicJob.id == existing_job.id)
             )
             if job is None:
                 return None
             replaced_audio = False
             for asset in job.media_assets:
-                if asset.kind == "audio":
+                if archive_audio and asset.kind == "audio":
                     asset.kind = "audio_archive"
                     replaced_audio = True
             job.render_profile_id = profile.id
@@ -381,11 +396,14 @@ class SqlAlchemyBatchRepository:
                 job.tts_model = None
                 job.tts_settings = None
                 job.tts_provider_request_id = None
+            elif job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
+                job.error_message = None
             session.commit()
             return session.scalar(
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
-                .where(TopicJob.id == job_id)
+                .where(TopicJob.id == existing_job.id)
             )
 
     def update_job_voice_profile(
@@ -405,6 +423,7 @@ class SqlAlchemyBatchRepository:
                 JobStatus.FAILED.value,
                 JobStatus.READY_TO_RENDER.value,
                 JobStatus.TTS_READY.value,
+                JobStatus.COMPLETED.value,
             }:
                 job.status = JobStatus.CONTENT_READY.value
             for asset in job.media_assets:
@@ -430,6 +449,9 @@ class SqlAlchemyBatchRepository:
             if job is None:
                 return None
             job.workflow_template_id = workflow_template_id
+            if job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
+                job.error_message = None
             session.commit()
             return session.scalar(
                 select(TopicJob)
