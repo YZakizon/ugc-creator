@@ -430,17 +430,17 @@ def delete_video_asset(
             status_code=409, detail="Video cannot be deleted before rendering completes"
         )
     try:
-        LocalStorageProvider().delete(asset.object_key)
-    except StorageError as exc:
-        raise HTTPException(
-            status_code=503, detail="Media storage is unavailable"
-        ) from exc
-    try:
         deleted = repo.delete_video_asset(asset_id)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Media asset not found")
+    try:
+        LocalStorageProvider().delete(asset.object_key)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media storage cleanup is incomplete"
+        ) from exc
 
 
 @router.post("/batches", response_model=BatchRead, status_code=status.HTTP_201_CREATED)
@@ -449,6 +449,14 @@ def create_batch(
     repo: BatchRepository = Depends(repository),
     configuration_repo: ConfigurationRepository = Depends(configuration_repository),
 ) -> BatchRead:
+    if len(payload.topics) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Legacy batch creation accepts one topic. Use /api/v1/topics/bulk "
+                "to create multiple independent topics."
+            ),
+        )
     if payload.default_render_profile_id is not None:
         profile = configuration_repo.get_render_profile(
             payload.default_render_profile_id

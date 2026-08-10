@@ -88,7 +88,9 @@ class RenderExecutionRepository:
 
     def queue_attempt(self, job_id: UUID, node_id: UUID) -> RenderAttempt:
         with self.factory() as session:
-            job = session.get(TopicJob, job_id)
+            job = session.scalar(
+                select(TopicJob).where(TopicJob.id == job_id).with_for_update()
+            )
             if job is None:
                 raise LookupError("Job not found")
             if not any(asset.kind == "audio" for asset in job.media_assets):
@@ -490,7 +492,26 @@ class RenderExecutionRepository:
                 raise ValueError("Only generated video assets can be deleted")
             if asset.render_attempt.status != "completed":
                 raise ValueError("Video cannot be deleted before rendering completes")
-            job = session.get(TopicJob, asset.job_id)
+            job = session.scalar(
+                select(TopicJob).where(TopicJob.id == asset.job_id).with_for_update()
+            )
+            active_attempt = session.scalar(
+                select(RenderAttempt.id)
+                .where(
+                    RenderAttempt.job_id == asset.job_id,
+                    RenderAttempt.status.in_(
+                        [
+                            "queued",
+                            "submitting_render",
+                            "rendering",
+                            "downloading_output",
+                        ]
+                    ),
+                )
+                .limit(1)
+            )
+            if active_attempt is not None:
+                raise ValueError("Video cannot be deleted while a rerender is active")
             session.delete(asset)
             session.flush()
             remaining = session.scalar(

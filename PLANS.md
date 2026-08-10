@@ -1799,6 +1799,8 @@ Append decisions here as implementation clarifies unknowns.
 - Legacy `/batches` and `/jobs` routes remain available while new user-facing flows
   use `/topics` and `/contents`. Migration splits legacy multi-topic Batches into one
   Topic per existing job so unrelated ideas are not presented as Content versions.
+- Legacy `/batches` creation accepts one Topic only; multi-topic callers use the
+  transactional `/topics/bulk` endpoint so unrelated ideas never share one history.
 - Topic status is derived centrally from persisted Content states. During repeated
   speech generation, the current audio remains active until its replacement is
   saved; enqueue/provider failures leave it available for rendering.

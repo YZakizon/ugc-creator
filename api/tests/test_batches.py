@@ -44,7 +44,7 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
             "/api/v1/batches",
             json={
                 "name": "Ideas for Tuesday",
-                "topics": ["Burnout is not laziness", "A reminder for overthinkers"],
+                "topics": ["Burnout is not laziness"],
                 "target_duration_seconds": 30,
                 "auto_fit_duration": True,
             },
@@ -55,12 +55,27 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
     body = response.json()
     assert body["name"] == "Ideas for Tuesday"
     assert body["status"] == "draft"
-    assert [job["status"] for job in body["jobs"]] == ["draft", "draft"]
+    assert [job["status"] for job in body["jobs"]] == ["draft"]
     assert summary.status_code == 200
     assert {job["topic"] for job in summary.json()["recent_jobs"]} == {
-        "Burnout is not laziness",
-        "A reminder for overthinkers",
+        "Burnout is not laziness"
     }
+
+
+@pytest.mark.asyncio
+async def test_legacy_batch_creation_rejects_multiple_topic_histories() -> None:
+    app.state.batch_repository = InMemoryBatchRepository()
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/batches",
+            json={"name": "Legacy", "topics": ["First", "Second"]},
+        )
+
+    assert response.status_code == 422
+    assert "/api/v1/topics/bulk" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

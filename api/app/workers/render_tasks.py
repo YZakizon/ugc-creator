@@ -241,7 +241,9 @@ async def _monitor(attempt_id: UUID) -> str:
         "video",
         extension,
     )
-    object_key = f"topics/{_job.batch_id}/contents/{_job.id}/video/{output_name}"
+    object_key = (
+        f"topics/{_job.batch_id}/contents/{_job.id}/video/{attempt_id}/{output_name}"
+    )
     LocalStorageProvider().put(object_key, content)
     repo.complete(
         attempt_id,
