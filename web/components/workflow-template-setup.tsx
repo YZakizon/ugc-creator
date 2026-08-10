@@ -35,6 +35,9 @@ const supportedTemplateVariables = [
   "VIDEO_PROMPT",
   "DURATION",
   "CHARACTER_NAME",
+  "SOURCE_IMAGE",
+  "AUDIO",
+  "AUDIO_DURATION",
 ] as const;
 
 type MediaKey = "source_image" | "audio";
@@ -60,6 +63,8 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
 
   const currentDefaultImage = selectedImage ?? mediaAssets.source_image;
   const currentDefaultAudio = selectedAudio ?? mediaAssets.audio;
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const mutation = useMutation<WorkflowTemplate, Error, { templateId: string | null; payload: WorkflowTemplateInput }>({
     mutationFn: ({ templateId, payload }) => templateId ? updateWorkflowTemplate(templateId, payload) : createWorkflowTemplate(payload),
     onSuccess: (template, variables) => {
@@ -234,6 +239,21 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
     }
   }
 
+  function removeMediaFile(semanticKey: MediaKey) {
+    setMediaAssets((current) => {
+      const next = { ...current };
+      delete next[semanticKey];
+      return next;
+    });
+    if (semanticKey === "source_image") {
+      setSelectedImage(null);
+      if (imageInputRef.current) imageInputRef.current.value = "";
+    } else {
+      setSelectedAudio(null);
+      if (audioInputRef.current) audioInputRef.current.value = "";
+    }
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLocalError(null);
@@ -272,13 +292,13 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
         </label>
         <label>
           Default source image
-          <input type="file" accept="image/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "source_image")} />
-          {currentDefaultImage ? <><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><small className="field-hint">Batch media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the batch does not provide an image.</small>}
+          <input ref={imageInputRef} type="file" accept="image/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "source_image")} />
+          {currentDefaultImage ? <><span className="workflow-current-media"><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><button className="workflow-remove-media" type="button" onClick={() => removeMediaFile("source_image")}>Remove</button></span><small className="field-hint">Batch media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the batch does not provide an image.</small>}
         </label>
         <label>
           Default audio
-          <input type="file" accept="audio/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "audio")} />
-          {currentDefaultAudio ? <><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><small className="field-hint">Batch audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the batch does not provide audio.</small>}
+          <input ref={audioInputRef} type="file" accept="audio/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "audio")} />
+          {currentDefaultAudio ? <><span className="workflow-current-media"><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><button className="workflow-remove-media" type="button" onClick={() => removeMediaFile("audio")}>Remove</button></span><small className="field-hint">Batch audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the batch does not provide audio.</small>}
         </label>
         <div className="workflow-json-editor">
           <WorkflowFieldTree workflow={workflow} workflowKind={workflowKind} onUpdateField={updatePromptInput} />
@@ -379,13 +399,23 @@ type InlineWorkflowFieldEditorProps = {
 
 function InlineWorkflowFieldEditor({ field, fieldTextareaRef, fieldSelectionRef, onUpdateField, onInsertVariable }: InlineWorkflowFieldEditorProps) {
   const stringValue = typeof field.value === "string" ? field.value : null;
-  const isLargeText = stringValue !== null && (stringValue.includes("\n") || stringValue.length > 120 || isPromptInput(field.classType, field.inputName, field.title));
+  const isPromptField = field.label !== "Duration" && isPromptInput(field.classType, field.inputName, field.title);
+  const isLargeText = stringValue !== null && (stringValue.includes("\n") || stringValue.length > 120 || isPromptField);
   const isDimension = isLtxDimensionField(field);
+  const fieldVariables = workflowVariablesForField(field);
 
   return <div className={`workflow-inline-editor${isLargeText ? " large" : ""}`}>
     {stringValue !== null ? isLargeText ? <textarea ref={fieldTextareaRef} value={stringValue} rows={8} onChange={(event) => onUpdateField(field.nodeId, field.inputName, event.target.value)} onSelect={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onKeyUp={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onMouseUp={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} onBlur={(event) => rememberFieldSelection(event.currentTarget, fieldSelectionRef)} /> : <input className="workflow-field-value" type="text" value={stringValue} onChange={(event) => onUpdateField(field.nodeId, field.inputName, event.target.value)} /> : <input className="workflow-field-value" type={typeof field.value === "number" ? "number" : "text"} min={isDimension ? 1 : undefined} step={isDimension ? 1 : undefined} value={String(field.value ?? "")} onChange={(event) => onUpdateField(field.nodeId, field.inputName, typeof field.value === "number" ? Number(event.target.value) : event.target.value)} />}
-    {isLargeText && isPromptInput(field.classType, field.inputName, field.title) && <span className="prompt-template-vars"><small>Select text, then replace it with:</small>{supportedTemplateVariables.map((variable) => <button className="prompt-var" type="button" key={variable} onClick={() => onInsertVariable(variable)}>+ {`{{${variable}}}`}</button>)}</span>}
+    {fieldVariables.length > 0 && <span className="prompt-template-vars"><small>{isLargeText ? "Select text, then replace it with:" : "Use variable:"}</small>{fieldVariables.map((variable) => <button className="prompt-var" type="button" key={variable} onClick={() => stringValue !== null ? onInsertVariable(variable) : onUpdateField(field.nodeId, field.inputName, `{{${variable}}}`)}>+ {`{{${variable}}}`}</button>)}</span>}
   </div>;
+}
+
+function workflowVariablesForField(field: WorkflowField): readonly string[] {
+  if (field.label === "Image source") return ["SOURCE_IMAGE"];
+  if (field.label === "Audio source") return ["AUDIO"];
+  if (field.label === "Duration") return ["AUDIO_DURATION"];
+  if (isPromptInput(field.classType, field.inputName, field.title)) return supportedTemplateVariables;
+  return [];
 }
 
 function rememberFieldSelection(textarea: HTMLTextAreaElement, selectionRef: React.MutableRefObject<{ start: number; end: number }>) {
@@ -541,7 +571,7 @@ function ltxWorkflowNodes(nodes: WorkflowTreeNode[]): WorkflowTreeNode[] {
     },
     {
       label: "Duration",
-      field: fields.find((field) => field.editable && typeof field.value === "number" && (/duration/i.test(field.title ?? "") || /^duration$/i.test(field.inputName))),
+      field: fields.find((field) => field.editable && (typeof field.value === "number" || isAudioDurationExpression(field.value)) && (/duration/i.test(field.title ?? "") || /^duration$/i.test(field.inputName))),
     },
     {
       label: "Width",
@@ -595,6 +625,10 @@ function workflowFieldKey(field: WorkflowField): string {
 
 function isEditableWorkflowValue(value: unknown): value is string | number | boolean {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function isAudioDurationExpression(value: unknown): value is string {
+  return typeof value === "string" && /^\{\{\s*AUDIO_DURATION(?:\s*[+-]\s*\d+(?:\.\d+)?)?\s*\}\}$/.test(value);
 }
 
 function isLtxDimensionField(field: WorkflowField): boolean {

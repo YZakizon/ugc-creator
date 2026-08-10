@@ -460,6 +460,10 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .field-hint { color: #a4a5b1; font-size: 12px; font-weight: 400; }
 .workflow-media-filename { overflow: hidden; color: #666776; font-size: 12px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-media-filename strong { color: #4f3bb4; }
+.workflow-current-media { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.workflow-current-media .workflow-media-filename { min-width: 0; }
+.workflow-remove-media { flex: 0 0 auto; border: 0; padding: 2px 0; color: #b65353; background: transparent; font-size: 12px; font-weight: 700; }
+.workflow-remove-media:hover { color: #8d3535; text-decoration: underline; }
 .saved-workflows { display: grid; gap: 8px; margin: 16px 0 20px; padding: 13px; border: 1px solid #ebe9f3; border-radius: 10px; background: #fcfcff; }
 .saved-workflows-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: #454652; font-size: 13px; }
 .saved-workflows-heading small { color: #a4a5b1; font-size: 12px; font-weight: 400; }

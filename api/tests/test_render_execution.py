@@ -269,6 +269,30 @@ async def test_workflow_media_is_used_only_as_a_missing_value_fallback() -> None
     renderer.upload.assert_awaited_once_with("default.mp3", b"audio", "audio")
 
 
+@pytest.mark.asyncio
+async def test_default_audio_duration_is_measured_when_workflow_uses_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values: dict[str, object] = {}
+    renderer = AsyncMock()
+    renderer.upload.return_value = "comfy-default.mp3"
+    storage = Mock()
+    storage.get.return_value = b"audio"
+    probe = Mock(return_value=4.5)
+    monkeypatch.setattr("app.workers.render_tasks.probe_audio_duration", probe)
+
+    await apply_default_workflow_media(
+        values,
+        {"default_workflow_media": {"audio": "workflow-media/default.mp3"}},
+        renderer,
+        storage,
+        measure_audio_duration=True,
+    )
+
+    assert values["audio_duration"] == 4.5
+    probe.assert_called_once_with(b"audio", "default.mp3")
+
+
 def test_render_monitor_timeout_is_bounded() -> None:
     checked_at = datetime(2026, 8, 8, 12, 0, tzinfo=UTC)
 
