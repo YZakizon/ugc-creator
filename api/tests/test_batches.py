@@ -116,6 +116,36 @@ async def test_topic_generates_incrementing_content_history(
 
 
 @pytest.mark.asyncio
+async def test_generate_more_content_recovers_when_broker_enqueue_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batches = InMemoryBatchRepository()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
+    monkeypatch.setattr(
+        "app.api.routes.generate_job_content.delay",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("Redis unavailable")),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(f"/api/v1/topics/{topic.id}/contents")
+        recovered = batches.get_batch(topic.id)
+        assert recovered is not None
+        new_content = max(recovered.jobs, key=lambda item: item.content_number)
+        deleted = await client.delete(f"/api/v1/contents/{new_content.id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "provider_unavailable"
+    assert new_content.status == "draft"
+    assert new_content.error_message == "Content could not be queued. Try again."
+    assert deleted.status_code == 204
+
+
+@pytest.mark.asyncio
 async def test_bulk_topic_creation_keeps_topics_independent() -> None:
     batches = InMemoryBatchRepository()
     configuration = InMemoryConfigurationRepository()
@@ -422,6 +452,40 @@ async def test_job_audio_upload_becomes_render_input(
         response.json()["audio_asset"]["filename"] == "one-topic_content1_1-audio.mp3"
     )
     assert list(tmp_path.rglob("*one-topic_content1_1-audio.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_job_audio_upload_object_keys_are_unique_for_same_filename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    batch = batches.create_batch(BatchCreate(name="Audio", topics=["One topic"]))
+    job = batch.jobs[0]
+    job.status = "completed"
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "app.api.routes.generated_media_filename",
+        lambda *_args: "one-topic_content1_1-audio.mp3",
+    )
+    payload = {
+        "filename": "replacement.mp3",
+        "content_type": "audio/mpeg",
+        "content_base64": base64.b64encode(b"audio bytes").decode(),
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first = await client.post(f"/api/v1/jobs/{job.id}/audio", json=payload)
+        second = await client.post(f"/api/v1/jobs/{job.id}/audio", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    object_keys = {asset.object_key for asset in job.media_assets}
+    assert len(object_keys) == 2
+    assert len(list(tmp_path.rglob("one-topic_content1_1-audio.mp3"))) == 2
 
 
 @pytest.mark.asyncio

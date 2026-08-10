@@ -587,7 +587,19 @@ def generate_more_content(
     queued = repo.queue_job_for_content(content.id)
     if queued is None:
         raise HTTPException(status_code=404, detail="Content not found")
-    generate_job_content.delay(str(content.id))
+    try:
+        generate_job_content.delay(str(content.id))
+    except Exception as exc:
+        repo.recover_job_content_enqueue(content.id)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_unavailable",
+                "provider": "celery",
+                "message": "Content could not be queued. Try again.",
+                "retriable": True,
+            },
+        ) from exc
     return JobRead.model_validate(job_to_dict(queued))
 
 
@@ -807,7 +819,7 @@ def upload_job_audio(
     filename = generated_media_filename(
         job.topic, job.content_number, audio_number, "audio", extension
     )
-    object_key = f"topics/{job.batch_id}/contents/{job.id}/audio/{filename}"
+    object_key = f"topics/{job.batch_id}/contents/{job.id}/audio/{uuid4()}/{filename}"
     storage = LocalStorageProvider()
     try:
         storage.put(object_key, content)
@@ -854,7 +866,19 @@ def queue_content_generation(
     job = repo.queue_job_for_content(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    generate_job_content.delay(str(job_id))
+    try:
+        generate_job_content.delay(str(job_id))
+    except Exception as exc:
+        repo.recover_job_content_enqueue(job_id)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_unavailable",
+                "provider": "celery",
+                "message": "Content could not be queued. Try again.",
+                "retriable": True,
+            },
+        ) from exc
     return JobRead.model_validate(job_to_dict(job))
 
 

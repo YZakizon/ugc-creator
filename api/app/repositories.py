@@ -209,6 +209,15 @@ class InMemoryBatchRepository:
             job.updated_at = utc_now()
         return job
 
+    def recover_job_content_enqueue(self, job_id: UUID) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        job.status = JobStatus.DRAFT.value
+        job.error_message = "Content could not be queued. Try again."
+        job.updated_at = utc_now()
+        return job
+
     def queue_job_for_tts(self, job_id: UUID) -> TopicJob | None:
         job = self.jobs.get(job_id)
         if job is None:
@@ -514,6 +523,17 @@ class SqlAlchemyBatchRepository:
             if job is None:
                 return None
             job.status = JobStatus.QUEUED.value
+            session.commit()
+            session.refresh(job)
+            return job
+
+    def recover_job_content_enqueue(self, job_id: UUID) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.get(TopicJob, job_id)
+            if job is None:
+                return None
+            job.status = JobStatus.DRAFT.value
+            job.error_message = "Content could not be queued. Try again."
             session.commit()
             session.refresh(job)
             return job
