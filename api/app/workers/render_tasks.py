@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import PurePath
 from uuid import UUID
 
+from app.core.media_naming import generated_media_filename
 from app.db.session import create_database_engine, session_factory
 from app.providers.render.comfyui import (
     ComfyUIProviderError,
@@ -41,6 +42,11 @@ def repository() -> RenderExecutionRepository:
     return RenderExecutionRepository(session_factory(engine))
 
 
+def render_input_filename(filename: str, attempt_id: UUID | str) -> str:
+    """Give each render fresh ComfyUI input names to bypass stale node caches."""
+    return f"{attempt_id}-{PurePath(filename).name}"
+
+
 async def apply_default_workflow_media(
     values: dict[str, object],
     metadata: dict[str, object],
@@ -48,6 +54,7 @@ async def apply_default_workflow_media(
     storage: LocalStorageProvider,
     *,
     measure_audio_duration: bool = False,
+    upload_namespace: str | None = None,
 ) -> None:
     media = metadata.get("default_workflow_media", metadata.get("workflow_media", {}))
     if not isinstance(media, dict):
@@ -66,9 +73,13 @@ async def apply_default_workflow_media(
                 values["audio_duration"] = probe_audio_duration(
                     content, PurePath(asset_key).name
                 )
-            values[key] = await renderer.upload(
-                PurePath(asset_key).name, content, input_type
+            source_name = PurePath(asset_key).name
+            upload_name = (
+                render_input_filename(source_name, upload_namespace)
+                if upload_namespace
+                else source_name
             )
+            values[key] = await renderer.upload(upload_name, content, input_type)
 
 
 async def _prepare_and_submit(attempt_id: UUID) -> None:
@@ -153,7 +164,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
                 audio_content, audio_asset.filename
             )
         values["audio"] = await renderer.upload(
-            audio_asset.filename,
+            render_input_filename(audio_asset.filename, attempt_id),
             audio_content,
             "audio",
         )
@@ -163,6 +174,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         renderer,
         LocalStorageProvider(),
         measure_audio_duration=needs_audio_duration,
+        upload_namespace=str(attempt_id),
     )
     workflow = prepare_workflow(
         attempt.workflow_snapshot, attempt.binding_snapshot, values
@@ -225,10 +237,16 @@ async def _monitor(attempt_id: UUID) -> str:
     renderer = ComfyUIRenderer(base_url=node.base_url, client_id=attempt.client_id)
     status = await renderer.get_status(attempt.external_job_id)
     if status.state in {"queued", "running"}:
+        live_progress = await renderer.get_live_progress(attempt.external_job_id)
         progress = (
             max(attempt.progress, 1)
-            if status.progress is None
-            else max(attempt.progress, 1, int(status.progress))
+            if status.progress is None and live_progress is None
+            else max(
+                attempt.progress,
+                1,
+                int(status.progress or 0),
+                int(live_progress or 0),
+            )
         )
         repo.update_progress(
             attempt_id,
@@ -255,15 +273,24 @@ async def _monitor(attempt_id: UUID) -> str:
     outputs = await renderer.fetch_outputs(attempt.external_job_id)
     output = select_video_output(outputs)
     content, content_type = await renderer.download_output(output)
-    output_name = PurePath(output.filename).name
+    video_number = (
+        sum(1 for item in _job.render_attempts if item.status == "completed") + 1
+    )
+    extension = PurePath(output.filename).suffix.lstrip(".") or "mp4"
+    output_name = generated_media_filename(
+        _job.topic,
+        _job.content_number,
+        video_number,
+        extension,
+    )
     object_key = (
-        f"batches/{_job.batch_id}/jobs/{_job.id}/video/{attempt.id}-{output_name}"
+        f"topics/{_job.batch_id}/contents/{_job.id}/video/{attempt_id}/{output_name}"
     )
     LocalStorageProvider().put(object_key, content)
     repo.complete(
         attempt_id,
         object_key,
-        PurePath(output.filename).name,
+        output_name,
         content_type,
         len(content),
     )

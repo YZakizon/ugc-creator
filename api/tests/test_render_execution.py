@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.api.routes import render_attempt_read
 from app.db.base import Base
 from app.db.models import (
     Batch,
@@ -24,17 +25,72 @@ from app.providers.render.comfyui import (
     ComfyUIProviderError,
     ComfyUISubmissionOutcomeUnknown,
 )
-from app.providers.render.contracts import RenderOutput
+from app.providers.render.contracts import RenderOutput, RenderStatus
 from app.render_repository import RenderExecutionRepository
 from app.schemas import RenderNodeCreate
 from app.services.media_service import MediaProcessingError
 from app.workers.render_tasks import (
+    _monitor,
     _prepare_and_submit,
     apply_default_workflow_media,
     render_has_timed_out,
+    render_input_filename,
     select_video_output,
     submit_render,
 )
+
+
+@pytest.mark.asyncio
+async def test_monitor_persists_live_comfyui_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    attempt = SimpleNamespace(
+        id=attempt_id,
+        status="rendering",
+        progress=12,
+        external_job_id="prompt-live",
+        submitted_at=datetime.now(UTC),
+        client_id="attempt-client",
+    )
+    updates: list[tuple[object, str, int]] = []
+    scheduled: list[tuple[list[str], int]] = []
+
+    class FakeRepository:
+        def execution_context(self, _attempt_id: object) -> tuple[object, ...]:
+            return (
+                attempt,
+                SimpleNamespace(),
+                SimpleNamespace(),
+                SimpleNamespace(base_url="http://comfyui"),
+                SimpleNamespace(),
+            )
+
+        def update_progress(
+            self, stored_attempt_id: object, status: str, progress: int
+        ) -> None:
+            updates.append((stored_attempt_id, status, progress))
+
+    class FakeRenderer:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        async def get_status(self, external_job_id: str) -> RenderStatus:
+            return RenderStatus(external_job_id=external_job_id, state="running")
+
+        async def get_live_progress(self, _external_job_id: str) -> float:
+            return 47.8
+
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+    monkeypatch.setattr("app.workers.render_tasks.ComfyUIRenderer", FakeRenderer)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.monitor_render.apply_async",
+        lambda *, args, countdown: scheduled.append((args, countdown)),
+    )
+
+    assert await _monitor(attempt_id) == "rendering"
+    assert updates == [(attempt_id, "rendering", 47)]
+    assert scheduled == [([str(attempt_id)], 5)]
 
 
 def test_unknown_submission_outcome_stays_reconcilable(
@@ -292,12 +348,22 @@ async def test_workflow_media_is_used_only_as_a_missing_value_fallback() -> None
         },
         renderer,
         storage,
+        upload_namespace="attempt-2",
     )
 
     assert values["source_image"] == "batch-image.png"
     assert values["audio"] == "comfy-default.mp3"
     storage.get.assert_called_once_with("workflow-media/default.mp3")
-    renderer.upload.assert_awaited_once_with("default.mp3", b"audio", "audio")
+    renderer.upload.assert_awaited_once_with("attempt-2-default.mp3", b"audio", "audio")
+
+
+def test_each_render_uses_a_distinct_comfyui_input_filename() -> None:
+    first = render_input_filename("topic_content1_0001.mp3", uuid4())
+    second = render_input_filename("topic_content1_0001.mp3", uuid4())
+
+    assert first != second
+    assert first.endswith("-topic_content1_0001.mp3")
+    assert second.endswith("-topic_content1_0001.mp3")
 
 
 @pytest.mark.asyncio
@@ -410,9 +476,20 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
     assert completed.status == "completed"
     assert completed.external_job_id == "prompt-1"
     assert completed.error_message is None
+    assert render_attempt_read(completed).effective_values == {"script": "Topic"}
     assert len(completed.assets) == 1
     assert completed.assets[0].object_key == "jobs/video.mp4"
+    rerender = repo.queue_attempt(job_id, node.id)
+    assert rerender.id != first.id
+    with pytest.raises(ValueError, match="rerender is active"):
+        repo.delete_video_asset(completed.assets[0].id)
+    assert repo.update_progress(rerender.id, "failed", 0, "Stopped")
     assert repo.delete_video_asset(completed.assets[0].id)
+    deleted_attempt = repo.get_attempt(first.id)
+    assert deleted_attempt is not None
+    assert deleted_attempt.assets == []
+    assert deleted_attempt.output_filename == "video.mp4"
+    assert deleted_attempt.output_deleted_at is not None
     with factory() as session:
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None

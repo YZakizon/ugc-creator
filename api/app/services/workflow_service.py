@@ -27,6 +27,7 @@ AUDIO_DURATION_EXPRESSION_PATTERN = re.compile(
     r"\{\{\s*AUDIO_DURATION(?:\s*([+-])\s*(\d+(?:\.\d+)?))?\s*\}\}"
 )
 SEMANTIC_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+SEED_INPUT_PATTERN = re.compile(r"(?:seed|noise[._-]?seed|.+\.seed)", re.IGNORECASE)
 
 
 class WorkflowValidationError(ValueError):
@@ -132,7 +133,14 @@ def prepare_workflow(
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             raise WorkflowValidationError(f"Workflow node {node_id} has no inputs")
-        inputs[input_name] = value
+        current_value = inputs.get(input_name)
+        semantic_placeholder = "{{" + semantic_key.upper() + "}}"
+        if not (
+            value_type == "template"
+            and isinstance(current_value, str)
+            and semantic_placeholder in current_value
+        ):
+            inputs[input_name] = value
 
     _render_placeholders(prepared, values)
     return prepared

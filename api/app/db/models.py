@@ -28,6 +28,7 @@ class Batch(TimestampMixin, Base):
     default_render_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
     target_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
     auto_fit_duration: Mapped[bool] = mapped_column(default=True, nullable=False)
+    next_content_number: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
 
     jobs: Mapped[list["TopicJob"]] = relationship(
         back_populates="batch",
@@ -38,13 +39,17 @@ class Batch(TimestampMixin, Base):
 
 class TopicJob(TimestampMixin, Base):
     __tablename__ = "topic_jobs"
-    __table_args__ = (Index("ix_topic_jobs_batch_id_status", "batch_id", "status"),)
+    __table_args__ = (
+        Index("ix_topic_jobs_batch_id_status", "batch_id", "status"),
+        UniqueConstraint("batch_id", "content_number", name="uq_topic_content_number"),
+    )
 
     id: Mapped[UUIDPrimaryKey]
     batch_id: Mapped[UUID] = mapped_column(
         ForeignKey("batches.id", ondelete="CASCADE"), nullable=False
     )
     topic: Mapped[str] = mapped_column(Text, nullable=False)
+    content_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(
         String(40), default=JobStatus.DRAFT.value, nullable=False
     )
@@ -243,6 +248,8 @@ class RenderAttempt(TimestampMixin, Base):
         JSON, default=dict, nullable=False
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    output_deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submission_started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submission_claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -278,6 +285,9 @@ class MediaAsset(TimestampMixin, Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    generation_metadata: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
 
     render_attempt: Mapped[RenderAttempt | None] = relationship(back_populates="assets")
     job: Mapped[TopicJob] = relationship(back_populates="media_assets")

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from celery import Task
 
+from app.core.media_naming import generated_media_filename
 from app.db.session import create_database_engine, session_factory
 from app.job_tts_repository import JobTTSRepository
 from app.providers.storage.local import LocalStorageProvider
@@ -72,9 +73,14 @@ def generate_job_tts(task: Task, job_id: str) -> dict[str, str]:
                 )
             )
         )
+        filename = generated_media_filename(
+            context.topic,
+            context.content_number,
+            context.audio_number,
+            result.extension,
+        )
         object_key = (
-            f"batches/{context.batch_id}/jobs/{context.job_id}/audio/"
-            f"speech.{result.extension}"
+            f"topics/{context.batch_id}/contents/{context.job_id}/audio/{filename}"
         )
         LocalStorageProvider().put(object_key, result.audio)
         completed = repo.complete(
@@ -87,7 +93,7 @@ def generate_job_tts(task: Task, job_id: str) -> dict[str, str]:
                 "language_code": language_code,
             },
             object_key=object_key,
-            filename=f"speech-{context.job_id}.{result.extension}",
+            filename=filename,
             content_type=result.content_type,
             size_bytes=len(result.audio),
         )

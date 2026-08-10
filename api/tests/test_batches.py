@@ -2,6 +2,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -11,17 +12,20 @@ from sqlalchemy.orm import sessionmaker
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.main import app
+from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.repositories import (
     InMemoryBatchRepository,
     InMemoryConfigurationRepository,
     SqlAlchemyBatchRepository,
     SqlAlchemyConfigurationRepository,
+    topic_to_dict,
     utc_now,
 )
 from app.schemas import (
     BatchCreate,
     RenderProfileSetupCreate,
     RenderProfileUpdate,
+    TopicBulkCreate,
     VoiceProfileCreate,
     WorkflowTemplateCreate,
 )
@@ -40,7 +44,7 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
             "/api/v1/batches",
             json={
                 "name": "Ideas for Tuesday",
-                "topics": ["Burnout is not laziness", "A reminder for overthinkers"],
+                "topics": ["Burnout is not laziness"],
                 "target_duration_seconds": 30,
                 "auto_fit_duration": True,
             },
@@ -51,12 +55,351 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
     body = response.json()
     assert body["name"] == "Ideas for Tuesday"
     assert body["status"] == "draft"
-    assert [job["status"] for job in body["jobs"]] == ["draft", "draft"]
+    assert [job["status"] for job in body["jobs"]] == ["draft"]
     assert summary.status_code == 200
     assert {job["topic"] for job in summary.json()["recent_jobs"]} == {
-        "Burnout is not laziness",
-        "A reminder for overthinkers",
+        "Burnout is not laziness"
     }
+
+
+@pytest.mark.asyncio
+async def test_legacy_batch_creation_rejects_multiple_topic_histories() -> None:
+    app.state.batch_repository = InMemoryBatchRepository()
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/batches",
+            json={"name": "Legacy", "topics": ["First", "Second"]},
+        )
+
+    assert response.status_code == 422
+    assert "/api/v1/topics/bulk" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_topic_generates_incrementing_content_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice-1"
+        )
+    )
+    profile = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Shelf",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+    queued: list[str] = []
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
+    monkeypatch.setattr("app.api.routes.generate_job_content.delay", queued.append)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/api/v1/topics",
+            json={
+                "topic": "Burnout is not laziness",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "auto_fit_duration": True,
+            },
+        )
+        topic_id = created.json()["id"]
+        second = await client.post(f"/api/v1/topics/{topic_id}/contents")
+        third = await client.post(f"/api/v1/topics/{topic_id}/contents")
+        listed = await client.get("/api/v1/topics")
+        contents = await client.get(f"/api/v1/topics/{topic_id}/contents")
+
+    assert created.status_code == 201
+    assert created.json()["contents"][0]["content_number"] == 1
+    assert second.status_code == 202
+    assert third.status_code == 202
+    assert listed.json()["items"][0]["content_count"] == 3
+    assert "contents" not in listed.json()["items"][0]
+    assert [item["content_number"] for item in contents.json()["items"]] == [1, 2, 3]
+    assert queued == [second.json()["id"], third.json()["id"]]
+
+
+@pytest.mark.asyncio
+async def test_generate_more_content_recovers_when_broker_enqueue_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batches = InMemoryBatchRepository()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
+    monkeypatch.setattr(
+        "app.api.routes.generate_job_content.delay",
+        lambda _job_id: (_ for _ in ()).throw(RuntimeError("Redis unavailable")),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(f"/api/v1/topics/{topic.id}/contents")
+        recovered = batches.get_batch(topic.id)
+        assert recovered is not None
+        new_content = max(recovered.jobs, key=lambda item: item.content_number)
+        deleted = await client.delete(f"/api/v1/contents/{new_content.id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "provider_unavailable"
+    assert new_content.status == "draft"
+    assert new_content.error_message == "Content could not be queued. Try again."
+    assert deleted.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_bulk_topic_creation_keeps_topics_independent() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice-1"
+        )
+    )
+    profile = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Shelf",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/topics/bulk",
+            json={
+                "topics": ["Burnout is not laziness", "A reminder for overthinkers"],
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "auto_fit_duration": True,
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["total"] == 2
+    assert [item["content_count"] for item in response.json()["items"]] == [1, 1]
+    assert [
+        item["contents"][0]["content_number"] for item in response.json()["items"]
+    ] == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_bulk_topic_creation_rejects_oversized_topic() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/topics/bulk",
+            json={
+                "topics": ["Valid topic", "x" * 5_001],
+                "render_profile_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_content_numbers_use_high_water_mark_and_topic_defaults() -> None:
+    batches = InMemoryBatchRepository()
+    default_profile_id = uuid4()
+    topic = batches.create_batch(
+        BatchCreate(
+            name="Topic",
+            topics=["A topic"],
+            default_render_profile_id=default_profile_id,
+            target_duration_seconds=45,
+        )
+    )
+    first = topic.jobs[0]
+    first.render_profile_id = uuid4()
+    first.voice_profile_id = uuid4()
+    first.workflow_template_id = uuid4()
+    second = batches.create_content(topic.id)
+    assert second is not None
+    second.status = "content_ready"
+    assert batches.delete_content(second.id, lambda _object_keys: None)
+
+    third = batches.create_content(topic.id)
+
+    assert third is not None
+    assert third.content_number == 3
+    assert third.render_profile_id == default_profile_id
+    assert third.voice_profile_id is None
+    assert third.workflow_template_id is None
+    assert third.target_duration_seconds == 45
+
+
+def test_topic_status_is_derived_from_content_lifecycle() -> None:
+    batches = InMemoryBatchRepository()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    content = topic.jobs[0]
+    assert topic_to_dict(topic)["status"] == "draft"
+
+    content.status = "generating_content"
+    assert topic_to_dict(topic)["status"] == "processing"
+
+    content.status = "completed"
+    assert topic_to_dict(topic)["status"] == "completed"
+
+    content.status = "failed"
+    assert topic_to_dict(topic)["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_content_and_topic_delete_all_stored_assets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    storage = LocalStorageProvider()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    first = topic.jobs[0]
+    second = batches.create_content(topic.id)
+    assert second is not None
+    first_key = f"topics/{topic.id}/contents/{first.id}/audio/first.mp3"
+    second_key = f"topics/{topic.id}/contents/{second.id}/video/second.mp4"
+    storage.put(first_key, b"audio")
+    storage.put(second_key, b"video")
+    first.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=first.id,
+            kind="audio",
+            object_key=first_key,
+            filename="first.mp3",
+            content_type="audio/mpeg",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+    second.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=second.id,
+            kind="video",
+            object_key=second_key,
+            filename="second.mp4",
+            content_type="video/mp4",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        deleted_content = await client.delete(f"/api/v1/contents/{first.id}")
+        rejected_last_content = await client.delete(f"/api/v1/contents/{second.id}")
+        deleted_topic = await client.delete(f"/api/v1/topics/{topic.id}")
+
+    assert deleted_content.status_code == 204
+    assert rejected_last_content.status_code == 409
+    assert rejected_last_content.json()["detail"] == (
+        "Delete the topic to remove its only content version"
+    )
+    assert deleted_topic.status_code == 204
+    assert not (tmp_path / first_key).exists()
+    assert not (tmp_path / second_key).exists()
+    assert batches.get_batch(topic.id) is None
+
+
+@pytest.mark.asyncio
+async def test_storage_failure_keeps_content_and_topic_history_retryable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    storage = LocalStorageProvider()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    first = topic.jobs[0]
+    second = batches.create_content(topic.id)
+    assert second is not None
+    first_key = f"topics/{topic.id}/contents/{first.id}/audio/first.mp3"
+    second_key = f"topics/{topic.id}/contents/{second.id}/video/second.mp4"
+    storage.put(first_key, b"audio")
+    storage.put(second_key, b"video")
+    first.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=first.id,
+            kind="audio",
+            object_key=first_key,
+            filename="first.mp3",
+            content_type="audio/mpeg",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+    second.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=second.id,
+            kind="video",
+            object_key=second_key,
+            filename="second.mp4",
+            content_type="video/mp4",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+    original_delete = LocalStorageProvider.delete
+
+    def fail_delete(_storage: LocalStorageProvider, _key: str) -> None:
+        raise StorageError("Storage unavailable")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        monkeypatch.setattr(LocalStorageProvider, "delete", fail_delete)
+        failed_content = await client.delete(f"/api/v1/contents/{first.id}")
+        assert failed_content.status_code == 503
+        assert batches.get_job(first.id) is not None
+        assert (tmp_path / first_key).exists()
+
+        monkeypatch.setattr(LocalStorageProvider, "delete", original_delete)
+        deleted_content = await client.delete(f"/api/v1/contents/{first.id}")
+        assert deleted_content.status_code == 204
+
+        monkeypatch.setattr(LocalStorageProvider, "delete", fail_delete)
+        failed_topic = await client.delete(f"/api/v1/topics/{topic.id}")
+        assert failed_topic.status_code == 503
+        assert batches.get_batch(topic.id) is not None
+        assert (tmp_path / second_key).exists()
+
+        monkeypatch.setattr(LocalStorageProvider, "delete", original_delete)
+        deleted_topic = await client.delete(f"/api/v1/topics/{topic.id}")
+
+    assert deleted_topic.status_code == 204
+    assert batches.get_batch(topic.id) is None
+    assert not (tmp_path / first_key).exists()
+    assert not (tmp_path / second_key).exists()
 
 
 @pytest.mark.asyncio
@@ -213,8 +556,42 @@ async def test_job_audio_upload_becomes_render_input(
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready_to_render"
-    assert response.json()["audio_asset"]["filename"] == "replacement.mp3"
-    assert list(tmp_path.rglob("*replacement.mp3"))
+    assert response.json()["audio_asset"]["filename"] == "one-topic_content1_0001.mp3"
+    assert list(tmp_path.rglob("*one-topic_content1_0001.mp3"))
+
+
+@pytest.mark.asyncio
+async def test_job_audio_upload_object_keys_are_unique_for_same_filename(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    batch = batches.create_batch(BatchCreate(name="Audio", topics=["One topic"]))
+    job = batch.jobs[0]
+    job.status = "completed"
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "app.api.routes.generated_media_filename",
+        lambda *_args: "one-topic_content1_1-audio.mp3",
+    )
+    payload = {
+        "filename": "replacement.mp3",
+        "content_type": "audio/mpeg",
+        "content_base64": base64.b64encode(b"audio bytes").decode(),
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first = await client.post(f"/api/v1/jobs/{job.id}/audio", json=payload)
+        second = await client.post(f"/api/v1/jobs/{job.id}/audio", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    object_keys = {asset.object_key for asset in job.media_assets}
+    assert len(object_keys) == 2
+    assert len(list(tmp_path.rglob("one-topic_content1_1-audio.mp3"))) == 2
 
 
 @pytest.mark.asyncio
@@ -858,6 +1235,32 @@ def test_sqlalchemy_repository_returns_jobs_after_commit() -> None:
     )
 
     assert batch.jobs[0].topic == "A topic"
+
+
+def test_sqlalchemy_topics_are_transactional_and_keep_content_high_water_mark() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyBatchRepository(sessionmaker(bind=engine))
+    profile_id = uuid4()
+    topics = repository.create_topics(
+        TopicBulkCreate(
+            topics=["First topic", "Second topic"],
+            render_profile_id=profile_id,
+            target_duration_seconds=45,
+        )
+    )
+
+    assert len(topics) == 2
+    assert [topic.jobs[0].content_number for topic in topics] == [1, 1]
+    second = repository.create_content(topics[0].id)
+    assert second is not None
+    assert repository.delete_content(second.id, lambda _object_keys: None)
+    third = repository.create_content(topics[0].id)
+
+    assert third is not None
+    assert third.content_number == 3
+    assert third.render_profile_id == profile_id
+    assert third.target_duration_seconds == 45
 
 
 def test_sqlalchemy_profile_setup_reuses_character_and_voice() -> None:

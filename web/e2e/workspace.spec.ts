@@ -122,12 +122,19 @@ test.describe("workspace customer journeys", () => {
     expect(downloadBox?.height).toBe(deleteBox?.height);
   });
 
-  test("imports a workflow, creates a profile, and creates a multi-topic batch", async ({ page }) => {
-    test.setTimeout(90_000);
+  test("creates a topic with repeatable numbered content, speech, video, and deletion", async ({ page }) => {
+    test.setTimeout(120_000);
+    const suffix = `pw-${Date.now().toString(36)}`;
+    const workflowName = `Shelf workflow ${suffix}`;
+    const voiceProfileName = `Elena voice ${suffix}`;
+    const renderProfileName = `Elena Shelf ${suffix}`;
+    const nodeName = `Fake ComfyUI ${suffix}`;
+    const topicName = `Burnout is not laziness ${suffix}`;
+    const mediaBase = `burnout-is-not-laziness-${suffix}`;
     await page.getByRole("link", { name: "Workflows" }).click();
     await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
     await page.getByRole("tab", { name: "Create workflow" }).click();
-    await page.getByLabel("Template name").fill("Shelf workflow");
+    await page.getByLabel("Template name").fill(workflowName);
     await page.getByLabel("ComfyUI API workflow JSON").fill(workflow);
     await page.getByLabel("Default source image").setInputFiles({ name: "source.png", mimeType: "image/png", buffer: Buffer.from("fake-image") });
     await expect(page.getByText("Current file: source.png")).toBeVisible();
@@ -160,7 +167,7 @@ test.describe("workspace customer journeys", () => {
 
     await page.getByRole("link", { name: "Voice profiles" }).click();
     await page.getByRole("tab", { name: "Create voice profile" }).click();
-    await page.getByLabel("Voice profile name").fill("Elena voice");
+    await page.getByLabel("Voice profile name").fill(voiceProfileName);
     await page.getByLabel("Voice name").fill("Elena");
     await page.getByLabel("Voice ID").fill("voice-elena");
     await page.getByRole("button", { name: "Create voice profile" }).click();
@@ -168,12 +175,12 @@ test.describe("workspace customer journeys", () => {
 
     await page.locator('a[href="/profiles"]').click();
     await page.getByRole("tab", { name: "Create profile" }).click();
-    await page.getByLabel("Profile name").fill("Elena Shelf");
+    await page.getByLabel("Profile name").fill(renderProfileName);
     await page.getByLabel("Character").fill("Elena");
-    const voiceOption = page.getByLabel("Voice profile").locator("option").filter({ hasText: "Elena voice" });
+    const voiceOption = page.getByLabel("Voice profile").locator("option").filter({ hasText: voiceProfileName });
     const voiceProfileId = await voiceOption.getAttribute("value") ?? "";
     await page.getByLabel("Voice profile").selectOption(voiceProfileId);
-    const workflowOption = page.getByLabel("Workflow template").locator("option").filter({ hasText: "Shelf workflow" });
+    const workflowOption = page.getByLabel("Workflow template").locator("option").filter({ hasText: workflowName });
     const workflowTemplateId = await workflowOption.getAttribute("value") ?? "";
     await page.getByLabel("Workflow template").selectOption(workflowTemplateId);
     await page.getByRole("button", { name: "Create profile" }).click();
@@ -181,7 +188,7 @@ test.describe("workspace customer journeys", () => {
 
     await page.getByRole("link", { name: "Voice profiles" }).click();
     await page.getByRole("tab", { name: "Voice profiles" }).click();
-    await page.getByRole("button", { name: "Show Elena voice details" }).click();
+    await page.getByRole("button", { name: `Show ${voiceProfileName} details` }).click();
     await page.getByPlaceholder("Enter text to generate speech…").fill("This is a generated speech preview.");
     await page.getByRole("button", { name: "Generate speech" }).click();
     await expect(page.getByText("completed", { exact: true })).toBeVisible({ timeout: 20_000 });
@@ -190,22 +197,23 @@ test.describe("workspace customer journeys", () => {
     expect(speechResponse.status()).toBe(200);
 
     await page.getByRole("link", { name: "Settings" }).click();
-    await page.getByLabel("Node name").fill("Fake ComfyUI");
+    await page.getByLabel("Node name").fill(nodeName);
     await page.getByLabel("ComfyUI URL").fill("http://fake-comfyui-test:8188");
     await page.getByRole("button", { name: "Add render node" }).click();
     await expect(page.getByText("Render node saved.")).toBeVisible();
     await page.getByRole("button", { name: "Test connection" }).click();
     await expect(page.getByText("ComfyUI is connected.")).toBeVisible();
 
-    await page.getByRole("link", { name: "Create batch" }).click();
-    await page.getByLabel("Batch name").fill("Tuesday ideas");
-    await page.getByLabel("Topics").fill("Burnout is not laziness\nA reminder for overthinkers");
-    await page.locator(".batch-form select").selectOption({ label: "Elena Shelf" });
-    await page.getByRole("button", { name: "Create batch" }).click();
-    await expect(page.getByText("Batch created successfully.")).toBeVisible();
-    await page.getByRole("tab", { name: "Jobs" }).click();
-    const jobsPanel = page.locator("#tab-panel-jobs");
-    const firstJob = jobsPanel.locator(".job-card").filter({ hasText: "Burnout is not laziness" });
+    await page.getByRole("link", { name: "Create topic" }).click();
+    await page.getByRole("textbox", { name: "Topic", exact: true }).fill(topicName);
+    await page.locator(".batch-form select").selectOption({ label: renderProfileName });
+    await page.getByRole("button", { name: "Create topic" }).click();
+    await expect(page.getByText("Topic created successfully.")).toBeVisible();
+    await page.getByRole("tab", { name: "Content" }).click();
+    const contentPanel = page.locator("#tab-panel-content");
+    const topicCard = contentPanel.locator(".topic-history-card").filter({ hasText: topicName });
+    await topicCard.locator(":scope > summary").click();
+    const firstJob = topicCard.locator(".job-card").filter({ hasText: "Content 1" });
     await expect(firstJob).toBeVisible();
     await firstJob.locator(".job-card-summary").click();
     const generateResponse = page.waitForResponse((response) => response.url().includes("generate-content") && response.request().method() === "POST");
@@ -213,7 +221,8 @@ test.describe("workspace customer journeys", () => {
     expect((await generateResponse).status()).toBe(202);
     await expect.poll(async () => {
       await page.reload();
-      await page.getByRole("tab", { name: "Jobs" }).click();
+      await page.getByRole("tab", { name: "Content" }).click();
+      await topicCard.locator(":scope > summary").click();
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
 
@@ -225,7 +234,8 @@ test.describe("workspace customer journeys", () => {
     expect((await jobSpeechResponse).status()).toBe(202);
     await expect.poll(async () => {
       await page.reload();
-      await page.getByRole("tab", { name: "Jobs" }).click();
+      await page.getByRole("tab", { name: "Content" }).click();
+      await topicCard.locator(":scope > summary").click();
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("ready to render");
 
@@ -234,12 +244,12 @@ test.describe("workspace customer journeys", () => {
     await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toHaveValue(workflowTemplateId);
     await expect(firstJob.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", `/workflows#workflow-${workflowTemplateId}`);
-    await expect(firstJob.locator(".job-render-audio").getByText(/speech-.*\.wav/)).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText(`${mediaBase}_content1_0001.wav`)).toBeVisible();
     await expect(firstJob.getByRole("link", { name: "Download render audio" })).toHaveCount(0);
     const audioUploadResponse = page.waitForResponse((response) => response.url().includes(`/api/v1/jobs/`) && response.url().endsWith("/audio") && response.request().method() === "POST");
     await firstJob.getByLabel("Upload different audio").setInputFiles({ name: "replacement.wav", mimeType: "audio/wav", buffer: wavBuffer() });
     expect((await audioUploadResponse).status()).toBe(200);
-    await expect(firstJob.locator(".job-render-audio").getByText("replacement.wav")).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText(`${mediaBase}_content1_0002.wav`)).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,
@@ -249,9 +259,9 @@ test.describe("workspace customer journeys", () => {
       timeout: 30_000,
       intervals: [1000, 2000],
     }).toContain("completed");
-    await expect(firstJob.getByRole("button", { name: /Preview .*\.mp4/ })).toBeVisible();
-    await expect(firstJob.getByRole("link", { name: /Download .*\.mp4/ })).toBeVisible();
-    await expect(firstJob.getByRole("button", { name: /Delete .*\.mp4/ })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: `Preview ${mediaBase}_content1_0001.mp4` })).toBeVisible();
+    await expect(firstJob.getByRole("link", { name: `Download ${mediaBase}_content1_0001.mp4` })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: `Delete ${mediaBase}_content1_0001.mp4` })).toBeVisible();
     await expect(firstJob.getByRole("combobox", { name: "Render profile", exact: true })).toBeEnabled();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toBeEnabled();
     await firstJob.getByRole("tab", { name: "Generate speech" }).click();
@@ -260,17 +270,39 @@ test.describe("workspace customer journeys", () => {
     await expect(firstJob.getByRole("button", { name: "Show ComfyUI Job ID" })).toHaveCount(1);
     await expect(firstJob.getByRole("button", { name: "Show Render attempt ID" })).toHaveCount(0);
 
+    const rerenderResponse = page.waitForResponse((response) => response.url().includes("/render?node_id=") && response.request().method() === "POST");
+    await firstJob.getByRole("button", { name: "Generate new video" }).click();
+    expect((await rerenderResponse).status()).toBe(202);
+    await expect(firstJob.getByRole("link", { name: `Download ${mediaBase}_content1_0002.mp4` })).toBeVisible({ timeout: 30_000 });
+
     await page.getByRole("tab", { name: "Library" }).click();
-    await expect(page.getByLabel("Output library").getByText("ugc-preview.mp4", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText(`${mediaBase}_content1_0001.mp4`, { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText(`${mediaBase}_content1_0002.mp4`, { exact: true })).toBeVisible();
     const videoDownload = page.getByRole("link", { name: "Download video" }).first();
     const videoResponse = await page.request.get(await videoDownload.getAttribute("href") ?? "");
     expect(videoResponse.status()).toBe(200);
 
-    await page.getByRole("tab", { name: "Jobs" }).click();
-    const deleteResponse = page.waitForResponse((response) => response.url().includes("/api/v1/assets/") && response.request().method() === "DELETE");
-    await firstJob.getByRole("button", { name: "Delete ugc-preview.mp4" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
-    expect((await deleteResponse).status()).toBe(204);
-    await expect(firstJob.getByText("No output files yet.")).toBeVisible();
+    await page.getByRole("tab", { name: "Content" }).click();
+    const moreContentResponse = page.waitForResponse((response) => response.url().includes("/topics/") && response.url().endsWith("/contents") && response.request().method() === "POST");
+    await topicCard.getByRole("button", { name: /Generate more content/ }).click();
+    expect((await moreContentResponse).status()).toBe(202);
+    const secondJob = topicCard.locator(".job-card").filter({ hasText: "Content 2" });
+    await expect(secondJob).toBeVisible();
+    await expect.poll(async () => (await secondJob.innerText()).toLowerCase(), {
+      timeout: 20_000,
+      intervals: [1000, 2000],
+    }).toContain("content ready");
+    await secondJob.locator(".job-card-summary").click();
+    const deleteContentResponse = page.waitForResponse((response) => response.url().includes("/api/v1/contents/") && response.request().method() === "DELETE");
+    await secondJob.getByRole("button", { name: /Delete content/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete content" }).click();
+    expect((await deleteContentResponse).status()).toBe(204);
+    await expect(secondJob).toHaveCount(0);
+
+    const deleteTopicResponse = page.waitForResponse((response) => response.url().includes("/api/v1/topics/") && response.request().method() === "DELETE");
+    await topicCard.getByRole("button", { name: `Delete topic ${topicName}` }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete topic" }).click();
+    expect((await deleteTopicResponse).status()).toBe(204);
+    await expect(topicCard).toHaveCount(0);
   });
 });
