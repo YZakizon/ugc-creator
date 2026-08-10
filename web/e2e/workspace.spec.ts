@@ -195,7 +195,11 @@ test.describe("workspace customer journeys", () => {
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toHaveValue(workflowTemplateId);
     await expect(firstJob.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", `/workflows#workflow-${workflowTemplateId}`);
     await expect(firstJob.locator(".job-render-audio").getByText(/speech-.*\.mp3/)).toBeVisible();
-    await expect(firstJob.getByText("Upload different audio")).toBeVisible();
+    await expect(firstJob.getByRole("link", { name: "Download render audio" })).toHaveCount(0);
+    const audioUploadResponse = page.waitForResponse((response) => response.url().includes(`/api/v1/jobs/`) && response.url().endsWith("/audio") && response.request().method() === "POST");
+    await firstJob.getByLabel("Upload different audio").setInputFiles({ name: "replacement.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("replacement audio") });
+    expect((await audioUploadResponse).status()).toBe(200);
+    await expect(firstJob.locator(".job-render-audio").getByText("replacement.mp3")).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,
@@ -208,6 +212,13 @@ test.describe("workspace customer journeys", () => {
     await expect(firstJob.getByRole("button", { name: /Preview .*\.mp4/ })).toBeVisible();
     await expect(firstJob.getByRole("link", { name: /Download .*\.mp4/ })).toBeVisible();
     await expect(firstJob.getByRole("button", { name: /Delete .*\.mp4/ })).toBeVisible();
+    await expect(firstJob.getByRole("combobox", { name: "Render profile", exact: true })).toBeEnabled();
+    await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toBeEnabled();
+    await firstJob.getByRole("tab", { name: "Generate speech" }).click();
+    await expect(firstJob.getByRole("combobox", { name: "Voice profile", exact: true })).toBeEnabled();
+    await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
+    await expect(firstJob.getByRole("button", { name: "Show ComfyUI Job ID" })).toHaveCount(1);
+    await expect(firstJob.getByRole("button", { name: "Show Render attempt ID" })).toHaveCount(0);
 
     await page.getByRole("tab", { name: "Library" }).click();
     await expect(page.getByLabel("Output library").getByText("ugc-preview.mp4", { exact: true })).toBeVisible();

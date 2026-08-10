@@ -11,6 +11,7 @@ import {
   renderProgressLabel,
   speechScriptLines,
 } from "../components/dashboard-live-data";
+import type { Job } from "../lib/api";
 
 describe("home page", () => {
   afterEach(() => {
@@ -159,9 +160,57 @@ describe("home page", () => {
 
   it("shows job details and downloadable results in a collapsed job card", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
+    const requests: Array<{ url: string; body: string }> = [];
+    let currentJob: Job = {
+      id: "job-1",
+      batch_id: "batch-1",
+      topic: "A useful reminder",
+      status: "completed",
+      render_profile_id: "profile-1",
+      voice_profile_id: "voice-profile-1",
+      workflow_template_id: "workflow-1",
+      target_duration_seconds: 30,
+      error_message: null,
+      speech_script: "This is the generated speech.",
+      hook: "Start here.",
+      instagram_metadata: { title: "Instagram title" },
+      tiktok_metadata: { title: "TikTok title" },
+      llm_provider: "openai",
+      llm_model: "gpt-test",
+      prompt_version: "ugc-v1",
+      tts_provider: "elevenlabs",
+      tts_voice_id: "voice-1",
+      tts_model: "eleven_multilingual_v2",
+      tts_provider_request_id: "tts-request-1",
+      audio_asset: {
+        id: "audio-1",
+        job_id: "job-1",
+        kind: "audio",
+        filename: "speech.mp3",
+        content_type: "audio/mpeg",
+        size_bytes: 512,
+        download_url: "/api/v1/assets/audio-1/download",
+        created_at: "2026-08-10T00:00:30Z",
+      },
+      created_at: "2026-08-10T00:00:00Z",
+      updated_at: "2026-08-10T00:01:00Z",
+    };
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
+      if (url.includes("/api/v1/jobs/job-1/")) {
+        requests.push({ url, body: String(init?.body ?? "") });
+        if (url.endsWith("/voice-profile")) {
+          currentJob = { ...currentJob, status: "content_ready", voice_profile_id: "voice-profile-2", audio_asset: null, updated_at: "2026-08-10T00:02:00Z" };
+        } else if (url.endsWith("/render-profile")) {
+          currentJob = { ...currentJob, status: "ready_to_render", render_profile_id: "profile-2", voice_profile_id: "voice-profile-2", workflow_template_id: "workflow-2", updated_at: "2026-08-10T00:03:00Z" };
+        } else if (url.endsWith("/workflow-template")) {
+          currentJob = { ...currentJob, status: "ready_to_render", workflow_template_id: "workflow-1", updated_at: "2026-08-10T00:04:00Z" };
+        } else if (url.endsWith("/audio")) {
+          currentJob = { ...currentJob, status: "ready_to_render", audio_asset: { id: "audio-2", job_id: "job-1", kind: "audio", filename: "replacement.mp3", content_type: "audio/mpeg", size_bytes: 17, download_url: "/api/v1/assets/audio-2/download", created_at: "2026-08-10T00:05:00Z" }, updated_at: "2026-08-10T00:05:00Z" };
+        }
+        return new Response(JSON.stringify(currentJob), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (url.includes("render-attempts")) {
         return new Response(JSON.stringify({ items: [{
           id: "attempt-1",
@@ -195,53 +244,21 @@ describe("home page", () => {
         return new Response(JSON.stringify({ items: [{ id: "batch-1", name: "August launch", jobs: [] }], total: 1, limit: 100, offset: 0 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("render-profiles")) {
-        return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Elena LTX", voice_profile_id: "voice-profile-1", workflow_template_id: "workflow-1", is_active: true }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ id: "profile-1", name: "Elena LTX", voice_profile_id: "voice-profile-1", workflow_template_id: "workflow-1", is_active: true }, { id: "profile-2", name: "Elena Studio", voice_profile_id: "voice-profile-2", workflow_template_id: "workflow-2", is_active: true }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("workflow-templates")) {
-        return new Response(JSON.stringify({ items: [{ id: "workflow-1", name: "LTX workflow", renderer_provider: "comfyui" }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Response(JSON.stringify({ items: [{ id: "workflow-1", name: "LTX workflow", renderer_provider: "comfyui" }, { id: "workflow-2", name: "LTX workflow 2", renderer_provider: "comfyui" }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("voice-profiles")) {
-        return new Response(JSON.stringify({ items: [{ id: "voice-profile-1", name: "Hope voice" }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+        const voiceDefaults = { provider: "elevenlabs", provider_voice_id: "voice-id", provider_model: "eleven_multilingual_v2", speed: 1, stability: 0.5, similarity: 0.75, style_exaggeration: 0.5, extra_settings: { voice_name: "Elena" }, created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:00:00Z" };
+        return new Response(JSON.stringify({ items: [{ ...voiceDefaults, id: "voice-profile-1", name: "Hope voice" }, { ...voiceDefaults, id: "voice-profile-2", name: "Elena voice" }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({
         in_progress: 0,
         ready_to_render: 0,
         completed_videos: 1,
-        render_profiles: 1,
-        recent_jobs: [{
-          id: "job-1",
-          batch_id: "batch-1",
-          topic: "A useful reminder",
-          status: "completed",
-          render_profile_id: "profile-1",
-          voice_profile_id: "voice-profile-1",
-          workflow_template_id: "workflow-1",
-          target_duration_seconds: 30,
-          error_message: null,
-          speech_script: "This is the generated speech.",
-          hook: "Start here.",
-          instagram_metadata: { title: "Instagram title" },
-          tiktok_metadata: { title: "TikTok title" },
-          llm_provider: "openai",
-          llm_model: "gpt-test",
-          prompt_version: "ugc-v1",
-          tts_provider: "elevenlabs",
-          tts_voice_id: "voice-1",
-          tts_model: "eleven_multilingual_v2",
-          tts_provider_request_id: "tts-request-1",
-          audio_asset: {
-            id: "audio-1",
-            job_id: "job-1",
-            kind: "audio",
-            filename: "speech.mp3",
-            content_type: "audio/mpeg",
-            size_bytes: 512,
-            download_url: "/api/v1/assets/audio-1/download",
-            created_at: "2026-08-10T00:00:30Z",
-          },
-          created_at: "2026-08-10T00:00:00Z",
-          updated_at: "2026-08-10T00:01:00Z",
-        }],
+        render_profiles: 2,
+        recent_jobs: [currentJob],
       }), { status: 200, headers: { "content-type": "application/json" } });
     });
 
@@ -276,12 +293,31 @@ describe("home page", () => {
       "/api/v1/assets/asset-1/download",
     );
     expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toHaveValue("voice-profile-1");
+    expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toBeEnabled();
     expect(jobCard.getByRole("link", { name: "Open voice profile details", hidden: true })).toHaveAttribute("href", "/voice-profiles#voice-profile-voice-profile-1");
+    fireEvent.change(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true }), { target: { value: "voice-profile-2" } });
+    fireEvent.click(jobCard.getByRole("button", { name: "Save voice profile", hidden: true }));
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith("/voice-profile") && request.body === JSON.stringify({ voice_profile_id: "voice-profile-2" }))).toBe(true));
     fireEvent.click(jobCard.getByRole("tab", { name: "Render ComfyUI" }));
-    expect(jobCard.getByRole("combobox", { name: "Workflow" })).toHaveValue("workflow-1");
+    expect(jobCard.getByRole("combobox", { name: "Render profile" })).toBeEnabled();
+    fireEvent.change(jobCard.getByRole("combobox", { name: "Render profile" }), { target: { value: "profile-2" } });
+    fireEvent.click(jobCard.getByRole("button", { name: "Save render profile" }));
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith("/render-profile") && request.body === JSON.stringify({ render_profile_id: "profile-2" }))).toBe(true));
+    expect(jobCard.getByRole("combobox", { name: "Workflow" })).toHaveValue("workflow-2");
+    expect(jobCard.getByRole("combobox", { name: "Workflow" })).toBeEnabled();
+    fireEvent.change(jobCard.getByRole("combobox", { name: "Workflow" }), { target: { value: "workflow-1" } });
+    fireEvent.click(jobCard.getByRole("button", { name: "Save workflow" }));
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith("/workflow-template") && request.body === JSON.stringify({ workflow_template_id: "workflow-1" }))).toBe(true));
     expect(jobCard.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", "/workflows#workflow-workflow-1");
-    expect(jobCard.getAllByText("speech.mp3").some((element) => !element.closest("[hidden]"))).toBe(true);
-    expect(jobCard.getByText("Upload different audio")).toBeVisible();
+    const upload = jobCard.getByLabelText("Upload different audio");
+    expect(upload).toBeEnabled();
+    fireEvent.change(upload, { target: { files: [new File(["replacement audio"], "replacement.mp3", { type: "audio/mpeg" })] } });
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith("/audio") && request.body.includes('"filename":"replacement.mp3"'))).toBe(true));
+    expect(await within(card!.querySelector(".job-render-audio") as HTMLElement).findByText("replacement.mp3")).toBeVisible();
+    expect(jobCard.queryByRole("link", { name: "Download render audio" })).not.toBeInTheDocument();
+    expect(jobCard.queryByRole("button", { name: "Show Render attempt ID" })).not.toBeInTheDocument();
+    fireEvent.click(jobCard.getByRole("button", { name: "Show ComfyUI Job ID" }));
+    expect(jobCard.getByText("prompt-1")).toBeVisible();
     fireEvent.click(jobCard.getByRole("button", { name: "Preview finished.mp4" }));
     expect(card!.querySelector("video")).toHaveAttribute("src", "/api/v1/assets/asset-1/download?inline=true");
     expect(jobCard.getByRole("button", { name: "Delete finished.mp4" })).toBeInTheDocument();

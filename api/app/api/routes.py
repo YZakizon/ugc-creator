@@ -479,16 +479,27 @@ def update_job_render_profile(
         JobStatus.SUBMITTING_RENDER.value,
         JobStatus.RENDERING.value,
         JobStatus.DOWNLOADING_OUTPUT.value,
-        JobStatus.COMPLETED.value,
     }:
         raise HTTPException(
             status_code=409,
-            detail="Render profile cannot change while this job is active or completed",
+            detail="Render profile cannot change while this job is active",
         )
     profile = config_repo.get_render_profile(payload.render_profile_id)
     if profile is None or not profile.is_active:
         raise HTTPException(status_code=422, detail="Active render profile not found")
-    updated = repo.update_job_render_profile(job_id, profile)
+    current_profile = (
+        config_repo.get_render_profile(job.render_profile_id)
+        if job.render_profile_id
+        else None
+    )
+    current_voice_id = job.voice_profile_id or (
+        current_profile.voice_profile_id if current_profile else None
+    )
+    updated = repo.update_job_render_profile(
+        job,
+        profile,
+        archive_audio=current_voice_id != profile.voice_profile_id,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobRead.model_validate(job_to_dict(updated))
@@ -510,14 +521,10 @@ def update_job_voice_profile(
         JobStatus.SUBMITTING_RENDER.value,
         JobStatus.RENDERING.value,
         JobStatus.DOWNLOADING_OUTPUT.value,
-        JobStatus.COMPLETED.value,
     }:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Voice profile cannot change while speech or video is active "
-                "or completed"
-            ),
+            detail=("Voice profile cannot change while speech or video is active"),
         )
     voice = config_repo.get_voice_profile(payload.voice_profile_id)
     if voice is None:
@@ -553,11 +560,10 @@ def update_job_workflow_template(
         JobStatus.SUBMITTING_RENDER.value,
         JobStatus.RENDERING.value,
         JobStatus.DOWNLOADING_OUTPUT.value,
-        JobStatus.COMPLETED.value,
     }:
         raise HTTPException(
             status_code=409,
-            detail="Workflow cannot change while this job is active or completed",
+            detail="Workflow cannot change while this job is active",
         )
     workflow = config_repo.get_workflow_template(payload.workflow_template_id)
     if workflow is None:
@@ -595,11 +601,10 @@ def upload_job_audio(
         JobStatus.SUBMITTING_RENDER.value,
         JobStatus.RENDERING.value,
         JobStatus.DOWNLOADING_OUTPUT.value,
-        JobStatus.COMPLETED.value,
     }:
         raise HTTPException(
             status_code=409,
-            detail="Audio cannot change while speech or video is active or completed",
+            detail="Audio cannot change while speech or video is active",
         )
     filename = PurePath(payload.filename).name
     if not filename or filename in {".", ".."}:
