@@ -32,6 +32,7 @@ from app.repositories import (
     character_to_dict,
     job_to_dict,
     render_profile_to_dict,
+    topic_summary_to_dict,
     topic_to_dict,
     voice_preview_to_dict,
     voice_profile_to_dict,
@@ -44,6 +45,7 @@ from app.schemas import (
     CharacterCreate,
     CharacterList,
     CharacterRead,
+    ContentList,
     ContentPromptSettingsRead,
     ContentPromptSettingsUpdate,
     DashboardSummary,
@@ -67,6 +69,7 @@ from app.schemas import (
     TopicCreate,
     TopicList,
     TopicRead,
+    TopicSummaryRead,
     TTSAccountUsageRead,
     TTSVoiceList,
     TTSVoiceRead,
@@ -94,23 +97,12 @@ from app.workers.tts_tasks import generate_job_tts, generate_voice_preview
 
 router = APIRouter(prefix="/api/v1")
 
-ACTIVE_CONTENT_STATUSES = {
-    JobStatus.GENERATING_CONTENT.value,
-    JobStatus.GENERATING_TTS.value,
-    JobStatus.FITTING_DURATION.value,
-    JobStatus.QUEUED.value,
-    JobStatus.SUBMITTING_RENDER.value,
-    JobStatus.RENDERING.value,
-    JobStatus.DOWNLOADING_OUTPUT.value,
-}
 
-
-def _delete_stored_job_assets(job: object) -> None:
-    assets = getattr(job, "__dict__", {}).get("media_assets", [])
+def _delete_object_keys(object_keys: tuple[str, ...]) -> None:
     storage = LocalStorageProvider()
     try:
-        for asset in assets:
-            storage.delete(asset.object_key)
+        for object_key in object_keys:
+            storage.delete(object_key)
     except StorageError as exc:
         raise HTTPException(
             status_code=503, detail="Media storage is unavailable"
@@ -550,9 +542,12 @@ def list_topics(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> TopicList:
-    topics, total = repo.list_batches(limit, offset)
+    topics, total = repo.list_topics(limit, offset)
     return TopicList(
-        items=[TopicRead.model_validate(topic_to_dict(topic)) for topic in topics],
+        items=[
+            TopicSummaryRead.model_validate(topic_summary_to_dict(topic))
+            for topic in topics
+        ],
         total=total,
         limit=limit,
         offset=offset,
@@ -565,6 +560,25 @@ def get_topic(topic_id: UUID, repo: BatchRepository = Depends(repository)) -> To
     if topic is None:
         raise HTTPException(status_code=404, detail="Topic not found")
     return TopicRead.model_validate(topic_to_dict(topic))
+
+
+@router.get("/topics/{topic_id}/contents", response_model=ContentList)
+def list_topic_contents(
+    topic_id: UUID,
+    repo: BatchRepository = Depends(repository),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ContentList:
+    result = repo.list_topic_contents(topic_id, limit, offset)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    contents, total = result
+    return ContentList(
+        items=[JobRead.model_validate(job_to_dict(content)) for content in contents],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(
@@ -616,18 +630,13 @@ def generate_more_content(
 def delete_topic(
     topic_id: UUID, repo: BatchRepository = Depends(repository)
 ) -> Response:
-    topic = repo.get_batch(topic_id)
-    if topic is None:
+    try:
+        deleted = repo.delete_topic(topic_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if deleted is None:
         raise HTTPException(status_code=404, detail="Topic not found")
-    if any(content.status in ACTIVE_CONTENT_STATUSES for content in topic.jobs):
-        raise HTTPException(
-            status_code=409,
-            detail="Topic cannot be deleted while content generation is active",
-        )
-    for content in topic.jobs:
-        _delete_stored_job_assets(content)
-    if not repo.delete_topic(topic_id):
-        raise HTTPException(status_code=404, detail="Topic not found")
+    _delete_object_keys(deleted.object_keys)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -635,23 +644,13 @@ def delete_topic(
 def delete_content(
     content_id: UUID, repo: BatchRepository = Depends(repository)
 ) -> Response:
-    content = repo.get_job(content_id)
-    if content is None:
+    try:
+        deleted = repo.delete_content(content_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if deleted is None:
         raise HTTPException(status_code=404, detail="Content not found")
-    if content.status in ACTIVE_CONTENT_STATUSES:
-        raise HTTPException(
-            status_code=409,
-            detail="Content cannot be deleted while generation is active",
-        )
-    topic = repo.get_batch(content.batch_id)
-    if topic is not None and len(topic.jobs) == 1:
-        raise HTTPException(
-            status_code=409,
-            detail="Delete the topic to remove its only content version",
-        )
-    _delete_stored_job_assets(content)
-    if not repo.delete_content(content_id):
-        raise HTTPException(status_code=404, detail="Content not found")
+    _delete_object_keys(deleted.object_keys)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

@@ -68,6 +68,8 @@ export type Topic = {
   contents: Job[];
 };
 
+export type TopicSummary = Omit<Topic, "contents">;
+
 export type DashboardSummary = {
   in_progress: number;
   ready_to_render: number;
@@ -317,8 +319,12 @@ export function createTopics(input: Omit<CreateTopicInput, "topic"> & { topics: 
   });
 }
 
-export function getTopics(limit = 20, offset = 0): Promise<{ items: Topic[]; total: number; limit: number; offset: number }> {
-  return request<{ items: Topic[]; total: number; limit: number; offset: number }>(`/api/v1/topics?limit=${limit}&offset=${offset}`);
+export function getTopics(limit = 20, offset = 0): Promise<{ items: TopicSummary[]; total: number; limit: number; offset: number }> {
+  return request<{ items: TopicSummary[]; total: number; limit: number; offset: number }>(`/api/v1/topics?limit=${limit}&offset=${offset}`);
+}
+
+export function getTopicContents(topicId: string, limit = 20, offset = 0): Promise<{ items: Job[]; total: number; limit: number; offset: number }> {
+  return request<{ items: Job[]; total: number; limit: number; offset: number }>(`/api/v1/topics/${topicId}/contents?limit=${limit}&offset=${offset}`);
 }
 
 export function generateMoreContent(topicId: string): Promise<Job> {

@@ -6,8 +6,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
 import { ConfirmDialog } from "@/components/feedback";
-import { deleteContent, deleteMediaAsset, deleteTopic, generateJobContent, generateJobSpeech, generateMoreContent, getBatches, getDashboardSummary, getRenderAttempts, getRenderNodes, getRenderProfiles, getTopics, getVoiceProfiles, getWorkflowTemplates, queueJobRender, updateJobRenderProfile, updateJobVoiceProfile, updateJobWorkflowTemplate, uploadJobAudio } from "@/lib/api";
-import type { DashboardSummary, Job, MediaAsset, RenderAttempt, Topic } from "@/lib/api";
+import { deleteContent, deleteMediaAsset, deleteTopic, generateJobContent, generateJobSpeech, generateMoreContent, getBatches, getDashboardSummary, getRenderAttempts, getRenderNodes, getRenderProfiles, getTopicContents, getTopics, getVoiceProfiles, getWorkflowTemplates, queueJobRender, updateJobRenderProfile, updateJobVoiceProfile, updateJobWorkflowTemplate, uploadJobAudio } from "@/lib/api";
+import type { DashboardSummary, Job, MediaAsset, RenderAttempt, TopicSummary } from "@/lib/api";
 
 export function failedJobRetryKind(
   job: Pick<Job, "status" | "speech_script">,
@@ -96,7 +96,8 @@ export function CurrentDate() {
 export function TopicHistory({ contentGenerationReady, speechGenerationReady }: { contentGenerationReady: boolean; speechGenerationReady: boolean }) {
   const queryClient = useQueryClient();
   const [topicOffset, setTopicOffset] = useState(0);
-  const [pendingTopicDelete, setPendingTopicDelete] = useState<Topic | null>(null);
+  const [openTopicIds, setOpenTopicIds] = useState<Record<string, boolean>>({});
+  const [pendingTopicDelete, setPendingTopicDelete] = useState<TopicSummary | null>(null);
   const topicLimit = 20;
   const topics = useQuery({ queryKey: ["topics", topicOffset], queryFn: () => getTopics(topicLimit, topicOffset), refetchInterval: 5000 });
   useEffect(() => {
@@ -109,6 +110,7 @@ export function TopicHistory({ contentGenerationReady, speechGenerationReady }: 
     mutationFn: generateMoreContent,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["topics"] });
+      void queryClient.invalidateQueries({ queryKey: ["topic-contents"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
     },
   });
@@ -129,7 +131,7 @@ export function TopicHistory({ contentGenerationReady, speechGenerationReady }: 
   if (!topicItems.length) return <div className="empty-state compact-empty"><h3>No topics yet</h3><p>Create a topic to begin generating content.</p><a className="button button-secondary" href="#create">Create your first topic</a></div>;
 
   return <div className="topic-history-list">
-    {topicItems.map((topic) => <details className="topic-history-card" key={topic.id}>
+    {topicItems.map((topic) => <details className="topic-history-card" key={topic.id} onToggle={(event) => { const open = event.currentTarget.open; setOpenTopicIds((current) => ({ ...current, [topic.id]: open })); }}>
       <summary>
         <span><strong>{topic.name}</strong><small>Created <HumanDate value={topic.created_at} /> · {topic.content_count} content {topic.content_count === 1 ? "version" : "versions"}</small></span>
         <span className="job-chevron" aria-hidden="true">⌄</span>
@@ -140,7 +142,7 @@ export function TopicHistory({ contentGenerationReady, speechGenerationReady }: 
           <button className="icon-button danger" type="button" aria-label={`Delete topic ${topic.name}`} title="Delete topic" onClick={() => setPendingTopicDelete(topic)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button>
         </div>
         {!contentGenerationReady && <p className="field-hint">Configure OpenAI before generating more content.</p>}
-        <RecentJobs contentGenerationReady={contentGenerationReady} speechGenerationReady={speechGenerationReady} detailed jobsOverride={topic.contents} topicNameOverride={topic.name} />
+        {openTopicIds[topic.id] && <TopicContents topic={topic} contentGenerationReady={contentGenerationReady} speechGenerationReady={speechGenerationReady} />}
       </div>
     </details>)}
     {topics.data && topics.data.total > topicLimit && <nav className="topic-history-pagination" aria-label="Topic history pages"><button className="button button-secondary button-small" type="button" disabled={topicOffset === 0} onClick={() => setTopicOffset((current) => Math.max(0, current - topicLimit))}>Previous</button><span>Topics {topicOffset + 1}–{Math.min(topicOffset + topicItems.length, topics.data.total)} of {topics.data.total}</span><button className="button button-secondary button-small" type="button" disabled={topicOffset + topicLimit >= topics.data.total} onClick={() => setTopicOffset((current) => current + topicLimit)}>Next</button></nav>}
@@ -148,6 +150,26 @@ export function TopicHistory({ contentGenerationReady, speechGenerationReady }: 
     {removeTopic.isError && <p className="form-error" role="alert">{removeTopic.error.message}</p>}
     <ConfirmDialog open={pendingTopicDelete !== null} title="Delete this topic and all content?" message={pendingTopicDelete ? `“${pendingTopicDelete.name}” and all generated scripts, speech, render history, videos, and stored files will be permanently deleted.` : ""} confirmLabel="Delete topic" onCancel={() => setPendingTopicDelete(null)} onConfirm={() => { if (pendingTopicDelete) removeTopic.mutate(pendingTopicDelete.id); }} />
   </div>;
+}
+
+function TopicContents({ topic, contentGenerationReady, speechGenerationReady }: { topic: TopicSummary; contentGenerationReady: boolean; speechGenerationReady: boolean }) {
+  const [contentOffset, setContentOffset] = useState(0);
+  const contentLimit = 20;
+  const contents = useQuery({ queryKey: ["topic-contents", topic.id, contentOffset], queryFn: () => getTopicContents(topic.id, contentLimit, contentOffset), refetchInterval: 5000 });
+  useEffect(() => {
+    if (!contents.isFetching && contents.data && contentOffset > 0 && contents.data.items.length === 0) {
+      const lastOffset = Math.max(0, Math.floor(Math.max(0, contents.data.total - 1) / contentLimit) * contentLimit);
+      setContentOffset(lastOffset);
+    }
+  }, [contentOffset, contents.data, contents.isFetching]);
+  if (contents.isLoading) return <div className="empty-state compact-empty"><p>Loading content history…</p></div>;
+  if (contents.isError) return <p className="form-error" role="alert">Content history is temporarily unavailable.</p>;
+  const items = contents.data?.items ?? [];
+  if (!items.length && contentOffset > 0) return <div className="empty-state compact-empty"><p>Returning to the previous content page…</p></div>;
+  return <>
+    <RecentJobs contentGenerationReady={contentGenerationReady} speechGenerationReady={speechGenerationReady} detailed jobsOverride={items} topicNameOverride={topic.name} />
+    {contents.data && contents.data.total > contentLimit && <nav className="topic-history-pagination" aria-label={`Content history pages for ${topic.name}`}><button className="button button-secondary button-small" type="button" disabled={contentOffset === 0} onClick={() => setContentOffset((current) => Math.max(0, current - contentLimit))}>Previous content</button><span>Content {contentOffset + 1}–{Math.min(contentOffset + items.length, contents.data.total)} of {contents.data.total}</span><button className="button button-secondary button-small" type="button" disabled={contentOffset + contentLimit >= contents.data.total} onClick={() => setContentOffset((current) => current + contentLimit)}>Next content</button></nav>}
+  </>;
 }
 
 function JobResult({ title, value }: { title: string; value: Record<string, unknown> | null }) {
@@ -216,6 +238,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
   };
   const refreshContent = () => {
     void queryClient.invalidateQueries({ queryKey: ["topics"] });
+    void queryClient.invalidateQueries({ queryKey: ["topic-contents"] });
     void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
   };
   const clearSelection = (setter: React.Dispatch<React.SetStateAction<Record<string, string>>>, jobId: string) => {
@@ -291,6 +314,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
     onSuccess: () => {
       setPendingContentDelete(null);
       void queryClient.invalidateQueries({ queryKey: ["topics"] });
+      void queryClient.invalidateQueries({ queryKey: ["topic-contents"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["render-attempts"] });
     },

@@ -156,6 +156,9 @@ describe("home page", () => {
         contents = [...contents, next];
         return new Response(JSON.stringify(next), { status: 202, headers: { "content-type": "application/json" } });
       }
+      if (url.includes("/topics/topic-1/contents?") && method === "GET") {
+        return new Response(JSON.stringify({ items: contents, total: contents.length, limit: 20, offset: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       if (url.endsWith("/contents/content-1") && method === "DELETE") {
         contents = contents.filter((item) => item.id !== "content-1");
         return new Response(null, { status: 204 });

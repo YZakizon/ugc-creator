@@ -1,5 +1,6 @@
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
@@ -44,6 +45,21 @@ VOICE_PREVIEW_OUTCOME_UNKNOWN = (
     "The previous speech request may still be running. Its provider outcome is "
     "unknown, so it was not retried automatically. Request speech again to retry."
 )
+
+ACTIVE_CONTENT_STATUSES = {
+    JobStatus.GENERATING_CONTENT.value,
+    JobStatus.GENERATING_TTS.value,
+    JobStatus.FITTING_DURATION.value,
+    JobStatus.QUEUED.value,
+    JobStatus.SUBMITTING_RENDER.value,
+    JobStatus.RENDERING.value,
+    JobStatus.DOWNLOADING_OUTPUT.value,
+}
+
+
+@dataclass(frozen=True)
+class DeletionResult:
+    object_keys: tuple[str, ...]
 
 
 def voice_preview_is_stale(preview: VoicePreview, now: datetime) -> bool:
@@ -153,6 +169,18 @@ class InMemoryBatchRepository:
         )
         return batches[offset : offset + limit], len(batches)
 
+    def list_topics(self, limit: int, offset: int) -> tuple[list[Batch], int]:
+        return self.list_batches(limit, offset)
+
+    def list_topic_contents(
+        self, topic_id: UUID, limit: int, offset: int
+    ) -> tuple[list[TopicJob], int] | None:
+        topic = self.batches.get(topic_id)
+        if topic is None:
+            return None
+        contents = sorted(topic.jobs, key=lambda item: item.content_number)
+        return contents[offset : offset + limit], len(contents)
+
     def get_batch(self, batch_id: UUID) -> Batch | None:
         return self.batches.get(batch_id)
 
@@ -184,23 +212,41 @@ class InMemoryBatchRepository:
         self.jobs[content.id] = content
         return content
 
-    def delete_content(self, content_id: UUID) -> bool:
-        content = self.jobs.pop(content_id, None)
+    def delete_content(self, content_id: UUID) -> DeletionResult | None:
+        content = self.jobs.get(content_id)
         if content is None:
-            return False
+            return None
+        if content.status in ACTIVE_CONTENT_STATUSES:
+            raise ValueError("Content cannot be deleted while generation is active")
         batch = self.batches.get(content.batch_id)
+        if batch is not None and len(batch.jobs) == 1:
+            raise ValueError("Delete the topic to remove its only content version")
+        object_keys = tuple(
+            asset.object_key for asset in content.__dict__.get("media_assets", [])
+        )
+        self.jobs.pop(content_id)
         if batch is not None:
             batch.jobs = [job for job in batch.jobs if job.id != content_id]
             batch.updated_at = utc_now()
-        return True
+        return DeletionResult(object_keys)
 
-    def delete_topic(self, topic_id: UUID) -> bool:
-        batch = self.batches.pop(topic_id, None)
+    def delete_topic(self, topic_id: UUID) -> DeletionResult | None:
+        batch = self.batches.get(topic_id)
         if batch is None:
-            return False
+            return None
+        if any(content.status in ACTIVE_CONTENT_STATUSES for content in batch.jobs):
+            raise ValueError(
+                "Topic cannot be deleted while content generation is active"
+            )
+        object_keys = tuple(
+            asset.object_key
+            for content in batch.jobs
+            for asset in content.__dict__.get("media_assets", [])
+        )
+        self.batches.pop(topic_id)
         for content in batch.jobs:
             self.jobs.pop(content.id, None)
-        return True
+        return DeletionResult(object_keys)
 
     def queue_job_for_content(self, job_id: UUID) -> TopicJob | None:
         job = self.jobs.get(job_id)
@@ -446,6 +492,46 @@ class SqlAlchemyBatchRepository:
             total = session.scalar(select(func.count(Batch.id))) or 0
             return batches, total
 
+    def list_topics(self, limit: int, offset: int) -> tuple[list[Batch], int]:
+        with self.factory() as session:
+            query = (
+                select(Batch)
+                .options(
+                    selectinload(Batch.jobs).load_only(TopicJob.id, TopicJob.status)
+                )
+                .order_by(Batch.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            topics = list(session.scalars(query).unique().all())
+            total = session.scalar(select(func.count()).select_from(Batch)) or 0
+            return topics, total
+
+    def list_topic_contents(
+        self, topic_id: UUID, limit: int, offset: int
+    ) -> tuple[list[TopicJob], int] | None:
+        with self.factory() as session:
+            if session.get(Batch, topic_id) is None:
+                return None
+            query = (
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.batch_id == topic_id)
+                .order_by(TopicJob.content_number)
+                .limit(limit)
+                .offset(offset)
+            )
+            contents = list(session.scalars(query).all())
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(TopicJob)
+                    .where(TopicJob.batch_id == topic_id)
+                )
+                or 0
+            )
+            return contents, total
+
     def get_batch(self, batch_id: UUID) -> Batch | None:
         with self.factory() as session:
             batch = session.scalar(
@@ -492,26 +578,61 @@ class SqlAlchemyBatchRepository:
                 .where(TopicJob.id == content.id)
             )
 
-    def delete_content(self, content_id: UUID) -> bool:
+    def delete_content(self, content_id: UUID) -> DeletionResult | None:
         with self.factory() as session:
-            content = session.get(TopicJob, content_id)
+            content = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == content_id)
+                .with_for_update()
+            )
             if content is None:
-                return False
-            batch = session.get(Batch, content.batch_id)
+                return None
+            if content.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError("Content cannot be deleted while generation is active")
+            batch = session.scalar(
+                select(Batch)
+                .options(selectinload(Batch.jobs))
+                .where(Batch.id == content.batch_id)
+                .with_for_update()
+            )
+            if batch is not None and len(batch.jobs) == 1:
+                raise ValueError("Delete the topic to remove its only content version")
+            object_keys = tuple(asset.object_key for asset in content.media_assets)
             session.delete(content)
             if batch is not None:
                 batch.updated_at = utc_now()
             session.commit()
-            return True
+            return DeletionResult(object_keys)
 
-    def delete_topic(self, topic_id: UUID) -> bool:
+    def delete_topic(self, topic_id: UUID) -> DeletionResult | None:
         with self.factory() as session:
-            topic = session.get(Batch, topic_id)
+            topic = session.scalar(
+                select(Batch).where(Batch.id == topic_id).with_for_update()
+            )
             if topic is None:
-                return False
+                return None
+            contents = list(
+                session.scalars(
+                    select(TopicJob)
+                    .options(selectinload(TopicJob.media_assets))
+                    .where(TopicJob.batch_id == topic_id)
+                    .order_by(TopicJob.id)
+                    .with_for_update()
+                ).all()
+            )
+            if any(content.status in ACTIVE_CONTENT_STATUSES for content in contents):
+                raise ValueError(
+                    "Topic cannot be deleted while content generation is active"
+                )
+            object_keys = tuple(
+                asset.object_key
+                for content in contents
+                for asset in content.media_assets
+            )
             session.delete(topic)
             session.commit()
-            return True
+            return DeletionResult(object_keys)
 
     def queue_job_for_content(self, job_id: UUID) -> TopicJob | None:
         with self.factory() as session:
@@ -519,6 +640,7 @@ class SqlAlchemyBatchRepository:
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
                 .where(TopicJob.id == job_id)
+                .with_for_update()
             )
             if job is None:
                 return None
@@ -540,7 +662,9 @@ class SqlAlchemyBatchRepository:
 
     def queue_job_for_tts(self, job_id: UUID) -> TopicJob | None:
         with self.factory() as session:
-            job = session.get(TopicJob, job_id)
+            job = session.scalar(
+                select(TopicJob).where(TopicJob.id == job_id).with_for_update()
+            )
             if job is None:
                 return None
             if not job.speech_script:
@@ -1813,7 +1937,7 @@ def batch_to_dict(batch: Batch) -> dict[str, object]:
     }
 
 
-def topic_to_dict(batch: Batch) -> dict[str, object]:
+def topic_summary_to_dict(batch: Batch) -> dict[str, object]:
     jobs: Sequence[TopicJob] = batch.jobs
     statuses = {job.status for job in jobs}
     if jobs and statuses == {JobStatus.COMPLETED.value}:
@@ -1840,8 +1964,13 @@ def topic_to_dict(batch: Batch) -> dict[str, object]:
         "content_count": len(jobs),
         "created_at": batch.created_at,
         "updated_at": batch.updated_at,
-        "contents": [job_to_dict(job) for job in jobs],
     }
+
+
+def topic_to_dict(batch: Batch) -> dict[str, object]:
+    summary = topic_summary_to_dict(batch)
+    jobs = sorted(batch.jobs, key=lambda item: item.content_number)
+    return {**summary, "contents": [job_to_dict(job) for job in jobs]}
 
 
 def job_to_dict(job: TopicJob) -> dict[str, object]:

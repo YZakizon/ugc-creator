@@ -119,14 +119,15 @@ async def test_topic_generates_incrementing_content_history(
         second = await client.post(f"/api/v1/topics/{topic_id}/contents")
         third = await client.post(f"/api/v1/topics/{topic_id}/contents")
         listed = await client.get("/api/v1/topics")
+        contents = await client.get(f"/api/v1/topics/{topic_id}/contents")
 
     assert created.status_code == 201
     assert created.json()["contents"][0]["content_number"] == 1
     assert second.status_code == 202
     assert third.status_code == 202
-    assert [
-        item["content_number"] for item in listed.json()["items"][0]["contents"]
-    ] == [1, 2, 3]
+    assert listed.json()["items"][0]["content_count"] == 3
+    assert "contents" not in listed.json()["items"][0]
+    assert [item["content_number"] for item in contents.json()["items"]] == [1, 2, 3]
     assert queued == [second.json()["id"], third.json()["id"]]
 
 

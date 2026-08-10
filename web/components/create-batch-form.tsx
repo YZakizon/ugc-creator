@@ -18,7 +18,7 @@ export function CreateTopicForm() {
     queryKey: ["render-profiles"],
     queryFn: getRenderProfiles,
   });
-  const availableProfiles = profilesQuery.data?.items.filter((profile) => profile.voice_profile_id !== null) ?? [];
+  const availableProfiles = profilesQuery.data?.items.filter((profile) => profile.is_active && profile.voice_profile_id !== null) ?? [];
   const mutation = useMutation({
     mutationFn: async () => {
       const cleanedTopics = topics.map((topic) => topic.trim()).filter(Boolean);
@@ -75,7 +75,7 @@ export function CreateTopicForm() {
             <option value="">Choose a render profile…</option>
             {availableProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
           </select>
-          {profilesQuery.isError ? <small className="field-hint">Render profiles could not be loaded.</small> : availableProfiles.length === 0 ? <small className="field-hint">Connect a voice to a render profile before creating a topic.</small> : null}
+          {profilesQuery.isError ? <small className="field-hint">Render profiles could not be loaded.</small> : availableProfiles.length === 0 ? <small className="field-hint">Create an active render profile with a connected voice before creating a topic.</small> : null}
         </label>
         <div className="form-options">
           <label>Target duration (seconds)<input type="number" min="5" max="180" value={duration} onChange={(event) => setDuration(event.target.value)} /></label>

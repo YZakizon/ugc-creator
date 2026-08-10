@@ -94,8 +94,20 @@ describe("create topic form", () => {
 
     render(<Providers><CreateTopicForm /></Providers>);
 
-    expect(await screen.findByText("Connect a voice to a render profile before creating a topic.")).toBeVisible();
+    expect(await screen.findByText("Create an active render profile with a connected voice before creating a topic.")).toBeVisible();
     expect(screen.queryByRole("option", { name: "Elena Shelf" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create topic" })).toBeDisabled();
+  });
+
+  it("does not offer inactive render profiles", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      items: [{ ...profile, is_active: false }],
+      total: 1,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    render(<Providers><CreateTopicForm /></Providers>);
+
+    expect(await screen.findByText("Create an active render profile with a connected voice before creating a topic.")).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Elena Shelf" })).not.toBeInTheDocument();
   });
 });

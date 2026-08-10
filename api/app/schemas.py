@@ -173,8 +173,27 @@ class TopicRead(BaseModel):
     contents: list[JobRead] = Field(default_factory=list)
 
 
+class TopicSummaryRead(BaseModel):
+    id: UUID
+    name: str
+    status: BatchStatus
+    default_render_profile_id: UUID | None
+    target_duration_seconds: int
+    auto_fit_duration: bool
+    content_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class TopicList(BaseModel):
-    items: list[TopicRead]
+    items: list[TopicSummaryRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class ContentList(BaseModel):
+    items: list[JobRead]
     total: int
     limit: int
     offset: int
