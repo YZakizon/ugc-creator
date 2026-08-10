@@ -486,6 +486,7 @@ class RenderAttemptRead(BaseModel):
     error_message: str | None
     output_filename: str | None
     output_deleted_at: datetime | None
+    effective_values: dict[str, object] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     assets: list[MediaAssetRead] = Field(default_factory=list)

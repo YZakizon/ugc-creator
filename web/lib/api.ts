@@ -228,6 +228,7 @@ export type RenderAttempt = {
   error_message: string | null;
   output_filename: string | null;
   output_deleted_at: string | null;
+  effective_values: Record<string, unknown>;
   created_at: string;
   updated_at: string;
   assets: MediaAsset[];

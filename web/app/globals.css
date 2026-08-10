@@ -67,6 +67,18 @@ kbd { padding: 2px 4px; border: 1px solid #e3e3ea; border-radius: 4px; color: #a
 .confirm-dialog h2 { margin: 0; color: #343541; font-size: 18px; }
 .confirm-dialog p { margin: 16px 0 20px; color: #777887; font-size: 14px; line-height: 1.5; }
 .confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.render-params-dialog { width: min(760px, 100%); max-height: min(760px, 88vh); overflow: auto; padding: 20px; border: 1px solid #e5e5ed; border-radius: 12px; background: white; box-shadow: 0 20px 60px #25253833; }
+.render-params-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.render-params-heading h2 { margin: 0; color: #343541; font-size: 18px; }
+.render-params-heading p { margin: 7px 0 0; color: #777887; font-size: 13px; line-height: 1.45; }
+.render-params-heading code, .render-param code { color: #5945c8; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.render-params-list { display: grid; gap: 8px; margin-top: 18px; }
+.render-param { display: grid; grid-template-columns: minmax(150px, .45fr) minmax(0, 1.55fr); gap: 12px; padding: 10px; border: 1px solid #e9e6f3; border-radius: 8px; background: #faf9fd; }
+.render-param > div { display: grid; align-content: start; gap: 4px; }
+.render-param code { font-size: 12px; font-weight: 750; }
+.render-param small { color: #9595a1; font-size: 10px; }
+.render-param pre { max-height: 240px; margin: 0; overflow: auto; color: #4f505c; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.render-params-empty { margin: 18px 0 0; color: #777887; font-size: 13px; }
 .toast { position: fixed; z-index: 60; top: 86px; right: 22px; display: flex; align-items: center; gap: 10px; min-width: 280px; max-width: min(420px, calc(100vw - 44px)); padding: 12px 13px; border: 1px solid; border-radius: 8px; background: white; box-shadow: 0 10px 30px #25253824; color: #454652; font-size: 13px; font-weight: 600; }
 .toast-success { border-color: #bde5d0; }
 .toast-danger { border-color: #efc4c4; }
@@ -597,6 +609,7 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
   .job-tabs button { flex: 0 0 auto; white-space: nowrap; }
   .job-render-audio { grid-template-columns: 1fr; }
   .job-render-audio .job-upload-audio { grid-column: 1; width: 100%; }
+  .render-param { grid-template-columns: 1fr; }
   .startup-warning { align-items: flex-start; flex-direction: column; }
   .welcome-row { display: block; }
   .connection-pill { margin-top: 17px; }

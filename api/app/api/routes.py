@@ -272,6 +272,7 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
             "error_message",
             "output_filename",
             "output_deleted_at",
+            "effective_values",
             "created_at",
             "updated_at",
         )

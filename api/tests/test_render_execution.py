@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.api.routes import render_attempt_read
 from app.db.base import Base
 from app.db.models import (
     Batch,
@@ -421,6 +422,7 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
     assert completed.status == "completed"
     assert completed.external_job_id == "prompt-1"
     assert completed.error_message is None
+    assert render_attempt_read(completed).effective_values == {"script": "Topic"}
     assert len(completed.assets) == 1
     assert completed.assets[0].object_key == "jobs/video.mp4"
     rerender = repo.queue_attempt(job_id, node.id)

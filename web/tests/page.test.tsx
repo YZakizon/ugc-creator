@@ -494,6 +494,12 @@ describe("home page", () => {
           error_message: null,
           output_filename: "finished.mp4",
           output_deleted_at: null,
+          effective_values: {
+            script: "This is the generated speech.",
+            video_prompt: "Elena says: This is the generated speech.",
+            fps: 24,
+            seed: 42,
+          },
           created_at: "2026-08-10T00:00:00Z",
           updated_at: "2026-08-10T00:01:00Z",
           assets: [{
@@ -589,6 +595,13 @@ describe("home page", () => {
     expect(jobCard.getByRole("button", { name: "Generate New Video" })).toHaveClass("job-generate-video-action");
     expect(jobCard.queryByText("earlier-video.mp4")).not.toBeInTheDocument();
     expect(jobCard.queryByText("Deleted")).not.toBeInTheDocument();
+    fireEvent.click(jobCard.getByRole("button", { name: "Show rendered ComfyUI parameters" }));
+    const paramsDialog = screen.getByRole("dialog", { name: "Rendered ComfyUI parameters" });
+    expect(within(paramsDialog).getByText("{{SCRIPT}}")).toBeVisible();
+    expect(within(paramsDialog).getByText("This is the generated speech.")).toBeVisible();
+    expect(within(paramsDialog).getByText("{{FPS}}")).toBeVisible();
+    expect(within(paramsDialog).getByText("24")).toBeVisible();
+    fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered ComfyUI parameters" }));
     fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
     fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));
