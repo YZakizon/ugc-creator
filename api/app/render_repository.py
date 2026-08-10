@@ -91,6 +91,8 @@ class RenderExecutionRepository:
             job = session.get(TopicJob, job_id)
             if job is None:
                 raise LookupError("Job not found")
+            if not any(asset.kind == "audio" for asset in job.media_assets):
+                raise ValueError("Generate job speech before rendering")
             if job.render_profile_id is None:
                 raise ValueError("Job has no render profile")
             profile = session.get(RenderProfile, job.render_profile_id)
@@ -240,7 +242,11 @@ class RenderExecutionRepository:
             attempt = session.get(RenderAttempt, attempt_id)
             if attempt is None:
                 raise LookupError("Render attempt not found")
-            job = session.get(TopicJob, attempt.job_id)
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == attempt.job_id)
+            )
             profile = session.get(RenderProfile, attempt.render_profile_id)
             node = session.get(RenderNode, attempt.render_node_id)
             workflow = session.scalar(

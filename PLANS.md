@@ -1156,6 +1156,7 @@ Create voice profiles, synthesize speech, measure real duration, and fit target 
 - [ ] Preserve script/TTS revision history or version metadata.
 - [x] Add Celery tasks.
 - [x] Retry transient TTS failures and recover stale queued/generating voice previews.
+- [x] Generate job speech from the RenderProfile VoiceProfile, persist the audio asset, and inject it into ComfyUI renders.
 - [ ] Tests for too-short, acceptable, too-long, and max-attempt cases.
 
 ## Acceptance criteria

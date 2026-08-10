@@ -4,15 +4,16 @@ import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
-import { generateJobContent, getDashboardSummary, getRenderAttempts, getRenderNodes, queueJobRender } from "@/lib/api";
+import { generateJobContent, generateJobSpeech, getDashboardSummary, getRenderAttempts, getRenderNodes, queueJobRender } from "@/lib/api";
 import type { Job, RenderAttempt } from "@/lib/api";
 
 export function failedJobRetryKind(
   job: Pick<Job, "status" | "speech_script">,
   attempt?: Pick<RenderAttempt, "status">,
-): "content" | "render" | null {
+): "content" | "tts" | "render" | null {
   if (job.status !== "failed") return null;
-  return attempt?.status === "failed" && Boolean(job.speech_script) ? "render" : "content";
+  if (attempt?.status === "failed" && Boolean(job.speech_script)) return "render";
+  return job.speech_script ? "tts" : "content";
 }
 
 export function jobFailureMessage(
@@ -92,7 +93,7 @@ function JobResult({ title, value }: { title: string; value: Record<string, unkn
   return <section className="job-result-block"><h4>{title}</h4><pre>{JSON.stringify(value, null, 2)}</pre></section>;
 }
 
-export function RecentJobs({ contentGenerationReady, detailed = false }: { contentGenerationReady: boolean; detailed?: boolean }) {
+export function RecentJobs({ contentGenerationReady, speechGenerationReady, detailed = false }: { contentGenerationReady: boolean; speechGenerationReady: boolean; detailed?: boolean }) {
   const queryClient = useQueryClient();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-summary"],
@@ -103,6 +104,12 @@ export function RecentJobs({ contentGenerationReady, detailed = false }: { conte
   const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
   const contentMutation = useMutation({
     mutationFn: generateJobContent,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+    },
+  });
+  const speechMutation = useMutation({
+    mutationFn: generateJobSpeech,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
     },
@@ -137,11 +144,13 @@ export function RecentJobs({ contentGenerationReady, detailed = false }: { conte
     <div className="jobs-list">
       {jobs.map((job) => {
         const attempt = attempts.data?.items.find((item) => item.job_id === job.id);
+        const failedContent = failedJobRetryKind(job, attempt) === "content";
         const failedRender = failedJobRetryKind(job, attempt) === "render";
+        const failedSpeech = failedJobRetryKind(job, attempt) === "tts";
         const failureMessage = jobFailureMessage(job);
-        const canRender = job.status === "content_ready" || job.status === "ready_to_render" || failedRender;
+        const canRender = job.status === "tts_ready" || job.status === "ready_to_render" || failedRender;
         const actions = <>
-          {(job.status === "draft" || (job.status === "failed" && !failedRender)) && (
+          {(job.status === "draft" || failedContent) && (
             <button
               className="job-action"
               type="button"
@@ -150,6 +159,17 @@ export function RecentJobs({ contentGenerationReady, detailed = false }: { conte
               onClick={() => contentMutation.mutate(job.id)}
             >
               {contentMutation.isPending && contentMutation.variables === job.id ? "Queuing…" : contentGenerationReady ? "Generate content" : "OpenAI setup required"}
+            </button>
+          )}
+          {(job.status === "content_ready" || failedSpeech) && (
+            <button
+              className="job-action"
+              type="button"
+              disabled={speechMutation.isPending || !speechGenerationReady}
+              title={speechGenerationReady ? undefined : "Set ELEVENLABS_API_KEY in the root .env file and restart Docker"}
+              onClick={() => speechMutation.mutate(job.id)}
+            >
+              {speechMutation.isPending && speechMutation.variables === job.id ? "Queuing…" : speechGenerationReady ? failedSpeech ? "Retry speech" : "Generate speech" : "ElevenLabs setup required"}
             </button>
           )}
           {canRender && (
@@ -183,6 +203,7 @@ export function RecentJobs({ contentGenerationReady, detailed = false }: { conte
                 {job.speech_script && <div className="job-result-block"><h4>Speech script</h4><div className="job-script">{speechScriptLines(job.speech_script).map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div></div>}
                 <JobResult title="Instagram" value={job.instagram_metadata} />
                 <JobResult title="TikTok" value={job.tiktok_metadata} />
+                {job.audio_asset && <div className="job-result-block"><h4>Generated speech</h4><audio controls preload="none" src={job.audio_asset.download_url}>Your browser does not support audio playback.</audio><a className="button button-secondary" href={job.audio_asset.download_url} download={job.audio_asset.filename}>Download audio</a></div>}
               </section>
               <section className="job-results" aria-label={`Render results for ${job.topic}`}>
                 <h3>Render results</h3>
@@ -217,6 +238,7 @@ export function RecentJobs({ contentGenerationReady, detailed = false }: { conte
         </div>
       })}
       {contentMutation.isError && <p className="form-error" role="alert">{contentMutation.error.message}</p>}
+      {speechMutation.isError && <p className="form-error" role="alert">{speechMutation.error.message}</p>}
       {renderMutation.isError && <p className="form-error" role="alert">{renderMutation.error.message}</p>}
       {!nodes.isLoading && nodes.data?.items.length === 0 && <p className="field-hint">Add a ComfyUI render node in Settings before rendering.</p>}
     </div>

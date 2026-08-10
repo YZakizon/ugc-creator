@@ -73,6 +73,12 @@ describe("home page", () => {
         undefined,
       ),
     ).toBe("content");
+    expect(
+      failedJobRetryKind(
+        { status: "failed", speech_script: "Content is ready" },
+        undefined,
+      ),
+    ).toBe("tts");
   });
 
   it("labels polling-only render progress as indeterminate", () => {
@@ -103,6 +109,52 @@ describe("home page", () => {
     expect(
       jobFailureMessage({ status: "content_ready", error_message: "stale" }),
     ).toBeNull();
+  });
+
+  it("offers only speech retry when generated content is still valid", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("render-attempts") || url.includes("render-nodes")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        in_progress: 0,
+        ready_to_render: 0,
+        completed_videos: 0,
+        render_profiles: 1,
+        recent_jobs: [{
+          id: "job-tts-failed",
+          batch_id: "batch-1",
+          topic: "Keep the generated content",
+          status: "failed",
+          render_profile_id: "profile-1",
+          target_duration_seconds: 30,
+          error_message: "ElevenLabs was unavailable",
+          speech_script: "Valid generated speech content.",
+          hook: null,
+          instagram_metadata: null,
+          tiktok_metadata: null,
+          llm_provider: "openai",
+          llm_model: "gpt-test",
+          prompt_version: "ugc-v1",
+          tts_provider: null,
+          tts_voice_id: null,
+          tts_model: null,
+          tts_provider_request_id: null,
+          audio_asset: null,
+          created_at: "2026-08-10T00:00:00Z",
+          updated_at: "2026-08-10T00:01:00Z",
+        }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    render(<Providers><RecentJobs contentGenerationReady speechGenerationReady detailed /></Providers>);
+
+    expect(await screen.findByRole("button", { name: "Retry speech" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate content" })).not.toBeInTheDocument();
   });
 
   it("shows job details and downloadable results in a collapsed job card", async () => {
@@ -163,7 +215,7 @@ describe("home page", () => {
       }), { status: 200, headers: { "content-type": "application/json" } });
     });
 
-    const { container } = render(<Providers><RecentJobs contentGenerationReady detailed /></Providers>);
+    const { container } = render(<Providers><RecentJobs contentGenerationReady speechGenerationReady detailed /></Providers>);
 
     expect(await screen.findByText("A useful reminder")).toBeInTheDocument();
     const card = container.querySelector("details.job-card");

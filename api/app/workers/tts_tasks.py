@@ -5,13 +5,105 @@ from uuid import UUID
 from celery import Task
 
 from app.db.session import create_database_engine, session_factory
+from app.job_tts_repository import JobTTSRepository
 from app.providers.storage.local import LocalStorageProvider
-from app.providers.tts.contracts import TTSProviderError, TTSRequest
+from app.providers.tts.contracts import TTSProvider, TTSProviderError, TTSRequest
 from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
 from app.providers.tts.fake import FakeTTSProvider
 from app.repositories import SqlAlchemyConfigurationRepository
 from app.workers.celery_app import celery_app
 from app.workers.retry import retry_provider_error
+
+
+def tts_provider(provider_name: str) -> TTSProvider:
+    if provider_name != "elevenlabs":
+        raise ValueError(f"Unsupported TTS provider: {provider_name}")
+    return (
+        FakeTTSProvider()
+        if os.getenv("UGC_FAKE_PROVIDERS") == "1"
+        else ElevenLabsTTSProvider()
+    )
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="ugc_creator.generate_job_tts",
+    max_retries=3,
+)
+def generate_job_tts(task: Task, job_id: str) -> dict[str, str]:
+    engine = create_database_engine()
+    if engine is None:
+        raise RuntimeError("DATABASE_URL is required for job speech generation")
+    repo = JobTTSRepository(session_factory(engine))
+    context = repo.claim(UUID(job_id))
+    if context is None:
+        return {"job_id": job_id, "status": "unchanged"}
+    voice = context.voice_profile
+    settings = dict(voice.extra_settings)
+    output_format = str(settings.pop("output_format", "mp3_44100_128"))
+    language_code = settings.pop("language_code", None)
+    settings.update(
+        {
+            key: value
+            for key, value in {
+                "speed": voice.speed,
+                "stability": voice.stability,
+                "similarity_boost": voice.similarity,
+                "style": voice.style_exaggeration,
+            }.items()
+            if value is not None
+        }
+    )
+    model_id = (
+        voice.provider_model
+        or os.getenv("ELEVENLABS_DEFAULT_MODEL")
+        or "eleven_multilingual_v2"
+    )
+    try:
+        result = asyncio.run(
+            tts_provider(voice.provider).synthesize(
+                TTSRequest(
+                    text=context.speech_script,
+                    voice_id=voice.provider_voice_id,
+                    model_id=model_id,
+                    output_format=output_format,
+                    language_code=str(language_code) if language_code else None,
+                    voice_settings=settings,
+                )
+            )
+        )
+        object_key = (
+            f"batches/{context.batch_id}/jobs/{context.job_id}/audio/"
+            f"speech.{result.extension}"
+        )
+        LocalStorageProvider().put(object_key, result.audio)
+        completed = repo.complete(
+            context,
+            provider_request_id=result.provider_request_id,
+            model_id=model_id,
+            settings={
+                **settings,
+                "output_format": output_format,
+                "language_code": language_code,
+            },
+            object_key=object_key,
+            filename=f"speech-{context.job_id}.{result.extension}",
+            content_type=result.content_type,
+            size_bytes=len(result.audio),
+        )
+        return {
+            "job_id": job_id,
+            "status": completed.status if completed is not None else "claim_lost",
+        }
+    except TTSProviderError as exc:
+        if exc.retriable:
+            repo.release_for_retry(context, str(exc), exc.provider_request_id)
+            retry_provider_error(task, exc, retriable=True)
+        repo.fail(context, str(exc), exc.provider_request_id)
+        return {"job_id": job_id, "status": "failed"}
+    except Exception:
+        repo.fail(context, "Speech generation failed unexpectedly.", None)
+        raise
 
 
 @celery_app.task(  # type: ignore[untyped-decorator]

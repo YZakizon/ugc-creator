@@ -148,6 +148,19 @@ class InMemoryBatchRepository:
             job.updated_at = utc_now()
         return job
 
+    def queue_job_for_tts(self, job_id: UUID) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        if not job.speech_script:
+            raise ValueError("Generate job content before generating speech")
+        if job.status not in {JobStatus.CONTENT_READY.value, JobStatus.FAILED.value}:
+            raise ValueError(f"Job cannot generate speech from status {job.status}")
+        job.status = JobStatus.GENERATING_TTS.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return job
+
     def list_jobs(self, limit: int = 5) -> list[TopicJob]:
         return sorted(
             self.jobs.values(), key=lambda item: item.created_at, reverse=True
@@ -191,7 +204,7 @@ class SqlAlchemyBatchRepository:
         with self.factory() as session:
             query = (
                 select(Batch)
-                .options(selectinload(Batch.jobs))
+                .options(selectinload(Batch.jobs).selectinload(TopicJob.media_assets))
                 .order_by(Batch.created_at.desc())
                 .limit(limit)
                 .offset(offset)
@@ -204,14 +217,18 @@ class SqlAlchemyBatchRepository:
         with self.factory() as session:
             batch = session.scalar(
                 select(Batch)
-                .options(selectinload(Batch.jobs))
+                .options(selectinload(Batch.jobs).selectinload(TopicJob.media_assets))
                 .where(Batch.id == batch_id)
             )
             return batch
 
     def get_job(self, job_id: UUID) -> TopicJob | None:
         with self.factory() as session:
-            return session.get(TopicJob, job_id)
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
 
     def queue_job_for_content(self, job_id: UUID) -> TopicJob | None:
         with self.factory() as session:
@@ -223,11 +240,37 @@ class SqlAlchemyBatchRepository:
             session.refresh(job)
             return job
 
+    def queue_job_for_tts(self, job_id: UUID) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.get(TopicJob, job_id)
+            if job is None:
+                return None
+            if not job.speech_script:
+                raise ValueError("Generate job content before generating speech")
+            if job.status not in {
+                JobStatus.CONTENT_READY.value,
+                JobStatus.FAILED.value,
+            }:
+                raise ValueError(f"Job cannot generate speech from status {job.status}")
+            job.status = JobStatus.GENERATING_TTS.value
+            job.error_message = None
+            job.tts_claim_token = None
+            job.tts_claim_expires_at = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
     def list_jobs(self, limit: int = 5) -> list[TopicJob]:
         with self.factory() as session:
             return list(
                 session.scalars(
-                    select(TopicJob).order_by(TopicJob.created_at.desc()).limit(limit)
+                    select(TopicJob)
+                    .options(selectinload(TopicJob.media_assets))
+                    .order_by(TopicJob.created_at.desc())
+                    .limit(limit)
                 ).all()
             )
 
@@ -1317,6 +1360,17 @@ def batch_to_dict(batch: Batch) -> dict[str, object]:
 
 
 def job_to_dict(job: TopicJob) -> dict[str, object]:
+    # Newly-created batch jobs may be serialized after their session closes.
+    # Only list/get queries eager-load media assets; avoid detached lazy loading.
+    assets = job.__dict__.get("media_assets", [])
+    audio_asset = next(
+        (
+            asset
+            for asset in sorted(assets, key=lambda item: item.created_at, reverse=True)
+            if asset.kind == "audio"
+        ),
+        None,
+    )
     return {
         "id": job.id,
         "batch_id": job.batch_id,
@@ -1332,6 +1386,25 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
         "llm_provider": job.llm_provider,
         "llm_model": job.llm_model,
         "prompt_version": job.prompt_version,
+        "tts_provider": job.tts_provider,
+        "tts_voice_id": job.tts_voice_id,
+        "tts_model": job.tts_model,
+        "tts_provider_request_id": job.tts_provider_request_id,
+        "audio_asset": (
+            {
+                "id": audio_asset.id,
+                "job_id": audio_asset.job_id,
+                "render_attempt_id": audio_asset.render_attempt_id,
+                "kind": audio_asset.kind,
+                "filename": audio_asset.filename,
+                "content_type": audio_asset.content_type,
+                "size_bytes": audio_asset.size_bytes,
+                "download_url": f"/api/v1/assets/{audio_asset.id}/download",
+                "created_at": audio_asset.created_at,
+            }
+            if audio_asset is not None
+            else None
+        ),
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }
