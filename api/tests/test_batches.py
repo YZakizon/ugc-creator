@@ -186,6 +186,22 @@ async def test_bulk_topic_creation_keeps_topics_independent() -> None:
     ] == [1, 1]
 
 
+@pytest.mark.asyncio
+async def test_bulk_topic_creation_rejects_oversized_topic() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/topics/bulk",
+            json={
+                "topics": ["Valid topic", "x" * 5_001],
+                "render_profile_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 422
+
+
 def test_content_numbers_use_high_water_mark_and_topic_defaults() -> None:
     batches = InMemoryBatchRepository()
     default_profile_id = uuid4()

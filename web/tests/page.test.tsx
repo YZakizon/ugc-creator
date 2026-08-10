@@ -209,6 +209,47 @@ describe("home page", () => {
     expect(requests).toContain("DELETE /api/v1/topics/topic-1");
   });
 
+  it("paginates topic history beyond the first page", async () => {
+    const requestedOffsets: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/topics?")) {
+        const offset = new URL(url, "http://testserver").searchParams.get("offset") ?? "0";
+        requestedOffsets.push(offset);
+        return new Response(JSON.stringify({
+          items: [{
+            id: `topic-${offset}`,
+            name: offset === "0" ? "Newest topic" : "Older topic",
+            status: "draft",
+            default_render_profile_id: null,
+            target_duration_seconds: 30,
+            auto_fit_duration: true,
+            content_count: 0,
+            created_at: "2026-08-10T00:00:00Z",
+            updated_at: "2026-08-10T00:00:00Z",
+            contents: [],
+          }],
+          total: 21,
+          limit: 20,
+          offset: Number(offset),
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("render-attempts") || url.includes("render-nodes") || url.includes("render-profiles") || url.includes("voice-profiles") || url.includes("workflow-templates")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<Providers><TopicHistory contentGenerationReady speechGenerationReady /></Providers>);
+    await screen.findByText("Newest topic");
+    expect(screen.getByText("Topics 1–1 of 21")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+
+    await screen.findByText("Older topic");
+    expect(screen.getByText("Topics 21–21 of 21")).toBeVisible();
+    expect(requestedOffsets).toContain("20");
+  });
+
   it("offers only speech retry when generated content is still valid", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -288,6 +329,7 @@ describe("home page", () => {
         filename: "speech.mp3",
         content_type: "audio/mpeg",
         size_bytes: 512,
+        generation_metadata: null,
         download_url: "/api/v1/assets/audio-1/download",
         created_at: "2026-08-10T00:00:30Z",
       },
@@ -307,7 +349,7 @@ describe("home page", () => {
         } else if (url.endsWith("/workflow-template")) {
           currentJob = { ...currentJob, status: "ready_to_render", workflow_template_id: "workflow-1", updated_at: "2026-08-10T00:04:00Z" };
         } else if (url.endsWith("/audio")) {
-          currentJob = { ...currentJob, status: "ready_to_render", audio_asset: { id: "audio-2", job_id: "job-1", kind: "audio", filename: "replacement.mp3", content_type: "audio/mpeg", size_bytes: 17, download_url: "/api/v1/assets/audio-2/download", created_at: "2026-08-10T00:05:00Z" }, updated_at: "2026-08-10T00:05:00Z" };
+          currentJob = { ...currentJob, status: "ready_to_render", audio_asset: { id: "audio-2", job_id: "job-1", kind: "audio", filename: "replacement.mp3", content_type: "audio/mpeg", size_bytes: 17, generation_metadata: null, download_url: "/api/v1/assets/audio-2/download", created_at: "2026-08-10T00:05:00Z" }, updated_at: "2026-08-10T00:05:00Z" };
         }
         return new Response(JSON.stringify(currentJob), { status: 200, headers: { "content-type": "application/json" } });
       }

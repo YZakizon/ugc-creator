@@ -206,6 +206,7 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .job-id-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .job-id-toggle { align-self: center; }
 .topic-history-list { display: grid; gap: 12px; }
+.topic-history-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; color: #666776; }
 .topic-history-card { overflow: hidden; border: 1px solid #e7e4ef; border-radius: 12px; background: #fff; }
 .topic-history-card > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px 17px; cursor: pointer; list-style: none; }
 .topic-history-card > summary::-webkit-details-marker { display: none; }

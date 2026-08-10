@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -65,7 +65,9 @@ class TopicCreate(BaseModel):
 
 
 class TopicBulkCreate(BaseModel):
-    topics: list[str] = Field(min_length=2, max_length=100)
+    topics: list[Annotated[str, Field(min_length=1, max_length=5_000)]] = Field(
+        min_length=2, max_length=100
+    )
     render_profile_id: UUID
     target_duration_seconds: int = Field(default=30, ge=5, le=180)
     auto_fit_duration: bool = True
@@ -87,6 +89,7 @@ class MediaAssetRead(BaseModel):
     filename: str
     content_type: str | None
     size_bytes: int
+    generation_metadata: dict[str, object] | None
     download_url: str
     created_at: datetime
 

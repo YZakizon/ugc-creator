@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -163,6 +164,19 @@ class JobTTSRepository:
                     filename=filename,
                     content_type=content_type,
                     size_bytes=size_bytes,
+                    generation_metadata={
+                        "source": "tts",
+                        "provider": voice.provider,
+                        "voice_profile_id": str(voice.id),
+                        "voice_id": voice.provider_voice_id,
+                        "model": model_id,
+                        "settings": settings,
+                        "provider_request_id": provider_request_id,
+                        "script_sha256": hashlib.sha256(
+                            context.speech_script.encode("utf-8")
+                        ).hexdigest(),
+                        "generated_at": completed_at.isoformat(),
+                    },
                 )
             )
             job.tts_provider = voice.provider

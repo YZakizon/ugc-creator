@@ -22,6 +22,8 @@ compatible.
 high-water mark prevents deleted numbers from being reused. Generating more content
 creates a new row from Topic defaults and never overwrites prior generated content.
 One Content owns multiple archived audio assets and multiple RenderAttempts.
+Each generated speech asset snapshots its provider, voice, model, effective settings,
+request identifier, script checksum, and generation timestamp.
 
 Migration converts every job in a legacy multi-topic Batch into its own Topic so
 unrelated historical topics are not mislabeled as versions of one idea.

@@ -291,6 +291,7 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
             "filename": asset.filename,
             "content_type": asset.content_type,
             "size_bytes": asset.size_bytes,
+            "generation_metadata": asset.generation_metadata,
             "download_url": f"/api/v1/assets/{asset.id}/download",
             "created_at": asset.created_at,
         }

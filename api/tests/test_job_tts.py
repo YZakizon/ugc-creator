@@ -206,6 +206,12 @@ def test_job_tts_uses_profile_voice_and_persists_render_audio(
             "language_code": None,
         }
         assert asset is not None
+        assert asset.generation_metadata is not None
+        assert asset.generation_metadata["provider"] == "elevenlabs"
+        assert asset.generation_metadata["voice_id"] == "voice-hope"
+        assert asset.generation_metadata["model"] == "eleven_multilingual_v2"
+        assert asset.generation_metadata["settings"] == saved.tts_settings
+        assert len(str(asset.generation_metadata["script_sha256"])) == 64
         assert (tmp_path / asset.object_key).read_bytes().startswith(b"ID3")
 
 

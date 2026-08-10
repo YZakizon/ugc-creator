@@ -1789,6 +1789,9 @@ Append decisions here as implementation clarifies unknowns.
 - Speech and video may be generated repeatedly for one Content. Stored filenames
   use `{short-topic}_content{content-number}_{output-number}-audio.mp3` and the
   corresponding `-video.mp4` form.
+- Every generated speech asset snapshots its effective provider, voice, model,
+  settings, request ID, script checksum, and generation time so archived audio
+  remains reproducible after another version replaces it.
 - Deleting Content or Topic is rejected during active external work and removes all
   referenced media through `StorageProvider` before deleting database history. A
   Topic's only Content is removed by deleting the Topic so no unusable empty Topic
@@ -1799,6 +1802,7 @@ Append decisions here as implementation clarifies unknowns.
 - Topic status is derived centrally from persisted Content states. During repeated
   speech generation, the current audio remains active until its replacement is
   saved; enqueue/provider failures leave it available for rendering.
+- Topic history uses API pagination so older Topics remain browsable and deletable.
 
 Format:
 

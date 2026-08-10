@@ -1892,6 +1892,7 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
                 "filename": audio_asset.filename,
                 "content_type": audio_asset.content_type,
                 "size_bytes": audio_asset.size_bytes,
+                "generation_metadata": audio_asset.generation_metadata,
                 "download_url": f"/api/v1/assets/{audio_asset.id}/download",
                 "created_at": audio_asset.created_at,
             }
@@ -1907,6 +1908,7 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
                 "filename": asset.filename,
                 "content_type": asset.content_type,
                 "size_bytes": asset.size_bytes,
+                "generation_metadata": asset.generation_metadata,
                 "download_url": f"/api/v1/assets/{asset.id}/download",
                 "created_at": asset.created_at,
             }

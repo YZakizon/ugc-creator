@@ -283,6 +283,9 @@ class MediaAsset(TimestampMixin, Base):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    generation_metadata: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True
+    )
 
     render_attempt: Mapped[RenderAttempt | None] = relationship(back_populates="assets")
     job: Mapped[TopicJob] = relationship(back_populates="media_assets")
