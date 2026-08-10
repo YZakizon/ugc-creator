@@ -18,6 +18,7 @@ export type Job = {
   id: string;
   batch_id: string;
   topic: string;
+  content_number: number;
   status: JobStatus;
   render_profile_id: string | null;
   voice_profile_id: string | null;
@@ -36,6 +37,7 @@ export type Job = {
   tts_model: string | null;
   tts_provider_request_id: string | null;
   audio_asset: MediaAsset | null;
+  audio_assets: MediaAsset[];
   created_at: string;
   updated_at: string;
 };
@@ -52,6 +54,21 @@ export type Batch = {
   updated_at: string;
   jobs: Job[];
 };
+
+export type Topic = {
+  id: string;
+  name: string;
+  status: "draft" | "processing" | "completed" | "failed";
+  default_render_profile_id: string | null;
+  target_duration_seconds: number;
+  auto_fit_duration: boolean;
+  content_count: number;
+  created_at: string;
+  updated_at: string;
+  contents: Job[];
+};
+
+export type TopicSummary = Omit<Topic, "contents">;
 
 export type DashboardSummary = {
   in_progress: number;
@@ -183,6 +200,17 @@ export type MediaAsset = {
   filename: string;
   content_type: string | null;
   size_bytes: number;
+  generation_metadata: {
+    source?: string;
+    provider?: string;
+    voice_profile_id?: string;
+    voice_id?: string;
+    model?: string;
+    settings?: Record<string, unknown>;
+    provider_request_id?: string | null;
+    script_sha256?: string;
+    generated_at?: string;
+  } | null;
   download_url: string;
   created_at: string;
 };
@@ -268,6 +296,50 @@ export function createBatch(input: CreateBatchInput): Promise<Batch> {
 
 export function getBatches(): Promise<{ items: Batch[]; total: number; limit: number; offset: number }> {
   return request<{ items: Batch[]; total: number; limit: number; offset: number }>("/api/v1/batches?limit=100");
+}
+
+export type CreateTopicInput = {
+  topic: string;
+  render_profile_id: string;
+  target_duration_seconds: number;
+  auto_fit_duration: boolean;
+};
+
+export function createTopic(input: CreateTopicInput): Promise<Topic> {
+  return request<Topic>("/api/v1/topics", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function createTopics(input: Omit<CreateTopicInput, "topic"> & { topics: string[] }): Promise<{ items: Topic[]; total: number }> {
+  return request<{ items: Topic[]; total: number }>("/api/v1/topics/bulk", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getTopics(limit = 20, offset = 0): Promise<{ items: TopicSummary[]; total: number; limit: number; offset: number }> {
+  return request<{ items: TopicSummary[]; total: number; limit: number; offset: number }>(`/api/v1/topics?limit=${limit}&offset=${offset}`);
+}
+
+export function getTopicContents(topicId: string, limit = 20, offset = 0): Promise<{ items: Job[]; total: number; limit: number; offset: number }> {
+  return request<{ items: Job[]; total: number; limit: number; offset: number }>(`/api/v1/topics/${topicId}/contents?limit=${limit}&offset=${offset}`);
+}
+
+export function generateMoreContent(topicId: string): Promise<Job> {
+  return request<Job>(`/api/v1/topics/${topicId}/contents`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteTopic(topicId: string): Promise<void> {
+  return request<void>(`/api/v1/topics/${topicId}`, { method: "DELETE" });
+}
+
+export function deleteContent(contentId: string): Promise<void> {
+  return request<void>(`/api/v1/contents/${contentId}`, { method: "DELETE" });
 }
 
 export function updateJobRenderProfile(jobId: string, renderProfileId: string): Promise<Job> {

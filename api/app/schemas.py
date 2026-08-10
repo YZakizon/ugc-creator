@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -49,6 +49,38 @@ class BatchCreate(BaseModel):
         return topics
 
 
+class TopicCreate(BaseModel):
+    topic: str = Field(min_length=1, max_length=5_000)
+    render_profile_id: UUID
+    target_duration_seconds: int = Field(default=30, ge=5, le=180)
+    auto_fit_duration: bool = True
+
+    @field_validator("topic")
+    @classmethod
+    def clean_topic(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Topic cannot be empty")
+        return cleaned
+
+
+class TopicBulkCreate(BaseModel):
+    topics: list[Annotated[str, Field(min_length=1, max_length=5_000)]] = Field(
+        min_length=2, max_length=100
+    )
+    render_profile_id: UUID
+    target_duration_seconds: int = Field(default=30, ge=5, le=180)
+    auto_fit_duration: bool = True
+
+    @field_validator("topics")
+    @classmethod
+    def clean_topics(cls, value: list[str]) -> list[str]:
+        topics = [topic.strip() for topic in value if topic.strip()]
+        if len(topics) < 2:
+            raise ValueError("At least two topics are required")
+        return topics
+
+
 class MediaAssetRead(BaseModel):
     id: UUID
     job_id: UUID
@@ -57,6 +89,7 @@ class MediaAssetRead(BaseModel):
     filename: str
     content_type: str | None
     size_bytes: int
+    generation_metadata: dict[str, object] | None
     download_url: str
     created_at: datetime
 
@@ -65,6 +98,7 @@ class JobRead(BaseModel):
     id: UUID
     batch_id: UUID
     topic: str
+    content_number: int
     status: JobStatus
     render_profile_id: UUID | None
     voice_profile_id: UUID | None
@@ -83,6 +117,7 @@ class JobRead(BaseModel):
     tts_model: str | None
     tts_provider_request_id: str | None
     audio_asset: MediaAssetRead | None = None
+    audio_assets: list[MediaAssetRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -123,6 +158,50 @@ class BatchList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class TopicRead(BaseModel):
+    id: UUID
+    name: str
+    status: BatchStatus
+    default_render_profile_id: UUID | None
+    target_duration_seconds: int
+    auto_fit_duration: bool
+    content_count: int
+    created_at: datetime
+    updated_at: datetime
+    contents: list[JobRead] = Field(default_factory=list)
+
+
+class TopicSummaryRead(BaseModel):
+    id: UUID
+    name: str
+    status: BatchStatus
+    default_render_profile_id: UUID | None
+    target_duration_seconds: int
+    auto_fit_duration: bool
+    content_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class TopicList(BaseModel):
+    items: list[TopicSummaryRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class ContentList(BaseModel):
+    items: list[JobRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class TopicBulkRead(BaseModel):
+    items: list[TopicRead]
+    total: int
 
 
 class DashboardSummary(BaseModel):

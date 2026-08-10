@@ -54,8 +54,8 @@ describe("workflow template setup", () => {
     expect(editor.getByText("saved-audio.mp3")).toBeInTheDocument();
     fireEvent.click(within(editor.getByText("Default source image").closest("label") as HTMLElement).getByRole("button", { name: "Remove" }));
     fireEvent.click(within(editor.getByText("Default audio").closest("label") as HTMLElement).getByRole("button", { name: "Remove" }));
-    expect(editor.getByText("No default image saved. Used only when the batch does not provide an image.")).toBeInTheDocument();
-    expect(editor.getByText("No default audio saved. Used only when the batch does not provide audio.")).toBeInTheDocument();
+    expect(editor.getByText("No default image saved. Used only when the content does not provide an image.")).toBeInTheDocument();
+    expect(editor.getByText("No default audio saved. Used only when the content does not provide audio.")).toBeInTheDocument();
     expect(editor.queryByText("Semantic bindings")).not.toBeInTheDocument();
     fireEvent.change(workflowJson, {
       target: { value: JSON.stringify({ "27": { class_type: "KSampler", inputs: { seed: 99, steps: 25 } } }, null, 2) },

@@ -293,12 +293,12 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
         <label>
           Default source image
           <input ref={imageInputRef} type="file" accept="image/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "source_image")} />
-          {currentDefaultImage ? <><span className="workflow-current-media"><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><button className="workflow-remove-media" type="button" onClick={() => removeMediaFile("source_image")}>Remove</button></span><small className="field-hint">Batch media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the batch does not provide an image.</small>}
+          {currentDefaultImage ? <><span className="workflow-current-media"><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><button className="workflow-remove-media" type="button" onClick={() => removeMediaFile("source_image")}>Remove</button></span><small className="field-hint">Content media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the content does not provide an image.</small>}
         </label>
         <label>
           Default audio
           <input ref={audioInputRef} type="file" accept="audio/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "audio")} />
-          {currentDefaultAudio ? <><span className="workflow-current-media"><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><button className="workflow-remove-media" type="button" onClick={() => removeMediaFile("audio")}>Remove</button></span><small className="field-hint">Batch audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the batch does not provide audio.</small>}
+          {currentDefaultAudio ? <><span className="workflow-current-media"><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><button className="workflow-remove-media" type="button" onClick={() => removeMediaFile("audio")}>Remove</button></span><small className="field-hint">Content audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the content does not provide audio.</small>}
         </label>
         <div className="workflow-json-editor">
           <WorkflowFieldTree workflow={workflow} workflowKind={workflowKind} onUpdateField={updatePromptInput} />

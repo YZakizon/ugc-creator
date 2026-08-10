@@ -141,6 +141,11 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .batch-form input:not([type="checkbox"]), .batch-form textarea, .batch-form select { width: 100%; border: 1px solid #e5e5ed; border-radius: 8px; outline: none; padding: 10px 11px; color: #454652; background: #fcfcfe; font-size: 15.6px; font-weight: 400; }
 .batch-form textarea { resize: vertical; line-height: 1.5; }
 .batch-form input:focus, .batch-form textarea:focus, .batch-form select:focus { border-color: #a99bf3; box-shadow: 0 0 0 3px #806be91a; }
+.topic-input-list { display: grid; gap: 10px; }
+.topic-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.topic-input-row .topic-remove { margin-top: 25px; }
+.topic-input-row .topic-remove svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.add-topic-button { justify-self: start; }
 .form-options { display: flex; align-items: end; gap: 17px; }
 .form-options > label:first-child { width: 180px; }
 .checkbox-label { display: flex !important; align-items: center; gap: 7px !important; min-height: 38px; white-space: nowrap; }
@@ -200,6 +205,19 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .job-id-icon:focus-visible { outline: 2px solid #6f5bd3; outline-offset: 1px; }
 .job-id-icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .job-id-toggle { align-self: center; }
+.topic-history-list { display: grid; gap: 12px; }
+.topic-history-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; color: #666776; }
+.topic-history-card { overflow: hidden; border: 1px solid #e7e4ef; border-radius: 12px; background: #fff; }
+.topic-history-card > summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px 17px; cursor: pointer; list-style: none; }
+.topic-history-card > summary::-webkit-details-marker { display: none; }
+.topic-history-card > summary > span:first-child { display: grid; gap: 4px; min-width: 0; }
+.topic-history-card > summary strong { overflow: hidden; color: #3f404c; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.topic-history-card > summary small { color: #888995; font-size: 11px; }
+.topic-history-body { display: grid; gap: 12px; padding: 0 17px 17px; border-top: 1px solid #efedf4; }
+.topic-history-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 14px; }
+.topic-history-actions .icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.icon-button.danger { color: #bd3f53; background: #fff0f2; }
+.content-record-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: #8b8c98; font-size: 11px; }
 .job-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; }
 .job-detail-grid > div { min-width: 0; padding: 10px; border: 1px solid #eceaf2; border-radius: 8px; background: #fff; }
 .job-detail-grid dt { color: #9697a3; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
@@ -216,6 +234,7 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .generation-tabs button { flex: 1; }
 .job-generation-panel > .job-action { width: fit-content; margin-top: 4px; }
 .job-audio-result { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 4px; padding-top: 12px; border-top: 1px solid #eeecf4; }
+.job-audio-history { display: grid; gap: 4px; }
 .job-audio-result > span { flex: 1 0 100%; color: #5a5b67; font-size: 12px; font-weight: 700; }
 .job-audio-result audio { width: min(480px, calc(100% - 48px)); }
 .job-generation-selector { display: flex; width: min(520px, 100%); align-items: end; gap: 8px; }

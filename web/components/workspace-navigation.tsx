@@ -23,8 +23,8 @@ export function WorkspaceSidebar() {
         <div>
           <p className="nav-label">Workspace</p>
           <Link className={navClass(pathname === "/")} href="/"><span className="nav-icon">▦</span> Dashboard</Link>
-          <Link className="nav-item" href="/#create"><span className="nav-icon">＋</span> Create batch</Link>
-          <Link className="nav-item" href="/#jobs"><span className="nav-icon">◷</span> Jobs</Link>
+          <Link className="nav-item" href="/#create"><span className="nav-icon">＋</span> Create topic</Link>
+          <Link className="nav-item" href="/#content"><span className="nav-icon">◷</span> Content</Link>
           <Link className="nav-item" href="/#library"><span className="nav-icon">▤</span> Library</Link>
         </div>
         <div>
@@ -54,7 +54,7 @@ export function WorkspaceTopbar({ current }: { current: string }) {
       <div className="topbar-actions">
         <label className="search-box"><span aria-hidden="true">⌕</span><input aria-label="Search workspace" placeholder="Search workspace" /><kbd>⌘ K</kbd></label>
         <button className="icon-button" aria-label="View notifications">♢</button>
-        <Link className="button button-primary button-small" href="/#create"><span>＋</span> New batch</Link>
+        <Link className="button button-primary button-small" href="/#create"><span>＋</span> New topic</Link>
       </div>
     </header>
   );
