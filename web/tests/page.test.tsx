@@ -9,6 +9,7 @@ import {
   jobFailureMessage,
   RecentJobs,
   renderProgressLabel,
+  speechScriptLines,
 } from "../components/dashboard-live-data";
 
 describe("home page", () => {
@@ -79,6 +80,14 @@ describe("home page", () => {
       "Progress unavailable (polling)",
     );
     expect(renderProgressLabel({ status: "completed", progress: 100 })).toBe("100%");
+  });
+
+  it("shows every speech sentence on its own reading line", () => {
+    expect(speechScriptLines("First sentence. Second sentence!\nThird sentence?”")).toEqual([
+      "First sentence.",
+      "Second sentence!",
+      "Third sentence?”",
+    ]);
   });
 
   it("shows the persisted reason when a job fails", () => {
