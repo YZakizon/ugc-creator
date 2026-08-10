@@ -9,6 +9,7 @@ from app.repositories import InMemoryBatchRepository, InMemoryConfigurationRepos
 from app.services.workflow_service import (
     WorkflowValidationError,
     prepare_workflow,
+    randomize_unbound_comfyui_seeds,
 )
 
 
@@ -58,6 +59,48 @@ def test_prepare_workflow_deep_copies_and_applies_bindings() -> None:
     assert prepared["2"]["inputs"]["seed"] == 42  # type: ignore[index]
     assert "Morning routines" in prepared["1"]["inputs"]["text"]  # type: ignore[index]
     assert original == workflow_fixture()
+
+
+def test_rerender_randomizes_only_unbound_comfyui_seed_inputs() -> None:
+    stored = {
+        "noise-bound": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": 42},
+        },
+        "noise-fresh": {
+            "class_type": "RandomNoise",
+            "inputs": {"noise_seed": 99},
+        },
+        "prompt-fresh": {
+            "class_type": "PromptEnhancer",
+            "inputs": {"sampling_mode.seed": 0, "not_a_seed": 7},
+        },
+    }
+    execution_copy = copy.deepcopy(stored)
+    generated = iter([101, 202])
+
+    resolved = randomize_unbound_comfyui_seeds(
+        execution_copy,
+        [
+            {
+                "semantic_key": "seed",
+                "node_id": "noise-bound",
+                "input_name": "noise_seed",
+                "value_type": "integer",
+            }
+        ],
+        randbelow=lambda _limit: next(generated),
+    )
+
+    assert stored["noise-bound"]["inputs"]["noise_seed"] == 42  # type: ignore[index]
+    assert execution_copy["noise-bound"]["inputs"]["noise_seed"] == 42  # type: ignore[index]
+    assert execution_copy["noise-fresh"]["inputs"]["noise_seed"] == 101  # type: ignore[index]
+    assert execution_copy["prompt-fresh"]["inputs"]["sampling_mode.seed"] == 202  # type: ignore[index]
+    assert execution_copy["prompt-fresh"]["inputs"]["not_a_seed"] == 7  # type: ignore[index]
+    assert resolved == {
+        "noise-fresh.noise_seed": 101,
+        "prompt-fresh.sampling_mode.seed": 202,
+    }
 
 
 def test_prepare_workflow_rejects_missing_binding_value() -> None:
