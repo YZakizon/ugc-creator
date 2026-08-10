@@ -534,11 +534,13 @@ function ltxWorkflowNodes(nodes: WorkflowTreeNode[]): WorkflowTreeNode[] {
     },
     {
       label: "Width",
-      field: fields.find((field) => field.editable && typeof field.value === "number" && /^width$/i.test(field.inputName)),
+      field: fields.find((field) => field.editable && typeof field.value === "number" && /^width$/i.test(field.title?.trim() ?? ""))
+        ?? fields.find((field) => field.editable && typeof field.value === "number" && /^width$/i.test(field.inputName)),
     },
     {
       label: "Height",
-      field: fields.find((field) => field.editable && typeof field.value === "number" && /^height$/i.test(field.inputName)),
+      field: fields.find((field) => field.editable && typeof field.value === "number" && /^height$/i.test(field.title?.trim() ?? ""))
+        ?? fields.find((field) => field.editable && typeof field.value === "number" && /^height$/i.test(field.inputName)),
     },
     {
       label: "Seed",
