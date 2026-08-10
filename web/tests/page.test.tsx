@@ -558,7 +558,10 @@ describe("home page", () => {
           "340:319": { _meta: { title: "Prompt" }, class_type: "PrimitiveStringMultiline", inputs: { value: "Keep Elena in the same composition.\n\nElena speaks directly to the camera:\n\n\"{{SCRIPT}}\"\n\nAfter the supplied audio ends, Elena closes her mouth naturally." } },
           "340:323": { _meta: { title: "Frame Rate" }, class_type: "PrimitiveInt", inputs: { value: 30 } },
           "340:331": { _meta: { title: "Duration" }, class_type: "PrimitiveFloat", inputs: { value: 25 } },
-          "340:286": { class_type: "RandomNoise", inputs: { noise_seed: 42 } },
+          "340:285": { class_type: "RandomNoise", inputs: { noise_seed: 42 } },
+          "340:286": { class_type: "RandomNoise", inputs: { noise_seed: 987654 } },
+          "340:287": { class_type: "SamplerCustomAdvanced", inputs: { noise: ["340:286", 0], sigmas: ["340:288", 0] } },
+          "340:288": { class_type: "PrimitiveString", inputs: { sigmas: "1.0, 0.75, 0.25" } },
           "340:330": { _meta: { title: "Width" }, class_type: "PrimitiveInt", inputs: { value: 576 } },
           "340:324": { _meta: { title: "Height" }, class_type: "PrimitiveInt", inputs: { value: 1024 } },
         };
@@ -631,7 +634,7 @@ describe("home page", () => {
     expect(within(paramsDialog).getByText("FPS")).toBeVisible();
     expect(within(paramsDialog).getByText("30")).toBeVisible();
     expect(within(paramsDialog).getByText("Seed")).toBeVisible();
-    expect(within(paramsDialog).getByText("42")).toBeVisible();
+    expect(within(paramsDialog).getByText("987654")).toBeVisible();
     fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered LTX settings" }));
     fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
     fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));

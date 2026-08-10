@@ -52,6 +52,38 @@ function first(items: Field[], predicate: (field: Field) => boolean): Field | un
   return items.find(predicate);
 }
 
+function linkedNodeId(value: unknown): string | undefined {
+  return Array.isArray(value) && typeof value[0] === "string" ? value[0] : undefined;
+}
+
+function primarySeedField(workflow: WorkflowTemplate, items: Field[]): Field | undefined {
+  const seeds = items.filter((field) => (
+    typeof field.value === "number"
+    && Number.isInteger(field.value)
+    && /randomnoise/i.test(field.classType)
+    && /(?:seed|noise[._-]?seed|.+\.seed)/i.test(field.input_name)
+  ));
+
+  const basePassSeed = seeds.find((seed) => {
+    const sampler = Object.values(workflow.workflow_json).find((rawNode) => (
+      isRecord(rawNode)
+      && /samplercustomadvanced/i.test(String(rawNode.class_type ?? ""))
+      && isRecord(rawNode.inputs)
+      && linkedNodeId(rawNode.inputs.noise) === seed.node_id
+    ));
+    const sigmasNodeId = isRecord(sampler) && isRecord(sampler.inputs) ? linkedNodeId(sampler.inputs.sigmas) : undefined;
+    const sigmasNode = sigmasNodeId ? workflow.workflow_json[sigmasNodeId] : undefined;
+    const sigmas = isRecord(sigmasNode) && isRecord(sigmasNode.inputs) ? sigmasNode.inputs.sigmas : undefined;
+    return typeof sigmas === "string" && /^\s*1(?:\.0+)?(?:\s*,|\s*$)/.test(sigmas);
+  });
+
+  return basePassSeed ?? seeds.at(-1) ?? first(items, (field) => (
+    typeof field.value === "number"
+    && Number.isInteger(field.value)
+    && /(?:seed|noise[._-]?seed|.+\.seed)/i.test(field.input_name)
+  ));
+}
+
 export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): RenderedWorkflowControl[] {
   const items = fields(workflow, job);
   const numeric = (field: Field) => typeof field.value === "number";
@@ -62,7 +94,7 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
       ?? first(items, (field) => /primitivestringmultiline/i.test(field.classType))],
     ["FPS", first(items, (field) => numeric(field) && (/^frame rate$/i.test(field.title.trim()) || /^fps$/i.test(field.input_name)))],
     ["Duration", first(items, (field) => numeric(field) && (/duration/i.test(field.title) || /^duration$/i.test(field.input_name)))],
-    ["Seed", first(items, (field) => /randomnoise/i.test(field.classType) && /noise.?seed/i.test(field.input_name))],
+    ["Seed", primarySeedField(workflow, items)],
     ["Width", first(items, (field) => numeric(field) && (/^width$/i.test(field.title.trim()) || /^width$/i.test(field.input_name)))],
     ["Height", first(items, (field) => numeric(field) && (/^height$/i.test(field.title.trim()) || /^height$/i.test(field.input_name)))],
   ];
