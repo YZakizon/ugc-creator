@@ -85,7 +85,8 @@ describe("workflow template setup", () => {
     expect(window.location.pathname).toBe("/workflows");
   });
 
-  it("edits an LTX control in the same row instead of a nested second row", () => {
+  it("edits and validates LTX controls in the same row instead of a nested second row", () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
     window.sessionStorage.setItem("workflow-template-edit", JSON.stringify({
       id: "workflow-ltx",
       logical_id: "workflow-ltx",
@@ -129,8 +130,17 @@ describe("workflow template setup", () => {
     expect(screen.queryByRole("button", { name: /Seed.*0$/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Width.*768/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Height.*1280/i }));
-    fireEvent.change(screen.getByDisplayValue("1280"), { target: { value: "1920" } });
+    const heightInput = screen.getByDisplayValue("1280");
+    expect(heightInput).toHaveAttribute("min", "1");
+    expect(heightInput).toHaveAttribute("step", "1");
+    fireEvent.change(heightInput, { target: { value: "1920" } });
     expect((screen.getByLabelText("ComfyUI API workflow JSON") as HTMLTextAreaElement).value).toContain('"value": 1920');
+    for (const invalidHeight of ["", "-1", "1.5"]) {
+      fireEvent.change(heightInput, { target: { value: invalidHeight } });
+      fireEvent.submit(screen.getByRole("button", { name: "Update workflow" }).closest("form") as HTMLFormElement);
+      expect(screen.getByRole("alert")).toHaveTextContent("Height must be a positive integer.");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /Image source.*source\.png/i }));
     const input = screen.getByDisplayValue("source.png");
     const row = input.closest(".workflow-ltx-control");
