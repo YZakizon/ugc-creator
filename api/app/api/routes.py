@@ -15,7 +15,7 @@ from app.core.content_prompts import (
     SUPPORTED_CONTENT_PROMPT_PLACEHOLDERS,
     content_prompt_version,
 )
-from app.core.startup import content_generation_configured
+from app.core.startup import content_generation_configured, speech_generation_configured
 from app.core.statuses import JobStatus
 from app.core.urls import validate_render_node_url
 from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
@@ -79,7 +79,7 @@ from app.services.workflow_service import (
 )
 from app.workers.content_tasks import generate_job_content
 from app.workers.render_tasks import submit_render
-from app.workers.tts_tasks import generate_voice_preview
+from app.workers.tts_tasks import generate_job_tts, generate_voice_preview
 
 router = APIRouter(prefix="/api/v1")
 
@@ -452,6 +452,51 @@ def queue_content_generation(
         raise HTTPException(status_code=404, detail="Job not found")
     generate_job_content.delay(str(job_id))
     return JobRead.model_validate(job_to_dict(job))
+
+
+@router.post(
+    "/jobs/{job_id}/generate-tts",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_tts_generation(
+    job_id: UUID,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not speech_generation_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "provider_not_configured",
+                "provider": "elevenlabs",
+                "message": (
+                    "ElevenLabs is not configured. Set ELEVENLABS_API_KEY in "
+                    "the root .env file and restart Docker before generating speech."
+                ),
+                "retriable": False,
+            },
+        )
+    if job.render_profile_id is None:
+        raise HTTPException(status_code=422, detail="Job has no render profile")
+    profile = config_repo.get_render_profile(job.render_profile_id)
+    if profile is None or profile.voice_profile_id is None:
+        raise HTTPException(
+            status_code=422, detail="Render profile has no voice profile"
+        )
+    if config_repo.get_voice_profile(profile.voice_profile_id) is None:
+        raise HTTPException(status_code=422, detail="Voice profile is unavailable")
+    try:
+        queued = repo.queue_job_for_tts(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if queued is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    generate_job_tts.delay(str(job_id))
+    return JobRead.model_validate(job_to_dict(queued))
 
 
 @router.post(

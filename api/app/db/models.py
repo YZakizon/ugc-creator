@@ -62,9 +62,22 @@ class TopicJob(TimestampMixin, Base):
     llm_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     llm_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tts_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tts_voice_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    tts_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    tts_settings: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    tts_provider_request_id: Mapped[str | None] = mapped_column(
+        String(160), nullable=True
+    )
+    tts_claim_token: Mapped[UUID | None] = mapped_column(nullable=True)
+    tts_claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    tts_generated_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="jobs")
     render_attempts: Mapped[list["RenderAttempt"]] = relationship(
+        back_populates="job", cascade="all, delete-orphan"
+    )
+    media_assets: Mapped[list["MediaAsset"]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
     )
 
@@ -261,6 +274,7 @@ class MediaAsset(TimestampMixin, Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
 
     render_attempt: Mapped[RenderAttempt | None] = relationship(back_populates="assets")
+    job: Mapped[TopicJob] = relationship(back_populates="media_assets")
 
 
 class WorkflowTemplate(TimestampMixin, Base):

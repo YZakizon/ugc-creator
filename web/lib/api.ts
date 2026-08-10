@@ -29,6 +29,11 @@ export type Job = {
   llm_provider: string | null;
   llm_model: string | null;
   prompt_version: string | null;
+  tts_provider: string | null;
+  tts_voice_id: string | null;
+  tts_model: string | null;
+  tts_provider_request_id: string | null;
+  audio_asset: MediaAsset | null;
   created_at: string;
   updated_at: string;
 };
@@ -261,6 +266,13 @@ export function createBatch(input: CreateBatchInput): Promise<Batch> {
 
 export function generateJobContent(jobId: string): Promise<Job> {
   return request<Job>(`/api/v1/jobs/${jobId}/generate-content`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function generateJobSpeech(jobId: string): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/generate-tts`, {
     method: "POST",
     body: JSON.stringify({}),
   });

@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.db.models import (
     Batch,
     Character,
+    MediaAsset,
     RenderProfile,
     TopicJob,
     VoiceProfile,
@@ -80,6 +81,7 @@ async def test_claim_expiring_during_preparation_schedules_reconciliation(
         topic="Prepared topic",
         hook=None,
         target_duration_seconds=30,
+        media_assets=[],
     )
     profile = SimpleNamespace(
         default_parameters={},
@@ -311,6 +313,15 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         profile.workflow_template_id = workflow.id
         batch = Batch(name="Batch")
         job = TopicJob(batch=batch, topic="Topic", render_profile_id=profile.id)
+        job.media_assets = [
+            MediaAsset(
+                kind="audio",
+                object_key="jobs/topic/audio.mp3",
+                filename="audio.mp3",
+                content_type="audio/mpeg",
+                size_bytes=5,
+            )
+        ]
         session.add(job)
         session.commit()
         job_id = job.id
@@ -379,6 +390,15 @@ def test_render_submission_claim_allows_only_one_concurrent_worker(tmp_path) -> 
         profile.workflow_template_id = workflow.id
         batch = Batch(name="Claim batch")
         job = TopicJob(batch=batch, topic="Claim topic", render_profile_id=profile.id)
+        job.media_assets = [
+            MediaAsset(
+                kind="audio",
+                object_key="jobs/claim/audio.mp3",
+                filename="audio.mp3",
+                content_type="audio/mpeg",
+                size_bytes=5,
+            )
+        ]
         session.add(job)
         session.commit()
         job_id = job.id
@@ -467,6 +487,15 @@ def test_queued_attempt_keeps_workflow_and_binding_snapshots() -> None:
         job = TopicJob(
             batch=batch, topic="Snapshot topic", render_profile_id=profile.id
         )
+        job.media_assets = [
+            MediaAsset(
+                kind="audio",
+                object_key="jobs/snapshot/audio.mp3",
+                filename="audio.mp3",
+                content_type="audio/mpeg",
+                size_bytes=5,
+            )
+        ]
         session.add(job)
         session.commit()
         job_id = job.id

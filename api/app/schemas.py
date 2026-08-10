@@ -49,6 +49,18 @@ class BatchCreate(BaseModel):
         return topics
 
 
+class MediaAssetRead(BaseModel):
+    id: UUID
+    job_id: UUID
+    render_attempt_id: UUID | None
+    kind: str
+    filename: str
+    content_type: str | None
+    size_bytes: int
+    download_url: str
+    created_at: datetime
+
+
 class JobRead(BaseModel):
     id: UUID
     batch_id: UUID
@@ -64,6 +76,11 @@ class JobRead(BaseModel):
     llm_provider: str | None
     llm_model: str | None
     prompt_version: str | None
+    tts_provider: str | None
+    tts_voice_id: str | None
+    tts_model: str | None
+    tts_provider_request_id: str | None
+    audio_asset: MediaAssetRead | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -355,18 +372,6 @@ class RenderNodeRead(RenderNodeCreate):
 class RenderNodeList(BaseModel):
     items: list[RenderNodeRead]
     total: int
-
-
-class MediaAssetRead(BaseModel):
-    id: UUID
-    job_id: UUID
-    render_attempt_id: UUID | None
-    kind: str
-    filename: str
-    content_type: str | None
-    size_bytes: int
-    download_url: str
-    created_at: datetime
 
 
 class RenderAttemptRead(BaseModel):

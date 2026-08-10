@@ -126,6 +126,16 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
             "character_name": profile.character.name,
         }
     )
+    audio_asset = next(
+        (asset for asset in job.media_assets if asset.kind == "audio"), None
+    )
+    if audio_asset is not None:
+        storage = LocalStorageProvider()
+        values["audio"] = await renderer.upload(
+            audio_asset.filename,
+            storage.get(audio_asset.object_key),
+            "audio",
+        )
     await apply_default_workflow_media(
         values, template.metadata_json, renderer, LocalStorageProvider()
     )

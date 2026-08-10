@@ -176,6 +176,17 @@ test.describe("workspace customer journeys", () => {
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
 
     await firstJob.locator("summary").click();
+    const jobSpeechResponse = page.waitForResponse((response) => response.url().includes("generate-tts") && response.request().method() === "POST");
+    await firstJob.getByRole("button", { name: "Generate speech" }).click();
+    expect((await jobSpeechResponse).status()).toBe(202);
+    await expect.poll(async () => {
+      await page.reload();
+      await page.getByRole("tab", { name: "Jobs" }).click();
+      return (await firstJob.innerText()).toLowerCase();
+    }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("ready to render");
+
+    await firstJob.locator("summary").click();
+    await expect(firstJob.getByText("Generated speech")).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,

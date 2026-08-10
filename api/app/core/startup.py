@@ -20,6 +20,12 @@ def content_generation_configured() -> bool:
     )
 
 
+def speech_generation_configured() -> bool:
+    return os.getenv("UGC_FAKE_PROVIDERS") == "1" or bool(
+        os.getenv("ELEVENLABS_API_KEY", "").strip()
+    )
+
+
 def build_startup_sanity_report() -> StartupSanityReport:
     fake_providers = os.getenv("UGC_FAKE_PROVIDERS") == "1"
     checks: dict[str, StartupCheck] = {
@@ -42,7 +48,7 @@ def build_startup_sanity_report() -> StartupSanityReport:
             "and restart Docker before generating content.",
         ),
         "elevenlabs": _check(
-            fake_providers or bool(os.getenv("ELEVENLABS_API_KEY", "").strip()),
+            speech_generation_configured(),
             "ElevenLabs speech generation is configured."
             if not fake_providers
             else "Fake speech generation is enabled.",
