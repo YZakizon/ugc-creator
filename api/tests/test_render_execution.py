@@ -32,6 +32,7 @@ from app.workers.render_tasks import (
     _prepare_and_submit,
     apply_default_workflow_media,
     render_has_timed_out,
+    render_input_filename,
     select_video_output,
     submit_render,
 )
@@ -292,12 +293,22 @@ async def test_workflow_media_is_used_only_as_a_missing_value_fallback() -> None
         },
         renderer,
         storage,
+        upload_namespace="attempt-2",
     )
 
     assert values["source_image"] == "batch-image.png"
     assert values["audio"] == "comfy-default.mp3"
     storage.get.assert_called_once_with("workflow-media/default.mp3")
-    renderer.upload.assert_awaited_once_with("default.mp3", b"audio", "audio")
+    renderer.upload.assert_awaited_once_with("attempt-2-default.mp3", b"audio", "audio")
+
+
+def test_each_render_uses_a_distinct_comfyui_input_filename() -> None:
+    first = render_input_filename("topic_content1_0001.mp3", uuid4())
+    second = render_input_filename("topic_content1_0001.mp3", uuid4())
+
+    assert first != second
+    assert first.endswith("-topic_content1_0001.mp3")
+    assert second.endswith("-topic_content1_0001.mp3")
 
 
 @pytest.mark.asyncio
@@ -418,6 +429,11 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         repo.delete_video_asset(completed.assets[0].id)
     assert repo.update_progress(rerender.id, "failed", 0, "Stopped")
     assert repo.delete_video_asset(completed.assets[0].id)
+    deleted_attempt = repo.get_attempt(first.id)
+    assert deleted_attempt is not None
+    assert deleted_attempt.assets == []
+    assert deleted_attempt.output_filename == "video.mp4"
+    assert deleted_attempt.output_deleted_at is not None
     with factory() as session:
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None

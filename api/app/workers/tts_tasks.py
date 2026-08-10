@@ -77,7 +77,6 @@ def generate_job_tts(task: Task, job_id: str) -> dict[str, str]:
             context.topic,
             context.content_number,
             context.audio_number,
-            "audio",
             result.extension,
         )
         object_key = (

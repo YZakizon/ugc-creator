@@ -12,11 +12,10 @@ def generated_media_filename(
     topic: str,
     content_number: int,
     output_number: int,
-    media_kind: str,
     extension: str,
 ) -> str:
     safe_extension = re.sub(r"[^a-z0-9]", "", extension.lower()) or "bin"
     return (
-        f"{short_topic_name(topic)}_content{content_number}_{output_number}"
-        f"-{media_kind}.{safe_extension}"
+        f"{short_topic_name(topic)}_content{content_number}_"
+        f"{output_number:04d}.{safe_extension}"
     )

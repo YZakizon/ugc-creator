@@ -492,6 +492,8 @@ describe("home page", () => {
           progress: 100,
           external_job_id: "prompt-1",
           error_message: null,
+          output_filename: "finished.mp4",
+          output_deleted_at: null,
           created_at: "2026-08-10T00:00:00Z",
           updated_at: "2026-08-10T00:01:00Z",
           assets: [{
@@ -504,7 +506,23 @@ describe("home page", () => {
             download_url: "/api/v1/assets/asset-1/download",
             created_at: "2026-08-10T00:01:00Z",
           }],
-        }], total: 1 }), { status: 200, headers: { "content-type": "application/json" } });
+        }, {
+          id: "attempt-deleted",
+          job_id: "job-1",
+          render_profile_id: "profile-1",
+          render_node_id: "node-1",
+          workflow_template_id: "workflow-1",
+          provider: "comfyui",
+          status: "completed",
+          progress: 100,
+          external_job_id: null,
+          error_message: null,
+          output_filename: "earlier-video.mp4",
+          output_deleted_at: "2026-08-10T00:02:00Z",
+          created_at: "2026-08-10T00:00:00Z",
+          updated_at: "2026-08-10T00:02:00Z",
+          assets: [],
+        }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("render-nodes")) {
         return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
@@ -564,6 +582,14 @@ describe("home page", () => {
     expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toHaveValue("voice-profile-1");
     expect(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true })).toBeEnabled();
     expect(jobCard.getByRole("link", { name: "Open voice profile details", hidden: true })).toHaveAttribute("href", "/voice-profiles#voice-profile-voice-profile-1");
+    fireEvent.click(jobCard.getByRole("tab", { name: "Render ComfyUI" }));
+    const selectors = card!.querySelector(".job-render-selectors") as HTMLElement;
+    expect(within(selectors).getByRole("combobox", { name: "Render profile" })).toBeInTheDocument();
+    expect(within(selectors).getByRole("combobox", { name: "Workflow" })).toBeInTheDocument();
+    expect(jobCard.getByRole("button", { name: "Generate New Video" })).toHaveClass("job-generate-video-action");
+    expect(jobCard.getByText("earlier-video.mp4")).toBeVisible();
+    expect(jobCard.getByText("Deleted")).toBeVisible();
+    fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
     fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));
     fireEvent.change(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true }), { target: { value: "voice-profile-2" } });

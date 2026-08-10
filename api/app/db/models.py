@@ -248,6 +248,8 @@ class RenderAttempt(TimestampMixin, Base):
         JSON, default=dict, nullable=False
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    output_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    output_deleted_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submitted_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submission_started_at: Mapped[datetime | None] = mapped_column(nullable=True)
     submission_claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)

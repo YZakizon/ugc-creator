@@ -226,6 +226,8 @@ export type RenderAttempt = {
   progress: number;
   external_job_id: string | null;
   error_message: string | null;
+  output_filename: string | null;
+  output_deleted_at: string | null;
   created_at: string;
   updated_at: string;
   assets: MediaAsset[];

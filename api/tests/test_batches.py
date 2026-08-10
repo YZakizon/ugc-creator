@@ -556,10 +556,8 @@ async def test_job_audio_upload_becomes_render_input(
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready_to_render"
-    assert (
-        response.json()["audio_asset"]["filename"] == "one-topic_content1_1-audio.mp3"
-    )
-    assert list(tmp_path.rglob("*one-topic_content1_1-audio.mp3"))
+    assert response.json()["audio_asset"]["filename"] == "one-topic_content1_0001.mp3"
+    assert list(tmp_path.rglob("*one-topic_content1_0001.mp3"))
 
 
 @pytest.mark.asyncio

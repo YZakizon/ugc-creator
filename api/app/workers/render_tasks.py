@@ -42,6 +42,11 @@ def repository() -> RenderExecutionRepository:
     return RenderExecutionRepository(session_factory(engine))
 
 
+def render_input_filename(filename: str, attempt_id: UUID | str) -> str:
+    """Give each render fresh ComfyUI input names to bypass stale node caches."""
+    return f"{attempt_id}-{PurePath(filename).name}"
+
+
 async def apply_default_workflow_media(
     values: dict[str, object],
     metadata: dict[str, object],
@@ -49,6 +54,7 @@ async def apply_default_workflow_media(
     storage: LocalStorageProvider,
     *,
     measure_audio_duration: bool = False,
+    upload_namespace: str | None = None,
 ) -> None:
     media = metadata.get("default_workflow_media", metadata.get("workflow_media", {}))
     if not isinstance(media, dict):
@@ -67,9 +73,13 @@ async def apply_default_workflow_media(
                 values["audio_duration"] = probe_audio_duration(
                     content, PurePath(asset_key).name
                 )
-            values[key] = await renderer.upload(
-                PurePath(asset_key).name, content, input_type
+            source_name = PurePath(asset_key).name
+            upload_name = (
+                render_input_filename(source_name, upload_namespace)
+                if upload_namespace
+                else source_name
             )
+            values[key] = await renderer.upload(upload_name, content, input_type)
 
 
 async def _prepare_and_submit(attempt_id: UUID) -> None:
@@ -154,7 +164,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
                 audio_content, audio_asset.filename
             )
         values["audio"] = await renderer.upload(
-            audio_asset.filename,
+            render_input_filename(audio_asset.filename, attempt_id),
             audio_content,
             "audio",
         )
@@ -164,6 +174,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         renderer,
         LocalStorageProvider(),
         measure_audio_duration=needs_audio_duration,
+        upload_namespace=str(attempt_id),
     )
     workflow = prepare_workflow(
         attempt.workflow_snapshot, attempt.binding_snapshot, values
@@ -264,7 +275,6 @@ async def _monitor(attempt_id: UUID) -> str:
         _job.topic,
         _job.content_number,
         video_number,
-        "video",
         extension,
     )
     object_key = (

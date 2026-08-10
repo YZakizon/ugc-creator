@@ -451,6 +451,8 @@ class RenderExecutionRepository:
                     .values(
                         status="completed",
                         progress=100,
+                        output_filename=filename,
+                        output_deleted_at=None,
                         completed_at=completed_at,
                         submission_claim_expires_at=None,
                         finalization_claim_expires_at=None,
@@ -512,6 +514,8 @@ class RenderExecutionRepository:
             )
             if active_attempt is not None:
                 raise ValueError("Video cannot be deleted while a rerender is active")
+            asset.render_attempt.output_filename = asset.filename
+            asset.render_attempt.output_deleted_at = now()
             session.delete(asset)
             session.flush()
             remaining = session.scalar(

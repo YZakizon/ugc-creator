@@ -270,6 +270,8 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
             "progress",
             "external_job_id",
             "error_message",
+            "output_filename",
+            "output_deleted_at",
             "created_at",
             "updated_at",
         )
@@ -823,7 +825,7 @@ def upload_job_audio(
     assets = job.__dict__.get("media_assets", [])
     audio_number = sum(asset.kind in {"audio", "audio_archive"} for asset in assets) + 1
     filename = generated_media_filename(
-        job.topic, job.content_number, audio_number, "audio", extension
+        job.topic, job.content_number, audio_number, extension
     )
     object_key = f"topics/{job.batch_id}/contents/{job.id}/audio/{uuid4()}/{filename}"
     storage = LocalStorageProvider()

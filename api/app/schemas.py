@@ -484,6 +484,8 @@ class RenderAttemptRead(BaseModel):
     progress: int
     external_job_id: str | None
     error_message: str | None
+    output_filename: str | None
+    output_deleted_at: datetime | None
     created_at: datetime
     updated_at: datetime
     assets: list[MediaAssetRead] = Field(default_factory=list)
