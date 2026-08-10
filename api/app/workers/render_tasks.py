@@ -18,7 +18,6 @@ from app.services.media_service import MediaProcessingError, probe_audio_duratio
 from app.services.workflow_service import (
     WorkflowValidationError,
     prepare_workflow,
-    randomize_unbound_comfyui_seeds,
     workflow_uses_audio_duration,
 )
 from app.workers.celery_app import celery_app
@@ -180,9 +179,6 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     workflow = prepare_workflow(
         attempt.workflow_snapshot, attempt.binding_snapshot, values
     )
-    resolved_seeds = randomize_unbound_comfyui_seeds(workflow, attempt.binding_snapshot)
-    if resolved_seeds:
-        values["comfyui_seeds"] = resolved_seeds
     repo.save_prepared(attempt_id, workflow, values)
     if not repo.mark_submission_started(attempt_id):
         submit_render.apply_async(args=[str(attempt_id)], countdown=1)

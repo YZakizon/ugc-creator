@@ -2,8 +2,7 @@ import copy
 import hashlib
 import json
 import re
-import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 SUPPORTED_VALUE_TYPES = frozenset(
@@ -29,7 +28,6 @@ AUDIO_DURATION_EXPRESSION_PATTERN = re.compile(
 )
 SEMANTIC_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 SEED_INPUT_PATTERN = re.compile(r"(?:seed|noise[._-]?seed|.+\.seed)", re.IGNORECASE)
-COMFYUI_SEED_LIMIT = 2**63 - 1
 
 
 class WorkflowValidationError(ValueError):
@@ -146,40 +144,6 @@ def prepare_workflow(
 
     _render_placeholders(prepared, values)
     return prepared
-
-
-def randomize_unbound_comfyui_seeds(
-    workflow: dict[str, object],
-    bindings: Sequence[Mapping[str, object]],
-    *,
-    randbelow: Callable[[int], int] = secrets.randbelow,
-) -> dict[str, int]:
-    """Freshen seed inputs on an execution copy while preserving bound values."""
-    bound_inputs = {
-        (binding.get("node_id"), binding.get("input_name")) for binding in bindings
-    }
-    resolved: dict[str, int] = {}
-    for node_id, raw_node in workflow.items():
-        if not isinstance(raw_node, dict):
-            continue
-        inputs = raw_node.get("inputs")
-        if not isinstance(inputs, dict):
-            continue
-        for input_name, current_value in inputs.items():
-            if (
-                not isinstance(input_name, str)
-                or not SEED_INPUT_PATTERN.fullmatch(input_name)
-                or (node_id, input_name) in bound_inputs
-                or isinstance(current_value, bool)
-                or not isinstance(current_value, int)
-            ):
-                continue
-            fresh_value = randbelow(COMFYUI_SEED_LIMIT)
-            if fresh_value == current_value:
-                fresh_value = (fresh_value + 1) % COMFYUI_SEED_LIMIT
-            inputs[input_name] = fresh_value
-            resolved[f"{node_id}.{input_name}"] = fresh_value
-    return resolved
 
 
 def _required_string(binding: Mapping[str, object], key: str) -> str:
