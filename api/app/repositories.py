@@ -114,11 +114,12 @@ class InMemoryBatchRepository:
             updated_at=now,
         )
         batch.jobs = []
-        for topic in payload.topics:
+        for content_number, topic in enumerate(payload.topics, start=1):
             job = TopicJob(
                 id=uuid4(),
                 batch_id=batch.id,
                 topic=topic,
+                content_number=content_number,
                 status=JobStatus.DRAFT.value,
                 render_profile_id=payload.default_render_profile_id,
                 target_duration_seconds=payload.target_duration_seconds,
@@ -142,6 +143,50 @@ class InMemoryBatchRepository:
     def get_job(self, job_id: UUID) -> TopicJob | None:
         return self.jobs.get(job_id)
 
+    def create_content(self, topic_id: UUID) -> TopicJob | None:
+        batch = self.batches.get(topic_id)
+        if batch is None or not batch.jobs:
+            return None
+        source = max(batch.jobs, key=lambda item: item.content_number)
+        now = utc_now()
+        content = TopicJob(
+            id=uuid4(),
+            batch_id=batch.id,
+            topic=source.topic,
+            content_number=max(job.content_number for job in batch.jobs) + 1,
+            status=JobStatus.DRAFT.value,
+            render_profile_id=source.render_profile_id,
+            voice_profile_id=source.voice_profile_id,
+            workflow_template_id=source.workflow_template_id,
+            target_duration_seconds=source.target_duration_seconds,
+            created_at=now,
+            updated_at=now,
+        )
+        content.media_assets = []
+        content.render_attempts = []
+        batch.jobs.append(content)
+        batch.updated_at = now
+        self.jobs[content.id] = content
+        return content
+
+    def delete_content(self, content_id: UUID) -> bool:
+        content = self.jobs.pop(content_id, None)
+        if content is None:
+            return False
+        batch = self.batches.get(content.batch_id)
+        if batch is not None:
+            batch.jobs = [job for job in batch.jobs if job.id != content_id]
+            batch.updated_at = utc_now()
+        return True
+
+    def delete_topic(self, topic_id: UUID) -> bool:
+        batch = self.batches.pop(topic_id, None)
+        if batch is None:
+            return False
+        for content in batch.jobs:
+            self.jobs.pop(content.id, None)
+        return True
+
     def queue_job_for_content(self, job_id: UUID) -> TopicJob | None:
         job = self.jobs.get(job_id)
         if job is not None:
@@ -155,8 +200,17 @@ class InMemoryBatchRepository:
             return None
         if not job.speech_script:
             raise ValueError("Generate job content before generating speech")
-        if job.status not in {JobStatus.CONTENT_READY.value, JobStatus.FAILED.value}:
+        if job.status not in {
+            JobStatus.CONTENT_READY.value,
+            JobStatus.FAILED.value,
+            JobStatus.TTS_READY.value,
+            JobStatus.READY_TO_RENDER.value,
+            JobStatus.COMPLETED.value,
+        }:
             raise ValueError(f"Job cannot generate speech from status {job.status}")
+        for asset in job.__dict__.get("media_assets", []):
+            if asset.kind == "audio":
+                asset.kind = "audio_archive"
         job.status = JobStatus.GENERATING_TTS.value
         job.error_message = None
         job.updated_at = utc_now()
@@ -290,11 +344,12 @@ class SqlAlchemyBatchRepository:
             batch.jobs = [
                 TopicJob(
                     topic=topic,
+                    content_number=content_number,
                     status=JobStatus.DRAFT.value,
                     render_profile_id=payload.default_render_profile_id,
                     target_duration_seconds=payload.target_duration_seconds,
                 )
-                for topic in payload.topics
+                for content_number, topic in enumerate(payload.topics, start=1)
             ]
             session.add(batch)
             session.commit()
@@ -333,9 +388,64 @@ class SqlAlchemyBatchRepository:
                 .where(TopicJob.id == job_id)
             )
 
+    def create_content(self, topic_id: UUID) -> TopicJob | None:
+        with self.factory() as session:
+            batch = session.scalar(
+                select(Batch)
+                .options(selectinload(Batch.jobs))
+                .where(Batch.id == topic_id)
+                .with_for_update()
+            )
+            if batch is None or not batch.jobs:
+                return None
+            source = max(batch.jobs, key=lambda item: item.content_number)
+            content = TopicJob(
+                batch_id=batch.id,
+                topic=source.topic,
+                content_number=max(job.content_number for job in batch.jobs) + 1,
+                status=JobStatus.DRAFT.value,
+                render_profile_id=source.render_profile_id,
+                voice_profile_id=source.voice_profile_id,
+                workflow_template_id=source.workflow_template_id,
+                target_duration_seconds=source.target_duration_seconds,
+            )
+            session.add(content)
+            batch.updated_at = utc_now()
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == content.id)
+            )
+
+    def delete_content(self, content_id: UUID) -> bool:
+        with self.factory() as session:
+            content = session.get(TopicJob, content_id)
+            if content is None:
+                return False
+            batch = session.get(Batch, content.batch_id)
+            session.delete(content)
+            if batch is not None:
+                batch.updated_at = utc_now()
+            session.commit()
+            return True
+
+    def delete_topic(self, topic_id: UUID) -> bool:
+        with self.factory() as session:
+            topic = session.get(Batch, topic_id)
+            if topic is None:
+                return False
+            session.delete(topic)
+            session.commit()
+            return True
+
     def queue_job_for_content(self, job_id: UUID) -> TopicJob | None:
         with self.factory() as session:
-            job = session.get(TopicJob, job_id)
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
             if job is None:
                 return None
             job.status = JobStatus.QUEUED.value
@@ -353,8 +463,14 @@ class SqlAlchemyBatchRepository:
             if job.status not in {
                 JobStatus.CONTENT_READY.value,
                 JobStatus.FAILED.value,
+                JobStatus.TTS_READY.value,
+                JobStatus.READY_TO_RENDER.value,
+                JobStatus.COMPLETED.value,
             }:
                 raise ValueError(f"Job cannot generate speech from status {job.status}")
+            for asset in job.media_assets:
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
             job.status = JobStatus.GENERATING_TTS.value
             job.error_message = None
             job.tts_claim_token = None
@@ -1595,6 +1711,22 @@ def batch_to_dict(batch: Batch) -> dict[str, object]:
     }
 
 
+def topic_to_dict(batch: Batch) -> dict[str, object]:
+    jobs: Sequence[TopicJob] = batch.jobs
+    return {
+        "id": batch.id,
+        "name": batch.name,
+        "status": batch.status,
+        "default_render_profile_id": batch.default_render_profile_id,
+        "target_duration_seconds": batch.target_duration_seconds,
+        "auto_fit_duration": batch.auto_fit_duration,
+        "content_count": len(jobs),
+        "created_at": batch.created_at,
+        "updated_at": batch.updated_at,
+        "contents": [job_to_dict(job) for job in jobs],
+    }
+
+
 def job_to_dict(job: TopicJob) -> dict[str, object]:
     # Newly-created batch jobs may be serialized after their session closes.
     # Only list/get queries eager-load media assets; avoid detached lazy loading.
@@ -1607,10 +1739,16 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
         ),
         None,
     )
+    audio_assets = [
+        asset
+        for asset in sorted(assets, key=lambda item: item.created_at, reverse=True)
+        if asset.kind in {"audio", "audio_archive"}
+    ]
     return {
         "id": job.id,
         "batch_id": job.batch_id,
         "topic": job.topic,
+        "content_number": job.content_number,
         "status": job.status,
         "render_profile_id": job.render_profile_id,
         "voice_profile_id": job.voice_profile_id,
@@ -1643,6 +1781,20 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
             if audio_asset is not None
             else None
         ),
+        "audio_assets": [
+            {
+                "id": asset.id,
+                "job_id": asset.job_id,
+                "render_attempt_id": asset.render_attempt_id,
+                "kind": asset.kind,
+                "filename": asset.filename,
+                "content_type": asset.content_type,
+                "size_bytes": asset.size_bytes,
+                "download_url": f"/api/v1/assets/{asset.id}/download",
+                "created_at": asset.created_at,
+            }
+            for asset in audio_assets
+        ],
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }

@@ -102,8 +102,8 @@ test.describe("workspace customer journeys", () => {
     expect(downloadBox?.height).toBe(deleteBox?.height);
   });
 
-  test("imports a workflow, creates a profile, and creates a multi-topic batch", async ({ page }) => {
-    test.setTimeout(90_000);
+  test("creates a topic with repeatable numbered content, speech, video, and deletion", async ({ page }) => {
+    test.setTimeout(120_000);
     await page.getByRole("link", { name: "Workflows" }).click();
     await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
     await page.getByRole("tab", { name: "Create workflow" }).click();
@@ -157,15 +157,16 @@ test.describe("workspace customer journeys", () => {
     await page.getByRole("button", { name: "Test connection" }).click();
     await expect(page.getByText("ComfyUI is connected.")).toBeVisible();
 
-    await page.getByRole("link", { name: "Create batch" }).click();
-    await page.getByLabel("Batch name").fill("Tuesday ideas");
-    await page.getByLabel("Topics").fill("Burnout is not laziness\nA reminder for overthinkers");
+    await page.getByRole("link", { name: "Create topic" }).click();
+    await page.getByRole("textbox", { name: "Topic", exact: true }).fill("Burnout is not laziness");
     await page.locator(".batch-form select").selectOption({ label: "Elena Shelf" });
-    await page.getByRole("button", { name: "Create batch" }).click();
-    await expect(page.getByText("Batch created successfully.")).toBeVisible();
-    await page.getByRole("tab", { name: "Jobs" }).click();
-    const jobsPanel = page.locator("#tab-panel-jobs");
-    const firstJob = jobsPanel.locator(".job-card").filter({ hasText: "Burnout is not laziness" });
+    await page.getByRole("button", { name: "Create topic" }).click();
+    await expect(page.getByText("Topic created successfully.")).toBeVisible();
+    await page.getByRole("tab", { name: "Content" }).click();
+    const contentPanel = page.locator("#tab-panel-content");
+    const topicCard = contentPanel.locator(".topic-history-card").filter({ hasText: "Burnout is not laziness" });
+    await topicCard.locator(":scope > summary").click();
+    const firstJob = topicCard.locator(".job-card").filter({ hasText: "Content 1" });
     await expect(firstJob).toBeVisible();
     await firstJob.locator(".job-card-summary").click();
     const generateResponse = page.waitForResponse((response) => response.url().includes("generate-content") && response.request().method() === "POST");
@@ -173,7 +174,8 @@ test.describe("workspace customer journeys", () => {
     expect((await generateResponse).status()).toBe(202);
     await expect.poll(async () => {
       await page.reload();
-      await page.getByRole("tab", { name: "Jobs" }).click();
+      await page.getByRole("tab", { name: "Content" }).click();
+      await topicCard.locator(":scope > summary").click();
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
 
@@ -185,7 +187,8 @@ test.describe("workspace customer journeys", () => {
     expect((await jobSpeechResponse).status()).toBe(202);
     await expect.poll(async () => {
       await page.reload();
-      await page.getByRole("tab", { name: "Jobs" }).click();
+      await page.getByRole("tab", { name: "Content" }).click();
+      await topicCard.locator(":scope > summary").click();
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("ready to render");
 
@@ -194,12 +197,12 @@ test.describe("workspace customer journeys", () => {
     await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toHaveValue(workflowTemplateId);
     await expect(firstJob.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", `/workflows#workflow-${workflowTemplateId}`);
-    await expect(firstJob.locator(".job-render-audio").getByText(/speech-.*\.mp3/)).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText("burnout-is-not-laziness_content1_1-audio.mp3")).toBeVisible();
     await expect(firstJob.getByRole("link", { name: "Download render audio" })).toHaveCount(0);
     const audioUploadResponse = page.waitForResponse((response) => response.url().includes(`/api/v1/jobs/`) && response.url().endsWith("/audio") && response.request().method() === "POST");
     await firstJob.getByLabel("Upload different audio").setInputFiles({ name: "replacement.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("replacement audio") });
     expect((await audioUploadResponse).status()).toBe(200);
-    await expect(firstJob.locator(".job-render-audio").getByText("replacement.mp3")).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText("burnout-is-not-laziness_content1_2-audio.mp3")).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,
@@ -209,9 +212,9 @@ test.describe("workspace customer journeys", () => {
       timeout: 30_000,
       intervals: [1000, 2000],
     }).toContain("completed");
-    await expect(firstJob.getByRole("button", { name: /Preview .*\.mp4/ })).toBeVisible();
-    await expect(firstJob.getByRole("link", { name: /Download .*\.mp4/ })).toBeVisible();
-    await expect(firstJob.getByRole("button", { name: /Delete .*\.mp4/ })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: "Preview burnout-is-not-laziness_content1_1-video.mp4" })).toBeVisible();
+    await expect(firstJob.getByRole("link", { name: "Download burnout-is-not-laziness_content1_1-video.mp4" })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: "Delete burnout-is-not-laziness_content1_1-video.mp4" })).toBeVisible();
     await expect(firstJob.getByRole("combobox", { name: "Render profile", exact: true })).toBeEnabled();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toBeEnabled();
     await firstJob.getByRole("tab", { name: "Generate speech" }).click();
@@ -220,17 +223,39 @@ test.describe("workspace customer journeys", () => {
     await expect(firstJob.getByRole("button", { name: "Show ComfyUI Job ID" })).toHaveCount(1);
     await expect(firstJob.getByRole("button", { name: "Show Render attempt ID" })).toHaveCount(0);
 
+    const rerenderResponse = page.waitForResponse((response) => response.url().includes("/render?node_id=") && response.request().method() === "POST");
+    await firstJob.getByRole("button", { name: "Generate new video" }).click();
+    expect((await rerenderResponse).status()).toBe(202);
+    await expect(firstJob.getByRole("link", { name: "Download burnout-is-not-laziness_content1_2-video.mp4" })).toBeVisible({ timeout: 30_000 });
+
     await page.getByRole("tab", { name: "Library" }).click();
-    await expect(page.getByLabel("Output library").getByText("ugc-preview.mp4", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText("burnout-is-not-laziness_content1_1-video.mp4", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText("burnout-is-not-laziness_content1_2-video.mp4", { exact: true })).toBeVisible();
     const videoDownload = page.getByRole("link", { name: "Download video" }).first();
     const videoResponse = await page.request.get(await videoDownload.getAttribute("href") ?? "");
     expect(videoResponse.status()).toBe(200);
 
-    await page.getByRole("tab", { name: "Jobs" }).click();
-    const deleteResponse = page.waitForResponse((response) => response.url().includes("/api/v1/assets/") && response.request().method() === "DELETE");
-    await firstJob.getByRole("button", { name: "Delete ugc-preview.mp4" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
-    expect((await deleteResponse).status()).toBe(204);
-    await expect(firstJob.getByText("No output files yet.")).toBeVisible();
+    await page.getByRole("tab", { name: "Content" }).click();
+    const moreContentResponse = page.waitForResponse((response) => response.url().includes("/topics/") && response.url().endsWith("/contents") && response.request().method() === "POST");
+    await topicCard.getByRole("button", { name: /Generate more content/ }).click();
+    expect((await moreContentResponse).status()).toBe(202);
+    const secondJob = topicCard.locator(".job-card").filter({ hasText: "Content 2" });
+    await expect(secondJob).toBeVisible();
+    await expect.poll(async () => (await secondJob.innerText()).toLowerCase(), {
+      timeout: 20_000,
+      intervals: [1000, 2000],
+    }).toContain("content ready");
+    await secondJob.locator(".job-card-summary").click();
+    const deleteContentResponse = page.waitForResponse((response) => response.url().includes("/api/v1/contents/") && response.request().method() === "DELETE");
+    await secondJob.getByRole("button", { name: /Delete content/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete content" }).click();
+    expect((await deleteContentResponse).status()).toBe(204);
+    await expect(secondJob).toHaveCount(0);
+
+    const deleteTopicResponse = page.waitForResponse((response) => response.url().includes("/api/v1/topics/") && response.request().method() === "DELETE");
+    await topicCard.getByRole("button", { name: "Delete topic Burnout is not laziness" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete topic" }).click();
+    expect((await deleteTopicResponse).status()).toBe(204);
+    await expect(topicCard).toHaveCount(0);
   });
 });

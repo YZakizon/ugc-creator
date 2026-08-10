@@ -17,6 +17,9 @@ CLAIM_DURATION = timedelta(minutes=5)
 class JobTTSContext:
     job_id: UUID
     batch_id: UUID
+    topic: str
+    content_number: int
+    audio_number: int
     speech_script: str
     voice_profile: VoiceProfile
     claim_token: UUID
@@ -98,6 +101,15 @@ class JobTTSRepository:
             return JobTTSContext(
                 job_id=job.id,
                 batch_id=job.batch_id,
+                topic=job.topic,
+                content_number=job.content_number,
+                audio_number=(
+                    sum(
+                        asset.kind in {"audio", "audio_archive"}
+                        for asset in job.media_assets
+                    )
+                    + 1
+                ),
                 speech_script=job.speech_script,
                 voice_profile=voice,
                 claim_token=claim_token,

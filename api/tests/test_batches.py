@@ -2,6 +2,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -11,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.main import app
+from app.providers.storage.local import LocalStorageProvider
 from app.repositories import (
     InMemoryBatchRepository,
     InMemoryConfigurationRepository,
@@ -57,6 +59,120 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
         "Burnout is not laziness",
         "A reminder for overthinkers",
     }
+
+
+@pytest.mark.asyncio
+async def test_topic_generates_incrementing_content_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice-1"
+        )
+    )
+    profile = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Shelf",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+    queued: list[str] = []
+    monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
+    monkeypatch.setattr("app.api.routes.generate_job_content.delay", queued.append)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/api/v1/topics",
+            json={
+                "topic": "Burnout is not laziness",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "auto_fit_duration": True,
+            },
+        )
+        topic_id = created.json()["id"]
+        second = await client.post(f"/api/v1/topics/{topic_id}/contents")
+        third = await client.post(f"/api/v1/topics/{topic_id}/contents")
+        listed = await client.get("/api/v1/topics")
+
+    assert created.status_code == 201
+    assert created.json()["contents"][0]["content_number"] == 1
+    assert second.status_code == 202
+    assert third.status_code == 202
+    assert [
+        item["content_number"] for item in listed.json()["items"][0]["contents"]
+    ] == [1, 2, 3]
+    assert queued == [second.json()["id"], third.json()["id"]]
+
+
+@pytest.mark.asyncio
+async def test_content_and_topic_delete_all_stored_assets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    batches = InMemoryBatchRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = InMemoryConfigurationRepository()
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    storage = LocalStorageProvider()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    first = topic.jobs[0]
+    second = batches.create_content(topic.id)
+    assert second is not None
+    first_key = f"topics/{topic.id}/contents/{first.id}/audio/first.mp3"
+    second_key = f"topics/{topic.id}/contents/{second.id}/video/second.mp4"
+    storage.put(first_key, b"audio")
+    storage.put(second_key, b"video")
+    first.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=first.id,
+            kind="audio",
+            object_key=first_key,
+            filename="first.mp3",
+            content_type="audio/mpeg",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+    second.media_assets = [
+        models.MediaAsset(
+            id=uuid4(),
+            job_id=second.id,
+            kind="video",
+            object_key=second_key,
+            filename="second.mp4",
+            content_type="video/mp4",
+            size_bytes=5,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+    ]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        deleted_content = await client.delete(f"/api/v1/contents/{first.id}")
+        rejected_last_content = await client.delete(f"/api/v1/contents/{second.id}")
+        deleted_topic = await client.delete(f"/api/v1/topics/{topic.id}")
+
+    assert deleted_content.status_code == 204
+    assert rejected_last_content.status_code == 409
+    assert rejected_last_content.json()["detail"] == (
+        "Delete the topic to remove its only content version"
+    )
+    assert deleted_topic.status_code == 204
+    assert not (tmp_path / first_key).exists()
+    assert not (tmp_path / second_key).exists()
+    assert batches.get_batch(topic.id) is None
 
 
 @pytest.mark.asyncio
@@ -213,8 +329,10 @@ async def test_job_audio_upload_becomes_render_input(
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready_to_render"
-    assert response.json()["audio_asset"]["filename"] == "replacement.mp3"
-    assert list(tmp_path.rglob("*replacement.mp3"))
+    assert (
+        response.json()["audio_asset"]["filename"] == "one-topic_content1_1-audio.mp3"
+    )
+    assert list(tmp_path.rglob("*one-topic_content1_1-audio.mp3"))
 
 
 @pytest.mark.asyncio

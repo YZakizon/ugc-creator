@@ -249,7 +249,10 @@ class RenderExecutionRepository:
                 raise LookupError("Render attempt not found")
             job = session.scalar(
                 select(TopicJob)
-                .options(selectinload(TopicJob.media_assets))
+                .options(
+                    selectinload(TopicJob.media_assets),
+                    selectinload(TopicJob.render_attempts),
+                )
                 .where(TopicJob.id == attempt.job_id)
             )
             profile = session.get(RenderProfile, attempt.render_profile_id)

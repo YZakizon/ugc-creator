@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import PurePath
 from uuid import UUID
 
+from app.core.media_naming import generated_media_filename
 from app.db.session import create_database_engine, session_factory
 from app.providers.render.comfyui import (
     ComfyUIProviderError,
@@ -229,15 +230,23 @@ async def _monitor(attempt_id: UUID) -> str:
     outputs = await renderer.fetch_outputs(attempt.external_job_id)
     output = select_video_output(outputs)
     content, content_type = await renderer.download_output(output)
-    output_name = PurePath(output.filename).name
-    object_key = (
-        f"batches/{_job.batch_id}/jobs/{_job.id}/video/{attempt.id}-{output_name}"
+    video_number = (
+        sum(1 for item in _job.render_attempts if item.status == "completed") + 1
     )
+    extension = PurePath(output.filename).suffix.lstrip(".") or "mp4"
+    output_name = generated_media_filename(
+        _job.topic,
+        _job.content_number,
+        video_number,
+        "video",
+        extension,
+    )
+    object_key = f"topics/{_job.batch_id}/contents/{_job.id}/video/{output_name}"
     LocalStorageProvider().put(object_key, content)
     repo.complete(
         attempt_id,
         object_key,
-        PurePath(output.filename).name,
+        output_name,
         content_type,
         len(content),
     )

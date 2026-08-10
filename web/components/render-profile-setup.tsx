@@ -152,7 +152,7 @@ export function RenderProfileSetup() {
         <div className="profile-empty compact-profile-empty"><p>Loading profiles…</p></div>
       ) : profilesQuery.isError ? (
         <div className="profile-empty compact-profile-empty"><p className="form-error" role="alert">Profiles are unavailable: {profilesQuery.error.message}</p></div>
-      ) : profilesQuery.data?.items.length ? (
+      ) : profilesQuery.data?.items?.length ? (
         <div className="profile-list" aria-label="Saved profiles">
           {profilesQuery.data.items.map((profile) => {
             const isExpanded = expandedProfileId === profile.id;
@@ -174,7 +174,7 @@ export function RenderProfileSetup() {
                   <div className="profile-inline-fields">
                     <label>Profile name<input required value={editProfileName} onChange={(event) => setEditProfileName(event.target.value)} /></label>
                     <label>Character name<input required value={editCharacterName} onChange={(event) => setEditCharacterName(event.target.value)} /></label>
-                    <label>Voice profile<select value={editVoiceProfileId} onChange={(event) => setEditVoiceProfileId(event.target.value)} disabled={voicesQuery.isLoading || voicesQuery.isError}><option value="">Not assigned</option>{voicesQuery.data?.items.map((item) => <option key={item.id} value={item.id}>{item.name} · {String(item.extra_settings.voice_name ?? item.provider_voice_id)}</option>)}</select>{!editVoiceProfileId && <small className="field-hint">This profile cannot generate speech or be used for a batch until a voice is attached.</small>}</label>
+                    <label>Voice profile<select value={editVoiceProfileId} onChange={(event) => setEditVoiceProfileId(event.target.value)} disabled={voicesQuery.isLoading || voicesQuery.isError}><option value="">Not assigned</option>{voicesQuery.data?.items.map((item) => <option key={item.id} value={item.id}>{item.name} · {String(item.extra_settings.voice_name ?? item.provider_voice_id)}</option>)}</select>{!editVoiceProfileId && <small className="field-hint">This profile cannot generate speech or be used for a topic until a voice is attached.</small>}</label>
                     <label>Renderer<input className="profile-readonly-input" readOnly value={profile.renderer_provider} title="Renderer cannot be changed on an existing profile" /></label>
                     <label>Workflow template
                       <select value={editWorkflowTemplateId} onChange={(event) => setEditWorkflowTemplateId(event.target.value)} disabled={workflowsQuery.isLoading || workflowsQuery.isError}>

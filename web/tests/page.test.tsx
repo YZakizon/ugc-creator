@@ -10,6 +10,7 @@ import {
   RecentJobs,
   renderProgressLabel,
   speechScriptLines,
+  TopicHistory,
 } from "../components/dashboard-live-data";
 import type { Job } from "../lib/api";
 
@@ -112,6 +113,99 @@ describe("home page", () => {
     ).toBeNull();
   });
 
+  it("generates more numbered content and confirms content and topic deletion", async () => {
+    const content = (id: string, contentNumber: number): Job => ({
+      id,
+      batch_id: "topic-1",
+      topic: "Burnout is not laziness",
+      content_number: contentNumber,
+      status: contentNumber === 1 ? "completed" : "queued",
+      render_profile_id: "profile-1",
+      voice_profile_id: "voice-1",
+      workflow_template_id: "workflow-1",
+      target_duration_seconds: 30,
+      error_message: null,
+      speech_script: contentNumber === 1 ? "A finished script." : null,
+      hook: null,
+      instagram_metadata: null,
+      tiktok_metadata: null,
+      llm_provider: contentNumber === 1 ? "openai" : null,
+      llm_model: contentNumber === 1 ? "gpt-test" : null,
+      prompt_version: contentNumber === 1 ? "ugc-v1" : null,
+      tts_provider: null,
+      tts_voice_id: null,
+      tts_model: null,
+      tts_provider_request_id: null,
+      audio_asset: null,
+      audio_assets: [],
+      created_at: `2026-08-10T00:0${contentNumber}:00Z`,
+      updated_at: `2026-08-10T00:0${contentNumber}:00Z`,
+    });
+    let contents = [content("content-1", 1)];
+    let topicExists = true;
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      requests.push(`${method} ${url}`);
+      if (url.endsWith("/topics/topic-1/contents") && method === "POST") {
+        const next = content("content-2", 2);
+        contents = [...contents, next];
+        return new Response(JSON.stringify(next), { status: 202, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/contents/content-1") && method === "DELETE") {
+        contents = contents.filter((item) => item.id !== "content-1");
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/topics/topic-1") && method === "DELETE") {
+        topicExists = false;
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes("render-attempts") || url.includes("render-nodes") || url.includes("render-profiles") || url.includes("voice-profiles") || url.includes("workflow-templates")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/topics")) {
+        return new Response(JSON.stringify({
+          items: topicExists ? [{
+            id: "topic-1",
+            name: "Burnout is not laziness",
+            status: "processing",
+            default_render_profile_id: "profile-1",
+            target_duration_seconds: 30,
+            auto_fit_duration: true,
+            content_count: contents.length,
+            created_at: "2026-08-10T00:00:00Z",
+            updated_at: "2026-08-10T00:00:00Z",
+            contents,
+          }] : [],
+          total: topicExists ? 1 : 0,
+          limit: 20,
+          offset: 0,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    });
+
+    const { container } = render(<Providers><TopicHistory contentGenerationReady speechGenerationReady /></Providers>);
+    await screen.findAllByText("Burnout is not laziness");
+    fireEvent.click(container.querySelector(".topic-history-card > summary")!);
+    fireEvent.click(within(container).getByRole("button", { name: /Generate more content/ }));
+    await waitFor(() => expect(within(container).getAllByText("Content 2").length).toBeGreaterThan(0));
+
+    const contentOne = Array.from(container.querySelectorAll("details.job-card")).find((card) => card.textContent?.includes("Content 1"))!;
+    fireEvent.click(contentOne.querySelector("summary")!);
+    fireEvent.click(within(contentOne as HTMLElement).getByRole("button", { name: "Delete content content-1" }));
+    fireEvent.click(within(within(container).getByRole("dialog")).getByRole("button", { name: "Delete content" }));
+    await waitFor(() => expect(within(container).queryByText("Content 1")).not.toBeInTheDocument());
+
+    fireEvent.click(within(container).getByRole("button", { name: "Delete topic Burnout is not laziness" }));
+    fireEvent.click(within(within(container).getByRole("dialog")).getByRole("button", { name: "Delete topic" }));
+    await waitFor(() => expect(within(container).getByText("No topics yet")).toBeVisible());
+    expect(requests).toContain("POST /api/v1/topics/topic-1/contents");
+    expect(requests).toContain("DELETE /api/v1/contents/content-1");
+    expect(requests).toContain("DELETE /api/v1/topics/topic-1");
+  });
+
   it("offers only speech retry when generated content is still valid", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -130,6 +224,7 @@ describe("home page", () => {
           id: "job-tts-failed",
           batch_id: "batch-1",
           topic: "Keep the generated content",
+          content_number: 1,
           status: "failed",
           render_profile_id: "profile-1",
           target_duration_seconds: 30,
@@ -165,6 +260,7 @@ describe("home page", () => {
       id: "job-1",
       batch_id: "batch-1",
       topic: "A useful reminder",
+      content_number: 1,
       status: "completed",
       render_profile_id: "profile-1",
       voice_profile_id: "voice-profile-1",
@@ -192,6 +288,7 @@ describe("home page", () => {
         download_url: "/api/v1/assets/audio-1/download",
         created_at: "2026-08-10T00:00:30Z",
       },
+      audio_assets: [],
       created_at: "2026-08-10T00:00:00Z",
       updated_at: "2026-08-10T00:01:00Z",
     };
@@ -264,7 +361,7 @@ describe("home page", () => {
 
     const { container } = render(<Providers><RecentJobs contentGenerationReady speechGenerationReady detailed /></Providers>);
 
-    expect((await screen.findAllByText("A useful reminder")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Content 1")).length).toBeGreaterThan(0);
     expect(await screen.findAllByText("August launch")).not.toHaveLength(0);
     expect(screen.getAllByText("Elena LTX")).not.toHaveLength(0);
     const card = container.querySelector("details.job-card");
@@ -278,11 +375,11 @@ describe("home page", () => {
     expect(jobCard.getByText(/Instagram title/)).toBeVisible();
     expect(jobCard.queryByText("Technical IDs")).not.toBeInTheDocument();
     expect(jobCard.queryByText("job-1")).not.toBeInTheDocument();
-    expect(jobCard.getByRole("button", { name: "Show Batch ID" })).toBeInTheDocument();
+    expect(jobCard.getByRole("button", { name: "Show Topic ID" })).toBeInTheDocument();
     expect(jobCard.getByRole("button", { name: "Show Render profile ID" })).toBeInTheDocument();
-    fireEvent.click(jobCard.getByRole("button", { name: "Show Job ID" }));
+    fireEvent.click(jobCard.getByRole("button", { name: "Show Content ID" }));
     expect(jobCard.getByText("job-1")).toBeVisible();
-    fireEvent.click(jobCard.getByRole("button", { name: "Copy Job ID" }));
+    fireEvent.click(jobCard.getByRole("button", { name: "Copy Content ID" }));
     expect(writeText).toHaveBeenCalledWith("job-1");
     expect(jobCard.getByRole("link", { name: "Download generated speech" })).toHaveAttribute(
       "href",
@@ -342,7 +439,7 @@ describe("home page", () => {
       if (url.includes("voice-profiles")) {
         return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
       }
-      const job = { id: "job-1", batch_id: "batch-1", topic: "Change scene", status: "content_ready", render_profile_id: url.includes("render-profile") ? "profile-2" : "profile-1", target_duration_seconds: 30, error_message: null, speech_script: "Ready script.", hook: "Hook", instagram_metadata: null, tiktok_metadata: null, llm_provider: "openai", llm_model: "gpt-test", prompt_version: "ugc-v1", tts_provider: null, tts_voice_id: null, tts_model: null, tts_provider_request_id: null, audio_asset: null, created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:01:00Z" };
+      const job = { id: "job-1", batch_id: "batch-1", topic: "Change scene", content_number: 1, status: "content_ready", render_profile_id: url.includes("render-profile") ? "profile-2" : "profile-1", target_duration_seconds: 30, error_message: null, speech_script: "Ready script.", hook: "Hook", instagram_metadata: null, tiktok_metadata: null, llm_provider: "openai", llm_model: "gpt-test", prompt_version: "ugc-v1", tts_provider: null, tts_voice_id: null, tts_model: null, tts_provider_request_id: null, audio_asset: null, created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:01:00Z" };
       if (url.includes("/render-profile")) {
         updateBody = String(init?.body);
         return new Response(JSON.stringify(job), { status: 200, headers: { "content-type": "application/json" } });
@@ -351,7 +448,7 @@ describe("home page", () => {
     });
 
     const { container } = render(<Providers><RecentJobs contentGenerationReady speechGenerationReady detailed /></Providers>);
-    expect((await screen.findAllByText("Change scene")).length).toBeGreaterThan(0);
+    await waitFor(() => expect(container.querySelector("details.job-card")).not.toBeNull());
     const card = container.querySelector("details.job-card")!;
     fireEvent.click(card.querySelector("summary")!);
     const jobCard = within(card as HTMLElement);

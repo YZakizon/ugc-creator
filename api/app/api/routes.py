@@ -15,6 +15,7 @@ from app.core.content_prompts import (
     SUPPORTED_CONTENT_PROMPT_PLACEHOLDERS,
     content_prompt_version,
 )
+from app.core.media_naming import generated_media_filename
 from app.core.startup import content_generation_configured, speech_generation_configured
 from app.core.statuses import JobStatus
 from app.core.urls import validate_render_node_url
@@ -31,6 +32,7 @@ from app.repositories import (
     character_to_dict,
     job_to_dict,
     render_profile_to_dict,
+    topic_to_dict,
     voice_preview_to_dict,
     voice_profile_to_dict,
     workflow_template_to_dict,
@@ -60,6 +62,9 @@ from app.schemas import (
     RenderProfileRead,
     RenderProfileSetupCreate,
     RenderProfileUpdate,
+    TopicCreate,
+    TopicList,
+    TopicRead,
     TTSAccountUsageRead,
     TTSVoiceList,
     TTSVoiceRead,
@@ -86,6 +91,28 @@ from app.workers.render_tasks import submit_render
 from app.workers.tts_tasks import generate_job_tts, generate_voice_preview
 
 router = APIRouter(prefix="/api/v1")
+
+ACTIVE_CONTENT_STATUSES = {
+    JobStatus.GENERATING_CONTENT.value,
+    JobStatus.GENERATING_TTS.value,
+    JobStatus.FITTING_DURATION.value,
+    JobStatus.QUEUED.value,
+    JobStatus.SUBMITTING_RENDER.value,
+    JobStatus.RENDERING.value,
+    JobStatus.DOWNLOADING_OUTPUT.value,
+}
+
+
+def _delete_stored_job_assets(job: object) -> None:
+    assets = getattr(job, "__dict__", {}).get("media_assets", [])
+    storage = LocalStorageProvider()
+    try:
+        for asset in assets:
+            storage.delete(asset.object_key)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media storage is unavailable"
+        ) from exc
 
 
 def content_prompt_settings_read(
@@ -456,6 +483,132 @@ def get_batch(batch_id: UUID, repo: BatchRepository = Depends(repository)) -> Ba
     return BatchRead.model_validate(batch_to_dict(batch))
 
 
+@router.post("/topics", response_model=TopicRead, status_code=status.HTTP_201_CREATED)
+def create_topic(
+    payload: TopicCreate,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> TopicRead:
+    profile = config_repo.get_render_profile(payload.render_profile_id)
+    if profile is None or not profile.is_active:
+        raise HTTPException(status_code=422, detail="Active render profile not found")
+    if profile.voice_profile_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Render profile requires a connected voice profile",
+        )
+    title = payload.topic.splitlines()[0].strip()[:160] or "Untitled topic"
+    topic = repo.create_batch(
+        BatchCreate(
+            name=title,
+            topics=[payload.topic],
+            default_render_profile_id=payload.render_profile_id,
+            target_duration_seconds=payload.target_duration_seconds,
+            auto_fit_duration=payload.auto_fit_duration,
+        )
+    )
+    return TopicRead.model_validate(topic_to_dict(topic))
+
+
+@router.get("/topics", response_model=TopicList)
+def list_topics(
+    repo: BatchRepository = Depends(repository),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> TopicList:
+    topics, total = repo.list_batches(limit, offset)
+    return TopicList(
+        items=[TopicRead.model_validate(topic_to_dict(topic)) for topic in topics],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/topics/{topic_id}", response_model=TopicRead)
+def get_topic(topic_id: UUID, repo: BatchRepository = Depends(repository)) -> TopicRead:
+    topic = repo.get_batch(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    return TopicRead.model_validate(topic_to_dict(topic))
+
+
+@router.post(
+    "/topics/{topic_id}/contents",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def generate_more_content(
+    topic_id: UUID, repo: BatchRepository = Depends(repository)
+) -> JobRead:
+    if repo.get_batch(topic_id) is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    if not content_generation_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "provider_not_configured",
+                "provider": "openai",
+                "message": (
+                    "OpenAI is not configured. Configure it before generating more "
+                    "content."
+                ),
+                "retriable": False,
+            },
+        )
+    content = repo.create_content(topic_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Topic has no source content")
+    queued = repo.queue_job_for_content(content.id)
+    if queued is None:
+        raise HTTPException(status_code=404, detail="Content not found")
+    generate_job_content.delay(str(content.id))
+    return JobRead.model_validate(job_to_dict(queued))
+
+
+@router.delete("/topics/{topic_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_topic(
+    topic_id: UUID, repo: BatchRepository = Depends(repository)
+) -> Response:
+    topic = repo.get_batch(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    if any(content.status in ACTIVE_CONTENT_STATUSES for content in topic.jobs):
+        raise HTTPException(
+            status_code=409,
+            detail="Topic cannot be deleted while content generation is active",
+        )
+    for content in topic.jobs:
+        _delete_stored_job_assets(content)
+    if not repo.delete_topic(topic_id):
+        raise HTTPException(status_code=404, detail="Topic not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/contents/{content_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_content(
+    content_id: UUID, repo: BatchRepository = Depends(repository)
+) -> Response:
+    content = repo.get_job(content_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail="Content not found")
+    if content.status in ACTIVE_CONTENT_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="Content cannot be deleted while generation is active",
+        )
+    topic = repo.get_batch(content.batch_id)
+    if topic is not None and len(topic.jobs) == 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Delete the topic to remove its only content version",
+        )
+    _delete_stored_job_assets(content)
+    if not repo.delete_content(content_id):
+        raise HTTPException(status_code=404, detail="Content not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/jobs/{job_id}", response_model=JobRead)
 def get_job(job_id: UUID, repo: BatchRepository = Depends(repository)) -> JobRead:
     job = repo.get_job(job_id)
@@ -606,8 +759,8 @@ def upload_job_audio(
             status_code=409,
             detail="Audio cannot change while speech or video is active",
         )
-    filename = PurePath(payload.filename).name
-    if not filename or filename in {".", ".."}:
+    source_filename = PurePath(payload.filename).name
+    if not source_filename or source_filename in {".", ".."}:
         raise HTTPException(status_code=422, detail="A safe audio filename is required")
     if not payload.content_type.lower().startswith("audio/"):
         raise HTTPException(status_code=422, detail="Select a supported audio file")
@@ -623,7 +776,13 @@ def upload_job_audio(
         raise HTTPException(
             status_code=413, detail="Audio file must be 25 MB or smaller"
         )
-    object_key = f"batches/{job.batch_id}/jobs/{job.id}/audio/{uuid4()}-{filename}"
+    extension = PurePath(source_filename).suffix.lstrip(".") or "mp3"
+    assets = job.__dict__.get("media_assets", [])
+    audio_number = sum(asset.kind in {"audio", "audio_archive"} for asset in assets) + 1
+    filename = generated_media_filename(
+        job.topic, job.content_number, audio_number, "audio", extension
+    )
+    object_key = f"topics/{job.batch_id}/contents/{job.id}/audio/{filename}"
     storage = LocalStorageProvider()
     try:
         storage.put(object_key, content)

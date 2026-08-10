@@ -49,6 +49,21 @@ class BatchCreate(BaseModel):
         return topics
 
 
+class TopicCreate(BaseModel):
+    topic: str = Field(min_length=1, max_length=5_000)
+    render_profile_id: UUID
+    target_duration_seconds: int = Field(default=30, ge=5, le=180)
+    auto_fit_duration: bool = True
+
+    @field_validator("topic")
+    @classmethod
+    def clean_topic(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Topic cannot be empty")
+        return cleaned
+
+
 class MediaAssetRead(BaseModel):
     id: UUID
     job_id: UUID
@@ -65,6 +80,7 @@ class JobRead(BaseModel):
     id: UUID
     batch_id: UUID
     topic: str
+    content_number: int
     status: JobStatus
     render_profile_id: UUID | None
     voice_profile_id: UUID | None
@@ -83,6 +99,7 @@ class JobRead(BaseModel):
     tts_model: str | None
     tts_provider_request_id: str | None
     audio_asset: MediaAssetRead | None = None
+    audio_assets: list[MediaAssetRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -120,6 +137,26 @@ class BatchRead(BaseModel):
 
 class BatchList(BaseModel):
     items: list[BatchRead]
+    total: int
+    limit: int
+    offset: int
+
+
+class TopicRead(BaseModel):
+    id: UUID
+    name: str
+    status: BatchStatus
+    default_render_profile_id: UUID | None
+    target_duration_seconds: int
+    auto_fit_duration: bool
+    content_count: int
+    created_at: datetime
+    updated_at: datetime
+    contents: list[JobRead] = Field(default_factory=list)
+
+
+class TopicList(BaseModel):
+    items: list[TopicRead]
     total: int
     limit: int
     offset: int

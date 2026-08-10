@@ -273,12 +273,12 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
         <label>
           Default source image
           <input type="file" accept="image/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "source_image")} />
-          {currentDefaultImage ? <><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><small className="field-hint">Batch media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the batch does not provide an image.</small>}
+          {currentDefaultImage ? <><small className="workflow-media-filename" title={currentDefaultImage}>Current file: <strong>{workflowMediaFilename(currentDefaultImage)}</strong></small><small className="field-hint">Content media overrides this default image.</small></> : <small className="field-hint">No default image saved. Used only when the content does not provide an image.</small>}
         </label>
         <label>
           Default audio
           <input type="file" accept="audio/*" disabled={mediaUploadPending} onChange={(event) => void selectMediaFile(event, "audio")} />
-          {currentDefaultAudio ? <><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><small className="field-hint">Batch audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the batch does not provide audio.</small>}
+          {currentDefaultAudio ? <><small className="workflow-media-filename" title={currentDefaultAudio}>Current file: <strong>{workflowMediaFilename(currentDefaultAudio)}</strong></small><small className="field-hint">Content audio overrides this default audio.</small></> : <small className="field-hint">No default audio saved. Used only when the content does not provide audio.</small>}
         </label>
         <div className="workflow-json-editor">
           <WorkflowFieldTree workflow={workflow} workflowKind={workflowKind} onUpdateField={updatePromptInput} />

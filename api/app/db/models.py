@@ -38,13 +38,17 @@ class Batch(TimestampMixin, Base):
 
 class TopicJob(TimestampMixin, Base):
     __tablename__ = "topic_jobs"
-    __table_args__ = (Index("ix_topic_jobs_batch_id_status", "batch_id", "status"),)
+    __table_args__ = (
+        Index("ix_topic_jobs_batch_id_status", "batch_id", "status"),
+        UniqueConstraint("batch_id", "content_number", name="uq_topic_content_number"),
+    )
 
     id: Mapped[UUIDPrimaryKey]
     batch_id: Mapped[UUID] = mapped_column(
         ForeignKey("batches.id", ondelete="CASCADE"), nullable=False
     )
     topic: Mapped[str] = mapped_column(Text, nullable=False)
+    content_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(
         String(40), default=JobStatus.DRAFT.value, nullable=False
     )

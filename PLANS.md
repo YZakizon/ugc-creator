@@ -53,7 +53,7 @@ The architecture must then support:
                          │                              │
                          │ Characters / Voices          │
                          │ Workflows / Render Profiles  │
-                         │ Batches / Jobs / Library     │
+                         │ Topics / Content / Library   │
                          └──────────────┬───────────────┘
                                         │
                                  REST + WebSocket
@@ -673,12 +673,12 @@ If it does, fix abstraction leaks.
 ```text
 Dashboard
 Create
-  - New Batch
+  - New Topic
 Characters
 Voice Profiles
 Render Profiles
 Workflows
-Jobs
+Content
 Library
 Settings
   - Providers
@@ -689,11 +689,11 @@ Potential simplification for V1: surface Workflows under Render Profiles.
 
 ## Dashboard
 Show:
-- jobs queued/rendering/failed/completed
-- recent batches
+- content queued/rendering/failed/completed
+- recent topics
 - recent outputs
 - configured render node health
-- quick Create Batch action
+- quick Create Topic action
 
 ## Characters
 Actions:
@@ -730,35 +730,26 @@ Actions:
 - edit defaults
 - capability/schema-driven advanced parameters
 
-## Create Batch
+## Create Topic
 
-Topic input supports:
-- one topic
-- multiline list
+Topic input supports one topic. A Topic is the durable history container for
+multiple numbered Content versions.
 
 Controls:
-- batch name
 - default render profile
 - target duration
 - auto-fit duration
-- per-topic render-profile override
-
-Preview table:
-
-| Topic | Render Profile | Duration | State |
-|---|---|---:|---|
-| Burnout isn't laziness | Elena — Shelf — LTX | 30s | Draft |
-| Reminder for overthinkers | Elena — Shelf — LTX | 30s | Draft |
 
 Possible workflow:
-- create jobs
-- generate content
+- create Topic and Content 1
 - review content
-- generate/render selected/all
+- generate more numbered Content versions
+- generate multiple speech/video outputs until satisfied
+- delete one Content version or its complete Topic history
 
 V1 may allow one-click generation while still supporting inspection.
 
-## Job detail
+## Content detail
 Show:
 - topic
 - current state/progress
@@ -829,9 +820,12 @@ POST   /api/v1/render-profiles
 GET    /api/v1/render-profiles/{id}
 PATCH  /api/v1/render-profiles/{id}
 
-GET    /api/v1/batches
-POST   /api/v1/batches
-GET    /api/v1/batches/{id}
+GET    /api/v1/topics
+POST   /api/v1/topics
+GET    /api/v1/topics/{id}
+POST   /api/v1/topics/{id}/contents
+DELETE /api/v1/topics/{id}
+DELETE /api/v1/contents/{id}
 
 GET    /api/v1/jobs
 GET    /api/v1/jobs/{id}
@@ -1269,49 +1263,45 @@ Most importantly: the core pipeline contains no LTX-specific node IDs.
 
 ---
 
-# 26. Milestone 7 — Batch creation and job queue UI
+# 26. Milestone 7 — Topic creation and content history UI
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS**
 
 ## Goal
-Turn the single-job pipeline into the primary batch workflow.
+Turn the single-content pipeline into a Topic with repeatable numbered Content.
 
 ## Tasks
-- [ ] Create Batch page.
-- [ ] Multiline topic parsing.
-- [ ] Ignore/flag empty lines.
-- [ ] Optional duplicate-topic handling.
-- [ ] Batch name.
-- [ ] Default render profile.
-- [ ] Per-topic render-profile override.
-- [ ] Default target duration.
-- [ ] Auto-fit toggle.
-- [ ] Create TopicJobs transactionally.
-- [ ] Queue selected/all jobs.
-- [ ] Batch detail table.
-- [ ] Aggregate counts.
+- [x] Create Topic page.
+- [x] One durable Topic with stable Content numbering.
+- [x] Default render profile.
+- [x] Per-content render-profile override.
+- [x] Default target duration.
+- [x] Auto-fit toggle.
+- [x] Create initial Content transactionally.
+- [x] Generate and queue more Content.
+- [x] Collapsible Topic history and Content details.
+- [x] Aggregate Content counts.
 - [ ] Job status/progress events.
 - [ ] WebSocket subscription.
-- [ ] Polling fallback.
-- [ ] Retry failed job.
+- [x] Polling fallback.
+- [x] Retry failed content stage.
 - [ ] Cancel queued/rendering job.
-- [ ] Preserve attempt history.
+- [x] Preserve speech and render attempt history.
 - [ ] Add filters by status.
-- [ ] E2E with fake providers.
+- [x] E2E with fake providers.
 
 ## Acceptance criteria
-- User can paste at least 10 topics and create 10 jobs.
-- All jobs can use one default profile.
-- Individual topic can override profile.
-- UI updates while jobs move through stages.
-- One failed job does not stop the entire batch.
+- User can create a Topic and generate multiple stable Content versions.
+- Every Content version can use or override the Topic's profile.
+- UI updates while content moves through stages.
+- One failed Content version does not destroy prior successful versions.
 - Retry does not rerun successful earlier stages unnecessarily.
 
 ---
 
 # 27. Milestone 8 — Output library and social content UX
 
-**Status: NOT STARTED**
+**Status: IN PROGRESS**
 
 ## Goal
 Make finished videos and metadata easy to review and use.
@@ -1319,26 +1309,28 @@ Make finished videos and metadata easy to review and use.
 ## Tasks
 - [ ] Library page.
 - [ ] Video thumbnails.
-- [ ] Video player.
+- [x] Video player.
 - [ ] Search/filter by character/profile/provider/date/status.
 - [ ] Job/output detail page.
-- [ ] Show final script.
-- [ ] Audio player.
+- [x] Show final script.
+- [x] Audio player.
 - [ ] Measured duration.
-- [ ] Instagram title.
+- [x] Instagram title.
 - [ ] Instagram hook.
 - [ ] Instagram description.
 - [ ] Instagram hashtags.
-- [ ] TikTok title.
+- [x] TikTok title.
 - [ ] TikTok hook if separately generated.
 - [ ] TikTok description.
 - [ ] TikTok hashtags.
 - [ ] Copy-to-clipboard buttons.
-- [ ] Video download route/signed URL.
-- [ ] Regenerate content action.
-- [ ] Regenerate TTS action.
-- [ ] Rerender action.
-- [ ] Show render attempt history and seed.
+- [x] Video download route/signed URL.
+- [x] Generate another Content version.
+- [x] Regenerate TTS while preserving prior audio.
+- [x] Rerender while preserving prior video.
+- [x] Show render attempt history.
+- [x] Delete Content with all related media.
+- [x] Delete Topic with all Content and related media.
 - [ ] Responsive design.
 
 ## Acceptance criteria
@@ -1783,6 +1775,24 @@ Append decisions here as implementation clarifies unknowns.
 - Deleting a completed video removes its MediaAsset and returns a job with no other
   video output to `ready_to_render`; the completed RenderAttempt remains as history.
 
+## 40.7 Topic and repeatable Content lifecycle
+
+- The existing `Batch` table remains a compatibility persistence container but is
+  presented as Topic in the V1 API and UI. The existing `TopicJob` is presented as
+  one immutable-in-history Content version rather than introducing a parallel model.
+- A Topic starts with Content 1. Generate More Content creates a new row with the
+  next unique `content_number` and queues content generation without overwriting
+  earlier scripts, speech, or render attempts.
+- Speech and video may be generated repeatedly for one Content. Stored filenames
+  use `{short-topic}_content{content-number}_{output-number}-audio.mp3` and the
+  corresponding `-video.mp4` form.
+- Deleting Content or Topic is rejected during active external work and removes all
+  referenced media through `StorageProvider` before deleting database history. A
+  Topic's only Content is removed by deleting the Topic so no unusable empty Topic
+  history remains.
+- Legacy `/batches` and `/jobs` routes remain available while new user-facing flows
+  use `/topics` and `/contents`.
+
 Format:
 
 ```text
@@ -1970,7 +1980,9 @@ Resolve only when the related milestone needs the answer.
 - [ ] Exact OpenAI model default.
 - [ ] Exact ElevenLabs TTS model default.
 - [ ] Default duration tolerance and max fit attempts.
-- [ ] Whether one TopicJob can own multiple render variants directly or a ContentItem/RenderJob split should be introduced before multi-render comparison.
+- [x] For V1, one TopicJob is one numbered Content version and owns multiple speech
+  and RenderAttempt outputs. Revisit a ContentItem/RenderJob split only if future
+  comparison requirements cannot be represented by existing attempt history.
 - [ ] How imported ComfyUI workflow files/media references are normalized across remote GPU nodes.
 - [ ] Whether ComfyUI WebSocket progress is proxied live or normalized by worker/event publication only.
 - [ ] Authentication/encryption strategy for user-supplied provider keys.
