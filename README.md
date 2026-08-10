@@ -59,6 +59,9 @@ Kling.
    ```
 
    The web shell remains available at <http://localhost:3010>.
+   Startup waits for required health checks, including a responsive Celery
+   worker. Services restart automatically after Docker or the host restarts;
+   `make docker-stop` still removes them explicitly.
    When the development Traefik stack is running, it is also available at
    <http://ugc.localhost>. The web container joins the shared `traefik-proxy`
    network; the API remains private and is reached through the web app's

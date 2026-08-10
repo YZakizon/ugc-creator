@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { HumanDate } from "@/components/date-display";
 import { generateJobContent, getDashboardSummary, getRenderAttempts, getRenderNodes, queueJobRender } from "@/lib/api";
 import type { Job, RenderAttempt } from "@/lib/api";
 
@@ -77,7 +78,12 @@ export function CurrentDate() {
   return <p className="eyebrow">{date || "Today"}</p>;
 }
 
-export function RecentJobs({ contentGenerationReady }: { contentGenerationReady: boolean }) {
+function JobResult({ title, value }: { title: string; value: Record<string, unknown> | null }) {
+  if (!value) return null;
+  return <section className="job-result-block"><h4>{title}</h4><pre>{JSON.stringify(value, null, 2)}</pre></section>;
+}
+
+export function RecentJobs({ contentGenerationReady, detailed = false }: { contentGenerationReady: boolean; detailed?: boolean }) {
   const queryClient = useQueryClient();
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-summary"],
@@ -125,14 +131,7 @@ export function RecentJobs({ contentGenerationReady }: { contentGenerationReady:
         const failedRender = failedJobRetryKind(job, attempt) === "render";
         const failureMessage = jobFailureMessage(job);
         const canRender = job.status === "content_ready" || job.status === "ready_to_render" || failedRender;
-        return <div className="job-row" key={job.id}>
-          <span className="job-status-dot" />
-          <span>
-            <strong>{job.topic}</strong>
-            <small>{job.status.replaceAll("_", " ")}</small>
-            {failureMessage && <small className="job-error" role="alert">{failureMessage}</small>}
-          </span>
-          <b>{job.target_duration_seconds}s</b>
+        const actions = <>
           {(job.status === "draft" || (job.status === "failed" && !failedRender)) && (
             <button
               className="job-action"
@@ -147,6 +146,62 @@ export function RecentJobs({ contentGenerationReady }: { contentGenerationReady:
           {canRender && (
             <button className="job-action" type="button" disabled={renderMutation.isPending || !nodes.data?.items.some((node) => node.is_active)} onClick={() => { const node = nodes.data?.items.find((item) => item.health_status === "healthy") ?? nodes.data?.items.find((item) => item.is_active); if (node) renderMutation.mutate({ jobId: job.id, nodeId: node.id }); }}>{renderMutation.isPending && renderMutation.variables?.jobId === job.id ? "Queuing render…" : failedRender ? "Retry render" : "Render with ComfyUI"}</button>
           )}
+        </>;
+
+        if (detailed) {
+          const hasGeneratedContent = Boolean(job.speech_script || job.hook || job.instagram_metadata || job.tiktok_metadata);
+          return <details className="job-card" key={job.id}>
+            <summary className="job-card-summary">
+              <span className="job-status-dot" />
+              <span className="job-card-title"><strong>{job.topic}</strong><small>{job.status.replaceAll("_", " ")} · Updated <HumanDate value={job.updated_at} /></small></span>
+              <b>{job.target_duration_seconds}s</b>
+              {attempt && <small className="job-render-progress">{attempt.status.replaceAll("_", " ")} · {renderProgressLabel(attempt)}</small>}
+              <span className="job-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div className="job-card-details">
+              <dl className="job-detail-grid">
+                <div><dt>Job ID</dt><dd>{job.id}</dd></div>
+                <div><dt>Batch ID</dt><dd>{job.batch_id}</dd></div>
+                <div><dt>Render profile</dt><dd>{job.render_profile_id ?? "Not assigned"}</dd></div>
+                <div><dt>Content model</dt><dd>{job.llm_provider && job.llm_model ? `${job.llm_provider} · ${job.llm_model}` : "Not generated"}</dd></div>
+              </dl>
+              {failureMessage && <p className="job-error" role="alert">{failureMessage}</p>}
+              <div className="job-detail-actions">{actions}</div>
+              <section className="job-results" aria-label={`Results for ${job.topic}`}>
+                <h3>Content results</h3>
+                {!hasGeneratedContent && <p className="field-hint">No generated content yet.</p>}
+                {job.hook && <div className="job-result-block"><h4>Hook</h4><p>{job.hook}</p></div>}
+                {job.speech_script && <div className="job-result-block"><h4>Speech script</h4><p className="job-script">{job.speech_script}</p></div>}
+                <JobResult title="Instagram" value={job.instagram_metadata} />
+                <JobResult title="TikTok" value={job.tiktok_metadata} />
+              </section>
+              <section className="job-results" aria-label={`Render results for ${job.topic}`}>
+                <h3>Render results</h3>
+                {!attempt && <p className="field-hint">No render attempt yet.</p>}
+                {attempt && <>
+                  <dl className="job-detail-grid">
+                    <div><dt>Attempt ID</dt><dd>{attempt.id}</dd></div>
+                    <div><dt>Provider</dt><dd>{attempt.provider}</dd></div>
+                    <div><dt>Status</dt><dd>{attempt.status.replaceAll("_", " ")} · {renderProgressLabel(attempt)}</dd></div>
+                    <div><dt>Provider job ID</dt><dd>{attempt.external_job_id ?? "Not submitted"}</dd></div>
+                  </dl>
+                  {attempt.error_message && <p className="job-error" role="alert">{attempt.error_message}</p>}
+                  {attempt.assets.length > 0 ? <div className="job-output-list">{attempt.assets.map((asset) => <a className="button button-secondary" href={asset.download_url} download={asset.filename} key={asset.id}>Download {asset.filename}</a>)}</div> : <p className="field-hint">No output files yet.</p>}
+                </>}
+              </section>
+            </div>
+          </details>;
+        }
+
+        return <div className="job-row" key={job.id}>
+          <span className="job-status-dot" />
+          <span>
+            <strong>{job.topic}</strong>
+            <small>{job.status.replaceAll("_", " ")}</small>
+            {failureMessage && <small className="job-error" role="alert">{failureMessage}</small>}
+          </span>
+          <b>{job.target_duration_seconds}s</b>
+          {actions}
           {attempt && <small className="job-render-progress">
             {attempt.status.replaceAll("_", " ")} · {renderProgressLabel(attempt)}
           </small>}

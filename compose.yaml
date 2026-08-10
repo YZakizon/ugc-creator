@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ugc_creator
       POSTGRES_USER: ugc
@@ -17,6 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "0:6379"
     volumes:
@@ -29,6 +31,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -42,6 +45,7 @@ services:
   api:
     build:
       context: ./api
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://ugc:ugc@postgres:5432/ugc_creator
       REDIS_URL: redis://redis:6379/0
@@ -75,6 +79,7 @@ services:
   worker:
     build:
       context: ./api
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://ugc:ugc@postgres:5432/ugc_creator
       REDIS_URL: redis://redis:6379/0
@@ -93,13 +98,22 @@ services:
       - ./api:/app
       - workflow-media:/var/lib/ugc-creator/media
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     command: uv run celery -A app.workers.celery_app.celery_app worker --loglevel=info
+    healthcheck:
+      test: ["CMD-SHELL", "uv run celery -A app.workers.celery_app.celery_app inspect ping --destination celery@$$HOSTNAME --timeout 5 | grep -q pong"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
 
   web:
     build:
       context: ./web
+    restart: unless-stopped
     environment:
       API_BASE_URL: http://api:8000
     ports:

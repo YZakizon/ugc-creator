@@ -163,8 +163,9 @@ test.describe("workspace customer journeys", () => {
     await expect(page.getByText("Batch created successfully.")).toBeVisible();
     await page.getByRole("tab", { name: "Jobs" }).click();
     const jobsPanel = page.locator("#tab-panel-jobs");
-    const firstJob = jobsPanel.locator(".job-row").filter({ hasText: "Burnout is not laziness" });
+    const firstJob = jobsPanel.locator(".job-card").filter({ hasText: "Burnout is not laziness" });
     await expect(firstJob).toBeVisible();
+    await firstJob.locator("summary").click();
     const generateResponse = page.waitForResponse((response) => response.url().includes("generate-content") && response.request().method() === "POST");
     await firstJob.getByRole("button", { name: "Generate content" }).click();
     expect((await generateResponse).status()).toBe(202);
@@ -174,6 +175,7 @@ test.describe("workspace customer journeys", () => {
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
 
+    await firstJob.locator("summary").click();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,
@@ -185,7 +187,7 @@ test.describe("workspace customer journeys", () => {
     }).toContain("completed");
 
     await page.getByRole("tab", { name: "Library" }).click();
-    await expect(page.getByText("ugc-preview.mp4")).toBeVisible();
+    await expect(page.getByText("ugc-preview.mp4", { exact: true })).toBeVisible();
     const videoDownload = page.getByRole("link", { name: "Download video" }).first();
     const videoResponse = await page.request.get(await videoDownload.getAttribute("href") ?? "");
     expect(videoResponse.status()).toBe(200);
