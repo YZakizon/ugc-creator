@@ -565,7 +565,14 @@ describe("home page", () => {
           "340:330": { _meta: { title: "Width" }, class_type: "PrimitiveInt", inputs: { value: 576 } },
           "340:324": { _meta: { title: "Height" }, class_type: "PrimitiveInt", inputs: { value: 1024 } },
         };
-        return new Response(JSON.stringify({ items: [{ ...workflowDefaults, id: "workflow-1", name: "LTX workflow", workflow_json: workflowJson }, { ...workflowDefaults, id: "workflow-2", name: "LTX workflow 2", workflow_json: workflowJson }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
+        const workflowJson2 = {
+          ...workflowJson,
+          "269": { class_type: "LoadImage", inputs: { image: "workflow-2-image.png" } },
+          "276": { class_type: "LoadAudio", inputs: { audio: "workflow-2-audio.mp3" } },
+          "340:319": { _meta: { title: "Prompt" }, class_type: "PrimitiveStringMultiline", inputs: { value: "Workflow 2 prompt for {{SCRIPT}}" } },
+          "340:286": { class_type: "RandomNoise", inputs: { noise_seed: 222222 } },
+        };
+        return new Response(JSON.stringify({ items: [{ ...workflowDefaults, id: "workflow-1", name: "LTX workflow", workflow_json: workflowJson }, { ...workflowDefaults, id: "workflow-2", name: "LTX workflow 2", workflow_json: workflowJson2 }], total: 2 }), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (url.includes("voice-profiles")) {
         const voiceDefaults = { provider: "elevenlabs", provider_voice_id: "voice-id", provider_model: "eleven_multilingual_v2", speed: 1, stability: 0.5, similarity: 0.75, style_exaggeration: 0.5, extra_settings: { voice_name: "Elena" }, created_at: "2026-08-10T00:00:00Z", updated_at: "2026-08-10T00:00:00Z" };
@@ -627,9 +634,10 @@ describe("home page", () => {
     fireEvent.click(renderedSettingsButton);
     const paramsDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 settings" });
     expect(within(paramsDialog).getByText("Image source")).toBeVisible();
-    expect(within(paramsDialog).getByText("elena.png")).toBeVisible();
+    expect(within(paramsDialog).getByText("attempt-image.png")).toBeVisible();
+    expect(within(paramsDialog).getByText("attempt-audio.mp3")).toBeVisible();
     expect(within(paramsDialog).getByText("Prompt")).toBeVisible();
-    expect(within(paramsDialog).getByText(/Keep Elena in the same composition[\s\S]*This is the generated speech[\s\S]*After the supplied audio ends/)).toBeVisible();
+    expect(within(paramsDialog).getByText("Elena says: This is the generated speech.")).toBeVisible();
     expect(within(paramsDialog).queryByText(/\{\{SCRIPT\}\}/)).not.toBeInTheDocument();
     expect(within(paramsDialog).getByText("FPS")).toBeVisible();
     expect(within(paramsDialog).getByText("30")).toBeVisible();
@@ -649,6 +657,15 @@ describe("home page", () => {
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/render-profile") && request.body === JSON.stringify({ render_profile_id: "profile-2" }))).toBe(true));
     expect(jobCard.getByRole("combobox", { name: "Workflow" })).toHaveValue("workflow-2");
     expect(jobCard.getByRole("combobox", { name: "Workflow" })).toBeEnabled();
+    fireEvent.click(jobCard.getByRole("button", { name: "Rendered settings" }));
+    const changedWorkflowDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 settings" });
+    expect(within(changedWorkflowDialog).getByText("attempt-image.png")).toBeVisible();
+    expect(within(changedWorkflowDialog).getByText("Elena says: This is the generated speech.")).toBeVisible();
+    expect(within(changedWorkflowDialog).getByText("987654")).toBeVisible();
+    expect(within(changedWorkflowDialog).queryByText("workflow-2-image.png")).not.toBeInTheDocument();
+    expect(within(changedWorkflowDialog).queryByText(/Workflow 2 prompt/)).not.toBeInTheDocument();
+    expect(within(changedWorkflowDialog).queryByText("222222")).not.toBeInTheDocument();
+    fireEvent.click(within(changedWorkflowDialog).getByRole("button", { name: "Close rendered LTX settings" }));
     fireEvent.change(jobCard.getByRole("combobox", { name: "Workflow" }), { target: { value: "workflow-1" } });
     fireEvent.click(jobCard.getByRole("button", { name: "Save workflow" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/workflow-template") && request.body === JSON.stringify({ workflow_template_id: "workflow-1" }))).toBe(true));
