@@ -473,6 +473,13 @@ class RenderNodeList(BaseModel):
     total: int
 
 
+class RenderedWorkflowControlRead(BaseModel):
+    label: str
+    node_id: str
+    input_name: str
+    value: object
+
+
 class RenderAttemptRead(BaseModel):
     id: UUID
     job_id: UUID
@@ -487,6 +494,7 @@ class RenderAttemptRead(BaseModel):
     output_filename: str | None
     output_deleted_at: datetime | None
     effective_values: dict[str, object] = Field(default_factory=dict)
+    rendered_controls: list[RenderedWorkflowControlRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     assets: list[MediaAssetRead] = Field(default_factory=list)

@@ -501,6 +501,16 @@ describe("home page", () => {
             fps: 24,
             seed: 42,
           },
+          rendered_controls: [
+            { label: "Image source", node_id: "269", input_name: "image", value: "attempt-image.png" },
+            { label: "Audio source", node_id: "276", input_name: "audio", value: "attempt-audio.mp3" },
+            { label: "Prompt", node_id: "340:319", input_name: "value", value: "Elena says: This is the generated speech." },
+            { label: "FPS", node_id: "340:323", input_name: "value", value: 30 },
+            { label: "Duration", node_id: "340:331", input_name: "value", value: 25 },
+            { label: "Seed", node_id: "340:286", input_name: "noise_seed", value: 987654 },
+            { label: "Width", node_id: "340:330", input_name: "value", value: 576 },
+            { label: "Height", node_id: "340:324", input_name: "value", value: 1024 },
+          ],
           created_at: "2026-08-10T00:00:00Z",
           updated_at: "2026-08-10T00:01:00Z",
           assets: [{
@@ -598,13 +608,19 @@ describe("home page", () => {
     expect(jobCard.getAllByText("47%").length).toBeGreaterThan(0);
     expect(jobCard.queryByText("earlier-video.mp4")).not.toBeInTheDocument();
     expect(jobCard.queryByText("Deleted")).not.toBeInTheDocument();
-    fireEvent.click(jobCard.getByRole("button", { name: "Show rendered ComfyUI parameters" }));
-    const paramsDialog = screen.getByRole("dialog", { name: "Rendered ComfyUI parameters" });
-    expect(within(paramsDialog).getByText("{{SCRIPT}}")).toBeVisible();
-    expect(within(paramsDialog).getByText("This is the generated speech.")).toBeVisible();
-    expect(within(paramsDialog).getByText("{{FPS}}")).toBeVisible();
-    expect(within(paramsDialog).getByText("24")).toBeVisible();
-    fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered ComfyUI parameters" }));
+    const renderedSettingsButton = jobCard.getByRole("button", { name: "Rendered settings" });
+    expect(renderedSettingsButton.parentElement).toContainElement(jobCard.getByRole("button", { name: "Generate New Video" }));
+    fireEvent.click(renderedSettingsButton);
+    const paramsDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 settings" });
+    expect(within(paramsDialog).getByText("Image source")).toBeVisible();
+    expect(within(paramsDialog).getByText("attempt-image.png")).toBeVisible();
+    expect(within(paramsDialog).getByText("Prompt")).toBeVisible();
+    expect(within(paramsDialog).getByText("Elena says: This is the generated speech.")).toBeVisible();
+    expect(within(paramsDialog).getByText("FPS")).toBeVisible();
+    expect(within(paramsDialog).getByText("30")).toBeVisible();
+    expect(within(paramsDialog).getByText("Seed")).toBeVisible();
+    expect(within(paramsDialog).getByText("987654")).toBeVisible();
+    fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered LTX settings" }));
     fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
     fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));

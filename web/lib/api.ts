@@ -229,6 +229,12 @@ export type RenderAttempt = {
   output_filename: string | null;
   output_deleted_at: string | null;
   effective_values: Record<string, unknown>;
+  rendered_controls: Array<{
+    label: string;
+    node_id: string;
+    input_name: string;
+    value: unknown;
+  }>;
   created_at: string;
   updated_at: string;
   assets: MediaAsset[];

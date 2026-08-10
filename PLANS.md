@@ -1744,6 +1744,8 @@ Append decisions here as implementation clarifies unknowns.
 - Workflow preparation validates the complete binding set, deep-copies the
   template, applies typed values, and rejects unknown placeholders before any
   renderer call.
+- Template bindings expand matching placeholders in place, preserving surrounding
+  model instructions such as the LTX direct-to-camera prompt wrapper.
 - Each ComfyUI execution copy receives fresh values for unbound scalar seed
   inputs. Explicit seed bindings remain authoritative, and resolved automatic
   seeds are persisted with the attempt's effective values for reproducibility.

@@ -20,6 +20,7 @@ from app.core.startup import content_generation_configured, speech_generation_co
 from app.core.statuses import JobStatus
 from app.core.urls import validate_render_node_url
 from app.providers.render.comfyui import ComfyUIProviderError, ComfyUIRenderer
+from app.providers.render.comfyui_controls import rendered_ltx_controls
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.providers.tts.contracts import TTSProviderError, TTSUsage
 from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
@@ -292,6 +293,9 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
         }
         for asset in getattr(attempt, "assets", [])
     ]
+    data["rendered_controls"] = rendered_ltx_controls(
+        getattr(attempt, "workflow_snapshot", {})
+    )
     return RenderAttemptRead.model_validate(data)
 
 
