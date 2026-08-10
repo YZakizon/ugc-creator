@@ -99,6 +99,12 @@ export function TopicHistory({ contentGenerationReady, speechGenerationReady }: 
   const [pendingTopicDelete, setPendingTopicDelete] = useState<Topic | null>(null);
   const topicLimit = 20;
   const topics = useQuery({ queryKey: ["topics", topicOffset], queryFn: () => getTopics(topicLimit, topicOffset), refetchInterval: 5000 });
+  useEffect(() => {
+    if (!topics.isFetching && topics.data && topicOffset > 0 && topics.data.items.length === 0) {
+      const lastOffset = Math.max(0, Math.floor(Math.max(0, topics.data.total - 1) / topicLimit) * topicLimit);
+      setTopicOffset(lastOffset);
+    }
+  }, [topicOffset, topics.data, topics.isFetching]);
   const moreContent = useMutation({
     mutationFn: generateMoreContent,
     onSuccess: () => {
@@ -119,6 +125,7 @@ export function TopicHistory({ contentGenerationReady, speechGenerationReady }: 
   if (topics.isLoading) return <div className="empty-state compact-empty"><p>Loading topic history…</p></div>;
   if (topics.isError) return <div className="empty-state compact-empty"><p>Topic history is temporarily unavailable.</p></div>;
   const topicItems = topics.data?.items ?? [];
+  if (!topicItems.length && topicOffset > 0) return <div className="empty-state compact-empty"><p>Returning to the previous topic page…</p></div>;
   if (!topicItems.length) return <div className="empty-state compact-empty"><h3>No topics yet</h3><p>Create a topic to begin generating content.</p><a className="button button-secondary" href="#create">Create your first topic</a></div>;
 
   return <div className="topic-history-list">

@@ -250,6 +250,46 @@ describe("home page", () => {
     expect(requestedOffsets).toContain("20");
   });
 
+  it("returns to the prior topic page when a later page becomes empty", async () => {
+    let firstPageRequests = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/topics?")) {
+        const offset = new URL(url, "http://testserver").searchParams.get("offset") ?? "0";
+        if (offset === "0") firstPageRequests += 1;
+        return new Response(JSON.stringify({
+          items: offset === "0" ? [{
+            id: "topic-1",
+            name: "Remaining topic",
+            status: "draft",
+            default_render_profile_id: null,
+            target_duration_seconds: 30,
+            auto_fit_duration: true,
+            content_count: 0,
+            created_at: "2026-08-10T00:00:00Z",
+            updated_at: "2026-08-10T00:00:00Z",
+            contents: [],
+          }] : [],
+          total: offset === "0" ? 21 : 20,
+          limit: 20,
+          offset: Number(offset),
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("render-attempts") || url.includes("render-nodes") || url.includes("render-profiles") || url.includes("voice-profiles") || url.includes("workflow-templates")) {
+        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const { container } = render(<Providers><TopicHistory contentGenerationReady speechGenerationReady /></Providers>);
+    await within(container).findByText("Remaining topic");
+    fireEvent.click(within(container).getByRole("button", { name: "Next" }));
+
+    await waitFor(() => expect(firstPageRequests).toBeGreaterThan(1));
+    expect(within(container).getByText("Remaining topic")).toBeVisible();
+    expect(within(container).queryByText("No topics yet")).not.toBeInTheDocument();
+  });
+
   it("offers only speech retry when generated content is still valid", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
