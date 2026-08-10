@@ -67,9 +67,11 @@ async def test_comfyui_submit_status_and_outputs() -> None:
 @pytest.mark.asyncio
 async def test_comfyui_upload_returns_server_filename() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/upload/audio"
+        assert request.url.path == "/upload/image"
         assert b"audio.mp3" in request.content
         assert b"audio-bytes" in request.content
+        assert b'name="type"' in request.content
+        assert b"input" in request.content
         return httpx.Response(200, json={"name": "audio.mp3", "subfolder": ""})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:

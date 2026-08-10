@@ -142,9 +142,12 @@ class ComfyUIRenderer(VideoRenderer):
             raise ComfyUIProviderError(f"Unsupported ComfyUI upload type: {input_type}")
         response = await self._request(
             "POST",
-            f"/upload/{input_type}",
+            "/upload/image",
             files={"image": (filename, content)},
-            data={"overwrite": str(overwrite).lower()},
+            data={
+                "overwrite": str(overwrite).lower(),
+                "type": "input",
+            },
         )
         payload = _json_object(response)
         uploaded_name = payload.get("name")
