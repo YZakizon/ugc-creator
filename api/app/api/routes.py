@@ -46,6 +46,7 @@ from app.schemas import (
     ContentPromptSettingsUpdate,
     DashboardSummary,
     JobRead,
+    JobRenderProfileUpdate,
     RenderAttemptList,
     RenderAttemptRead,
     RenderNodeCreate,
@@ -422,6 +423,36 @@ def get_job(job_id: UUID, repo: BatchRepository = Depends(repository)) -> JobRea
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobRead.model_validate(job_to_dict(job))
+
+
+@router.patch("/jobs/{job_id}/render-profile", response_model=JobRead)
+def update_job_render_profile(
+    job_id: UUID,
+    payload: JobRenderProfileUpdate,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in {
+        JobStatus.QUEUED.value,
+        JobStatus.SUBMITTING_RENDER.value,
+        JobStatus.RENDERING.value,
+        JobStatus.DOWNLOADING_OUTPUT.value,
+        JobStatus.COMPLETED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Render profile cannot change while this job is active or completed",
+        )
+    profile = config_repo.get_render_profile(payload.render_profile_id)
+    if profile is None or not profile.is_active:
+        raise HTTPException(status_code=422, detail="Active render profile not found")
+    updated = repo.update_job_render_profile(job_id, profile.id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(updated))
 
 
 @router.post(

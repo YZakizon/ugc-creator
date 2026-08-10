@@ -165,7 +165,7 @@ test.describe("workspace customer journeys", () => {
     const jobsPanel = page.locator("#tab-panel-jobs");
     const firstJob = jobsPanel.locator(".job-card").filter({ hasText: "Burnout is not laziness" });
     await expect(firstJob).toBeVisible();
-    await firstJob.locator("summary").click();
+    await firstJob.locator(".job-card-summary").click();
     const generateResponse = page.waitForResponse((response) => response.url().includes("generate-content") && response.request().method() === "POST");
     await firstJob.getByRole("button", { name: "Generate content" }).click();
     expect((await generateResponse).status()).toBe(202);
@@ -175,7 +175,7 @@ test.describe("workspace customer journeys", () => {
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("content ready");
 
-    await firstJob.locator("summary").click();
+    await firstJob.locator(".job-card-summary").click();
     const jobSpeechResponse = page.waitForResponse((response) => response.url().includes("generate-tts") && response.request().method() === "POST");
     await firstJob.getByRole("button", { name: "Generate speech" }).click();
     expect((await jobSpeechResponse).status()).toBe(202);
@@ -185,8 +185,9 @@ test.describe("workspace customer journeys", () => {
       return (await firstJob.innerText()).toLowerCase();
     }, { timeout: 20_000, intervals: [1000, 2000] }).toContain("ready to render");
 
-    await firstJob.locator("summary").click();
-    await expect(firstJob.getByText("Generated speech")).toBeVisible();
+    await firstJob.locator(".job-card-summary").click();
+    await expect(firstJob.getByRole("link", { name: "Download generated speech" })).toBeVisible();
+    await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,

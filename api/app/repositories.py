@@ -161,6 +161,15 @@ class InMemoryBatchRepository:
         job.updated_at = utc_now()
         return job
 
+    def update_job_render_profile(
+        self, job_id: UUID, render_profile_id: UUID
+    ) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is not None:
+            job.render_profile_id = render_profile_id
+            job.updated_at = utc_now()
+        return job
+
     def list_jobs(self, limit: int = 5) -> list[TopicJob]:
         return sorted(
             self.jobs.values(), key=lambda item: item.created_at, reverse=True
@@ -256,6 +265,21 @@ class SqlAlchemyBatchRepository:
             job.error_message = None
             job.tts_claim_token = None
             job.tts_claim_expires_at = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def update_job_render_profile(
+        self, job_id: UUID, render_profile_id: UUID
+    ) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.get(TopicJob, job_id)
+            if job is None:
+                return None
+            job.render_profile_id = render_profile_id
             session.commit()
             return session.scalar(
                 select(TopicJob)

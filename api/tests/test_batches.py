@@ -58,6 +58,60 @@ async def test_create_batch_creates_draft_jobs_and_summary() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_render_profile_can_change_before_rendering() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice-1"
+        )
+    )
+    first = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Shelf",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+    second = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Studio",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+    batch = batches.create_batch(
+        BatchCreate(
+            name="Tuesday videos",
+            topics=["One topic"],
+            default_render_profile_id=first.id,
+        )
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            f"/api/v1/jobs/{batch.jobs[0].id}/render-profile",
+            json={"render_profile_id": str(second.id)},
+        )
+        batch.jobs[0].status = "rendering"
+        locked = await client.patch(
+            f"/api/v1/jobs/{batch.jobs[0].id}/render-profile",
+            json={"render_profile_id": str(first.id)},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["render_profile_id"] == str(second.id)
+    assert batches.get_job(batch.jobs[0].id).render_profile_id == second.id
+    assert locked.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_create_batch_rejects_blank_topics() -> None:
     app.state.batch_repository = InMemoryBatchRepository()
     app.state.configuration_repository = InMemoryConfigurationRepository()
