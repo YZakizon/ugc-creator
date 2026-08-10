@@ -27,6 +27,7 @@ from app.providers.render.comfyui import (
 from app.providers.render.contracts import RenderOutput
 from app.render_repository import RenderExecutionRepository
 from app.schemas import RenderNodeCreate
+from app.services.media_service import MediaProcessingError
 from app.workers.render_tasks import (
     _prepare_and_submit,
     apply_default_workflow_media,
@@ -62,6 +63,36 @@ def test_unknown_submission_outcome_stays_reconcilable(
 
     assert result == {"attempt_id": str(attempt_id), "status": "reconciling"}
     assert scheduled == [([str(attempt_id)], 5)]
+
+
+def test_media_processing_failure_persists_safe_render_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    updates: list[tuple[object, str, int, str]] = []
+
+    async def fail_to_measure(_attempt_id: object) -> None:
+        raise MediaProcessingError("Audio duration could not be measured.")
+
+    class FakeRepository:
+        def update_progress(
+            self,
+            stored_attempt_id: object,
+            status: str,
+            progress: int,
+            message: str,
+        ) -> None:
+            updates.append((stored_attempt_id, status, progress, message))
+
+    monkeypatch.setattr("app.workers.render_tasks._prepare_and_submit", fail_to_measure)
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+
+    result = submit_render(str(attempt_id))
+
+    assert result == {"attempt_id": str(attempt_id), "status": "failed"}
+    assert updates == [
+        (attempt_id, "failed", 0, "Audio duration could not be measured.")
+    ]
 
 
 @pytest.mark.asyncio

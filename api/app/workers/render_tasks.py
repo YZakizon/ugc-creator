@@ -13,7 +13,7 @@ from app.providers.render.comfyui import (
 from app.providers.render.contracts import RenderOutput, RenderRequest
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
-from app.services.media_service import probe_audio_duration
+from app.services.media_service import MediaProcessingError, probe_audio_duration
 from app.services.workflow_service import (
     WorkflowValidationError,
     prepare_workflow,
@@ -195,6 +195,7 @@ def submit_render(attempt_id: str) -> dict[str, str]:
     except (
         ComfyUIProviderError,
         WorkflowValidationError,
+        MediaProcessingError,
         StorageError,
         ValueError,
         LookupError,
