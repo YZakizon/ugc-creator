@@ -18,12 +18,16 @@ For V1, the existing `Batch` record is the durable Topic container and each
 `/contents` endpoints expose those concepts while legacy batch/job endpoints remain
 compatible.
 
-`content_number` is unique and monotonically increasing within a Topic. Generating
-more content creates a new row and never overwrites prior generated content. One
-Content owns multiple archived audio assets and multiple RenderAttempts.
+`content_number` is unique and monotonically increasing within a Topic. A persisted
+high-water mark prevents deleted numbers from being reused. Generating more content
+creates a new row from Topic defaults and never overwrites prior generated content.
+One Content owns multiple archived audio assets and multiple RenderAttempts.
 
 Migration converts every job in a legacy multi-topic Batch into its own Topic so
 unrelated historical topics are not mislabeled as versions of one idea.
+
+The create screen may transactionally create several independent Topics. This keeps
+the V1 multi-topic input without presenting those ideas as one Batch history.
 
 Generated media uses a sanitized topic prefix and stable content/output numbers:
 
@@ -36,6 +40,8 @@ Content and Topic deletion are blocked while external work is active. Deletion
 removes referenced objects through the storage abstraction and then removes the
 database records through existing cascades. The final Content cannot be removed
 independently; deleting its Topic prevents an empty, unusable history container.
+Topic status is derived from persisted Content states. Speech replacement keeps the
+current audio active until the new provider result is saved atomically.
 
 ## Alternatives considered
 

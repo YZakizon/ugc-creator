@@ -17,6 +17,15 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    op.add_column(
+        "batches",
+        sa.Column(
+            "next_content_number",
+            sa.Integer(),
+            nullable=False,
+            server_default="2",
+        ),
+    )
     op.add_column("topic_jobs", sa.Column("content_number", sa.Integer()))
     connection = op.get_bind()
     legacy_rows = connection.execute(
@@ -114,3 +123,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_constraint("uq_topic_content_number", "topic_jobs", type_="unique")
     op.drop_column("topic_jobs", "content_number")
+    op.drop_column("batches", "next_content_number")

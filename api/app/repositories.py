@@ -28,6 +28,7 @@ from app.schemas import (
     RenderProfileCreate,
     RenderProfileSetupCreate,
     RenderProfileUpdate,
+    TopicBulkCreate,
     VoiceProfileCreate,
     VoiceProfileUpdate,
     WorkflowTemplateCreate,
@@ -110,6 +111,7 @@ class InMemoryBatchRepository:
             default_render_profile_id=payload.default_render_profile_id,
             target_duration_seconds=payload.target_duration_seconds,
             auto_fit_duration=payload.auto_fit_duration,
+            next_content_number=len(payload.topics) + 1,
             created_at=now,
             updated_at=now,
         )
@@ -131,6 +133,20 @@ class InMemoryBatchRepository:
         self.batches[batch.id] = batch
         return batch
 
+    def create_topics(self, payload: TopicBulkCreate) -> list[Batch]:
+        return [
+            self.create_batch(
+                BatchCreate(
+                    name=topic.splitlines()[0].strip()[:160] or "Untitled topic",
+                    topics=[topic],
+                    default_render_profile_id=payload.render_profile_id,
+                    target_duration_seconds=payload.target_duration_seconds,
+                    auto_fit_duration=payload.auto_fit_duration,
+                )
+            )
+            for topic in payload.topics
+        ]
+
     def list_batches(self, limit: int, offset: int) -> tuple[list[Batch], int]:
         batches = sorted(
             self.batches.values(), key=lambda item: item.created_at, reverse=True
@@ -147,24 +163,23 @@ class InMemoryBatchRepository:
         batch = self.batches.get(topic_id)
         if batch is None or not batch.jobs:
             return None
-        source = max(batch.jobs, key=lambda item: item.content_number)
+        source = min(batch.jobs, key=lambda item: item.content_number)
         now = utc_now()
         content = TopicJob(
             id=uuid4(),
             batch_id=batch.id,
             topic=source.topic,
-            content_number=max(job.content_number for job in batch.jobs) + 1,
+            content_number=batch.next_content_number,
             status=JobStatus.DRAFT.value,
-            render_profile_id=source.render_profile_id,
-            voice_profile_id=source.voice_profile_id,
-            workflow_template_id=source.workflow_template_id,
-            target_duration_seconds=source.target_duration_seconds,
+            render_profile_id=batch.default_render_profile_id,
+            target_duration_seconds=batch.target_duration_seconds,
             created_at=now,
             updated_at=now,
         )
         content.media_assets = []
         content.render_attempts = []
         batch.jobs.append(content)
+        batch.next_content_number += 1
         batch.updated_at = now
         self.jobs[content.id] = content
         return content
@@ -208,11 +223,24 @@ class InMemoryBatchRepository:
             JobStatus.COMPLETED.value,
         }:
             raise ValueError(f"Job cannot generate speech from status {job.status}")
-        for asset in job.__dict__.get("media_assets", []):
-            if asset.kind == "audio":
-                asset.kind = "audio_archive"
         job.status = JobStatus.GENERATING_TTS.value
         job.error_message = None
+        job.updated_at = utc_now()
+        return job
+
+    def recover_job_tts_enqueue(self, job_id: UUID) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        has_audio = any(
+            asset.kind == "audio" for asset in job.__dict__.get("media_assets", [])
+        )
+        job.status = (
+            JobStatus.READY_TO_RENDER.value
+            if has_audio
+            else JobStatus.CONTENT_READY.value
+        )
+        job.error_message = "Speech could not be queued. Try again."
         job.updated_at = utc_now()
         return job
 
@@ -340,6 +368,7 @@ class SqlAlchemyBatchRepository:
                 default_render_profile_id=payload.default_render_profile_id,
                 target_duration_seconds=payload.target_duration_seconds,
                 auto_fit_duration=payload.auto_fit_duration,
+                next_content_number=len(payload.topics) + 1,
             )
             batch.jobs = [
                 TopicJob(
@@ -357,6 +386,43 @@ class SqlAlchemyBatchRepository:
             # Load the relationship while the session is still attached.
             _ = batch.jobs
             return batch
+
+    def create_topics(self, payload: TopicBulkCreate) -> list[Batch]:
+        with self.factory() as session:
+            topics = [
+                Batch(
+                    name=topic.splitlines()[0].strip()[:160] or "Untitled topic",
+                    status=BatchStatus.DRAFT.value,
+                    default_render_profile_id=payload.render_profile_id,
+                    target_duration_seconds=payload.target_duration_seconds,
+                    auto_fit_duration=payload.auto_fit_duration,
+                    next_content_number=2,
+                    jobs=[
+                        TopicJob(
+                            topic=topic,
+                            content_number=1,
+                            status=JobStatus.DRAFT.value,
+                            render_profile_id=payload.render_profile_id,
+                            target_duration_seconds=payload.target_duration_seconds,
+                        )
+                    ],
+                )
+                for topic in payload.topics
+            ]
+            session.add_all(topics)
+            session.commit()
+            topic_ids = [topic.id for topic in topics]
+            return list(
+                session.scalars(
+                    select(Batch)
+                    .options(
+                        selectinload(Batch.jobs).selectinload(TopicJob.media_assets)
+                    )
+                    .where(Batch.id.in_(topic_ids))
+                )
+                .unique()
+                .all()
+            )
 
     def list_batches(self, limit: int, offset: int) -> tuple[list[Batch], int]:
         with self.factory() as session:
@@ -398,18 +464,17 @@ class SqlAlchemyBatchRepository:
             )
             if batch is None or not batch.jobs:
                 return None
-            source = max(batch.jobs, key=lambda item: item.content_number)
+            source = min(batch.jobs, key=lambda item: item.content_number)
             content = TopicJob(
                 batch_id=batch.id,
                 topic=source.topic,
-                content_number=max(job.content_number for job in batch.jobs) + 1,
+                content_number=batch.next_content_number,
                 status=JobStatus.DRAFT.value,
-                render_profile_id=source.render_profile_id,
-                voice_profile_id=source.voice_profile_id,
-                workflow_template_id=source.workflow_template_id,
-                target_duration_seconds=source.target_duration_seconds,
+                render_profile_id=batch.default_render_profile_id,
+                target_duration_seconds=batch.target_duration_seconds,
             )
             session.add(content)
+            batch.next_content_number += 1
             batch.updated_at = utc_now()
             session.commit()
             return session.scalar(
@@ -468,9 +533,6 @@ class SqlAlchemyBatchRepository:
                 JobStatus.COMPLETED.value,
             }:
                 raise ValueError(f"Job cannot generate speech from status {job.status}")
-            for asset in job.media_assets:
-                if asset.kind == "audio":
-                    asset.kind = "audio_archive"
             job.status = JobStatus.GENERATING_TTS.value
             job.error_message = None
             job.tts_claim_token = None
@@ -481,6 +543,26 @@ class SqlAlchemyBatchRepository:
                 .options(selectinload(TopicJob.media_assets))
                 .where(TopicJob.id == job_id)
             )
+
+    def recover_job_tts_enqueue(self, job_id: UUID) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+            if job is None:
+                return None
+            job.status = (
+                JobStatus.READY_TO_RENDER.value
+                if any(asset.kind == "audio" for asset in job.media_assets)
+                else JobStatus.CONTENT_READY.value
+            )
+            job.error_message = "Speech could not be queued. Try again."
+            job.tts_claim_token = None
+            job.tts_claim_expires_at = None
+            session.commit()
+            return job
 
     def update_job_render_profile(
         self,
@@ -1713,10 +1795,25 @@ def batch_to_dict(batch: Batch) -> dict[str, object]:
 
 def topic_to_dict(batch: Batch) -> dict[str, object]:
     jobs: Sequence[TopicJob] = batch.jobs
+    statuses = {job.status for job in jobs}
+    if jobs and statuses == {JobStatus.COMPLETED.value}:
+        topic_status = BatchStatus.COMPLETED.value
+    elif JobStatus.FAILED.value in statuses and statuses.issubset(
+        {
+            JobStatus.COMPLETED.value,
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        }
+    ):
+        topic_status = BatchStatus.FAILED.value
+    elif statuses.issubset({JobStatus.DRAFT.value, JobStatus.CANCELLED.value}):
+        topic_status = BatchStatus.DRAFT.value
+    else:
+        topic_status = BatchStatus.PROCESSING.value
     return {
         "id": batch.id,
         "name": batch.name,
-        "status": batch.status,
+        "status": topic_status,
         "default_render_profile_id": batch.default_render_profile_id,
         "target_duration_seconds": batch.target_duration_seconds,
         "auto_fit_duration": batch.auto_fit_duration,

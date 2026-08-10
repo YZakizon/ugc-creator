@@ -58,6 +58,34 @@ describe("create topic form", () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it("creates multiple independent topics when another topic is added", async () => {
+    let requestUrl = "";
+    let requestBody: Record<string, unknown> = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (String(input).includes("render-profiles")) {
+        return new Response(JSON.stringify({ items: [profile], total: 1 }), { status: 200 });
+      }
+      requestUrl = String(input);
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ items: [{ id: "topic-1" }, { id: "topic-2" }], total: 2 }), { status: 201 });
+    });
+
+    render(<Providers><CreateTopicForm /></Providers>);
+    await screen.findByRole("option", { name: "Elena Shelf" });
+    fireEvent.click(screen.getByRole("button", { name: /Add another topic/ }));
+    fireEvent.change(screen.getByLabelText("Topic 1"), { target: { value: "First topic" } });
+    fireEvent.change(screen.getByLabelText("Topic 2"), { target: { value: "Second topic" } });
+    fireEvent.change(screen.getByLabelText("Render profile"), { target: { value: "profile-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create 2 topics" }));
+
+    await waitFor(() => expect(screen.getByText("2 topics created successfully.")).toBeVisible());
+    expect(requestUrl).toContain("/topics/bulk");
+    expect(requestBody).toMatchObject({
+      topics: ["First topic", "Second topic"],
+      render_profile_id: "profile-1",
+    });
+  });
+
   it("does not offer profiles without an assigned voice", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
       items: [{ ...profile, voice_profile_id: null }],

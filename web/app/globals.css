@@ -141,6 +141,11 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .batch-form input:not([type="checkbox"]), .batch-form textarea, .batch-form select { width: 100%; border: 1px solid #e5e5ed; border-radius: 8px; outline: none; padding: 10px 11px; color: #454652; background: #fcfcfe; font-size: 15.6px; font-weight: 400; }
 .batch-form textarea { resize: vertical; line-height: 1.5; }
 .batch-form input:focus, .batch-form textarea:focus, .batch-form select:focus { border-color: #a99bf3; box-shadow: 0 0 0 3px #806be91a; }
+.topic-input-list { display: grid; gap: 10px; }
+.topic-input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.topic-input-row .topic-remove { margin-top: 25px; }
+.topic-input-row .topic-remove svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.add-topic-button { justify-self: start; }
 .form-options { display: flex; align-items: end; gap: 17px; }
 .form-options > label:first-child { width: 180px; }
 .checkbox-label { display: flex !important; align-items: center; gap: 7px !important; min-height: 38px; white-space: nowrap; }

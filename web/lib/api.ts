@@ -299,6 +299,13 @@ export function createTopic(input: CreateTopicInput): Promise<Topic> {
   });
 }
 
+export function createTopics(input: Omit<CreateTopicInput, "topic"> & { topics: string[] }): Promise<{ items: Topic[]; total: number }> {
+  return request<{ items: Topic[]; total: number }>("/api/v1/topics/bulk", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export function getTopics(): Promise<{ items: Topic[]; total: number; limit: number; offset: number }> {
   return request<{ items: Topic[]; total: number; limit: number; offset: number }>("/api/v1/topics?limit=100");
 }

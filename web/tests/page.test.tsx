@@ -111,6 +111,9 @@ describe("home page", () => {
     expect(
       jobFailureMessage({ status: "content_ready", error_message: "stale" }),
     ).toBeNull();
+    expect(
+      jobFailureMessage({ status: "ready_to_render", error_message: "Provider unavailable" }),
+    ).toContain("previous audio is still available");
   });
 
   it("generates more numbered content and confirms content and topic deletion", async () => {

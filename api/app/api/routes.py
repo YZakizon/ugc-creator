@@ -62,6 +62,8 @@ from app.schemas import (
     RenderProfileRead,
     RenderProfileSetupCreate,
     RenderProfileUpdate,
+    TopicBulkCreate,
+    TopicBulkRead,
     TopicCreate,
     TopicList,
     TopicRead,
@@ -510,6 +512,29 @@ def create_topic(
     return TopicRead.model_validate(topic_to_dict(topic))
 
 
+@router.post(
+    "/topics/bulk",
+    response_model=TopicBulkRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_topics(
+    payload: TopicBulkCreate,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> TopicBulkRead:
+    profile = config_repo.get_render_profile(payload.render_profile_id)
+    if profile is None or not profile.is_active:
+        raise HTTPException(status_code=422, detail="Active render profile not found")
+    if profile.voice_profile_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Render profile requires a connected voice profile",
+        )
+    topics = repo.create_topics(payload)
+    items = [TopicRead.model_validate(topic_to_dict(topic)) for topic in topics]
+    return TopicBulkRead(items=items, total=len(items))
+
+
 @router.get("/topics", response_model=TopicList)
 def list_topics(
     repo: BatchRepository = Depends(repository),
@@ -877,7 +902,19 @@ def queue_tts_generation(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if queued is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    generate_job_tts.delay(str(job_id))
+    try:
+        generate_job_tts.delay(str(job_id))
+    except Exception as exc:
+        repo.recover_job_tts_enqueue(job_id)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_unavailable",
+                "provider": "elevenlabs",
+                "message": "Speech could not be queued. Your current audio was kept.",
+                "retriable": True,
+            },
+        ) from exc
     return JobRead.model_validate(job_to_dict(queued))
 
 

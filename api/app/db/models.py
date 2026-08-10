@@ -28,6 +28,7 @@ class Batch(TimestampMixin, Base):
     default_render_profile_id: Mapped[UUID | None] = mapped_column(nullable=True)
     target_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
     auto_fit_duration: Mapped[bool] = mapped_column(default=True, nullable=False)
+    next_content_number: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
 
     jobs: Mapped[list["TopicJob"]] = relationship(
         back_populates="batch",

@@ -21,6 +21,9 @@ export function failedJobRetryKind(
 export function jobFailureMessage(
   job: Pick<Job, "status" | "error_message">,
 ): string | null {
+  if (job.status === "ready_to_render" && job.error_message?.trim()) {
+    return `The latest speech generation failed: ${job.error_message.trim()} Your previous audio is still available.`;
+  }
   if (job.status !== "failed") return null;
   return job.error_message?.trim() || "This job failed without a detailed error. Retry it or check the worker logs.";
 }

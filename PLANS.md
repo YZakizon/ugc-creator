@@ -732,8 +732,8 @@ Actions:
 
 ## Create Topic
 
-Topic input supports one topic. A Topic is the durable history container for
-multiple numbered Content versions.
+Topic input starts with one topic and can add more independent Topic fields. A
+Topic is the durable history container for multiple numbered Content versions.
 
 Controls:
 - default render profile
@@ -1272,6 +1272,7 @@ Turn the single-content pipeline into a Topic with repeatable numbered Content.
 
 ## Tasks
 - [x] Create Topic page.
+- [x] Create multiple independent Topics in one transaction.
 - [x] One durable Topic with stable Content numbering.
 - [x] Default render profile.
 - [x] Per-content render-profile override.
@@ -1781,8 +1782,10 @@ Append decisions here as implementation clarifies unknowns.
   presented as Topic in the V1 API and UI. The existing `TopicJob` is presented as
   one immutable-in-history Content version rather than introducing a parallel model.
 - A Topic starts with Content 1. Generate More Content creates a new row with the
-  next unique `content_number` and queues content generation without overwriting
-  earlier scripts, speech, or render attempts.
+  next unique `content_number` from a persisted high-water mark and queues content
+  generation without overwriting earlier scripts, speech, or render attempts.
+- New Content starts from Topic defaults; a one-version render, voice, or workflow
+  override is not silently promoted to later versions.
 - Speech and video may be generated repeatedly for one Content. Stored filenames
   use `{short-topic}_content{content-number}_{output-number}-audio.mp3` and the
   corresponding `-video.mp4` form.
@@ -1793,6 +1796,9 @@ Append decisions here as implementation clarifies unknowns.
 - Legacy `/batches` and `/jobs` routes remain available while new user-facing flows
   use `/topics` and `/contents`. Migration splits legacy multi-topic Batches into one
   Topic per existing job so unrelated ideas are not presented as Content versions.
+- Topic status is derived centrally from persisted Content states. During repeated
+  speech generation, the current audio remains active until its replacement is
+  saved; enqueue/provider failures leave it available for rendering.
 
 Format:
 

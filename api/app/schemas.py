@@ -64,6 +64,21 @@ class TopicCreate(BaseModel):
         return cleaned
 
 
+class TopicBulkCreate(BaseModel):
+    topics: list[str] = Field(min_length=2, max_length=100)
+    render_profile_id: UUID
+    target_duration_seconds: int = Field(default=30, ge=5, le=180)
+    auto_fit_duration: bool = True
+
+    @field_validator("topics")
+    @classmethod
+    def clean_topics(cls, value: list[str]) -> list[str]:
+        topics = [topic.strip() for topic in value if topic.strip()]
+        if len(topics) < 2:
+            raise ValueError("At least two topics are required")
+        return topics
+
+
 class MediaAssetRead(BaseModel):
     id: UUID
     job_id: UUID
@@ -160,6 +175,11 @@ class TopicList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class TopicBulkRead(BaseModel):
+    items: list[TopicRead]
+    total: int
 
 
 class DashboardSummary(BaseModel):

@@ -18,12 +18,14 @@ from app.repositories import (
     InMemoryConfigurationRepository,
     SqlAlchemyBatchRepository,
     SqlAlchemyConfigurationRepository,
+    topic_to_dict,
     utc_now,
 )
 from app.schemas import (
     BatchCreate,
     RenderProfileSetupCreate,
     RenderProfileUpdate,
+    TopicBulkCreate,
     VoiceProfileCreate,
     WorkflowTemplateCreate,
 )
@@ -111,6 +113,93 @@ async def test_topic_generates_incrementing_content_history(
         item["content_number"] for item in listed.json()["items"][0]["contents"]
     ] == [1, 2, 3]
     assert queued == [second.json()["id"], third.json()["id"]]
+
+
+@pytest.mark.asyncio
+async def test_bulk_topic_creation_keeps_topics_independent() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice-1"
+        )
+    )
+    profile = configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Shelf",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/v1/topics/bulk",
+            json={
+                "topics": ["Burnout is not laziness", "A reminder for overthinkers"],
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "auto_fit_duration": True,
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["total"] == 2
+    assert [item["content_count"] for item in response.json()["items"]] == [1, 1]
+    assert [
+        item["contents"][0]["content_number"] for item in response.json()["items"]
+    ] == [1, 1]
+
+
+def test_content_numbers_use_high_water_mark_and_topic_defaults() -> None:
+    batches = InMemoryBatchRepository()
+    default_profile_id = uuid4()
+    topic = batches.create_batch(
+        BatchCreate(
+            name="Topic",
+            topics=["A topic"],
+            default_render_profile_id=default_profile_id,
+            target_duration_seconds=45,
+        )
+    )
+    first = topic.jobs[0]
+    first.render_profile_id = uuid4()
+    first.voice_profile_id = uuid4()
+    first.workflow_template_id = uuid4()
+    second = batches.create_content(topic.id)
+    assert second is not None
+    second.status = "content_ready"
+    assert batches.delete_content(second.id)
+
+    third = batches.create_content(topic.id)
+
+    assert third is not None
+    assert third.content_number == 3
+    assert third.render_profile_id == default_profile_id
+    assert third.voice_profile_id is None
+    assert third.workflow_template_id is None
+    assert third.target_duration_seconds == 45
+
+
+def test_topic_status_is_derived_from_content_lifecycle() -> None:
+    batches = InMemoryBatchRepository()
+    topic = batches.create_batch(BatchCreate(name="Topic", topics=["A topic"]))
+    content = topic.jobs[0]
+    assert topic_to_dict(topic)["status"] == "draft"
+
+    content.status = "generating_content"
+    assert topic_to_dict(topic)["status"] == "processing"
+
+    content.status = "completed"
+    assert topic_to_dict(topic)["status"] == "completed"
+
+    content.status = "failed"
+    assert topic_to_dict(topic)["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -976,6 +1065,32 @@ def test_sqlalchemy_repository_returns_jobs_after_commit() -> None:
     )
 
     assert batch.jobs[0].topic == "A topic"
+
+
+def test_sqlalchemy_topics_are_transactional_and_keep_content_high_water_mark() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    repository = SqlAlchemyBatchRepository(sessionmaker(bind=engine))
+    profile_id = uuid4()
+    topics = repository.create_topics(
+        TopicBulkCreate(
+            topics=["First topic", "Second topic"],
+            render_profile_id=profile_id,
+            target_duration_seconds=45,
+        )
+    )
+
+    assert len(topics) == 2
+    assert [topic.jobs[0].content_number for topic in topics] == [1, 1]
+    second = repository.create_content(topics[0].id)
+    assert second is not None
+    assert repository.delete_content(second.id)
+    third = repository.create_content(topics[0].id)
+
+    assert third is not None
+    assert third.content_number == 3
+    assert third.render_profile_id == profile_id
+    assert third.target_duration_seconds == 45
 
 
 def test_sqlalchemy_profile_setup_reuses_character_and_voice() -> None:
