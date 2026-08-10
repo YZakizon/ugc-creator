@@ -88,6 +88,7 @@ describe("home page", () => {
       "Progress unavailable (polling)",
     );
     expect(renderProgressLabel({ status: "completed", progress: 100 })).toBe("100%");
+    expect(renderProgressLabel({ status: "rendering", progress: 47 })).toBe("47%");
   });
 
   it("shows every speech sentence on its own reading line", () => {
@@ -488,8 +489,8 @@ describe("home page", () => {
           render_node_id: "node-1",
           workflow_template_id: "workflow-1",
           provider: "comfyui",
-          status: "completed",
-          progress: 100,
+          status: "rendering",
+          progress: 47,
           external_job_id: "prompt-1",
           error_message: null,
           output_filename: "finished.mp4",
@@ -593,6 +594,8 @@ describe("home page", () => {
     expect(within(selectors).getByRole("combobox", { name: "Render profile" })).toBeInTheDocument();
     expect(within(selectors).getByRole("combobox", { name: "Workflow" })).toBeInTheDocument();
     expect(jobCard.getByRole("button", { name: "Generate New Video" })).toHaveClass("job-generate-video-action");
+    expect(jobCard.getByRole("progressbar", { name: "ComfyUI rendering progress" })).toHaveAttribute("value", "47");
+    expect(jobCard.getAllByText("47%").length).toBeGreaterThan(0);
     expect(jobCard.queryByText("earlier-video.mp4")).not.toBeInTheDocument();
     expect(jobCard.queryByText("Deleted")).not.toBeInTheDocument();
     fireEvent.click(jobCard.getByRole("button", { name: "Show rendered ComfyUI parameters" }));

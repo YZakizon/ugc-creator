@@ -7,6 +7,8 @@ from app.providers.render.comfyui import (
     ComfyUIProviderError,
     ComfyUIRenderer,
     ComfyUISubmissionOutcomeUnknown,
+    _progress_from_message,
+    _websocket_url,
 )
 from app.providers.render.contracts import RenderRequest
 
@@ -103,6 +105,43 @@ async def test_comfyui_history_polling_reports_indeterminate_progress() -> None:
 
     assert status.state == "running"
     assert status.progress is None
+
+
+def test_comfyui_builds_prompt_progress_websocket_url() -> None:
+    assert _websocket_url("http://comfyui.test:8188", "client one") == (
+        "ws://comfyui.test:8188/ws?clientId=client+one"
+    )
+    assert _websocket_url("https://render.test/comfy", "client-2") == (
+        "wss://render.test/comfy/ws?clientId=client-2"
+    )
+
+
+def test_comfyui_parses_prompt_scoped_progress_percentage() -> None:
+    assert (
+        _progress_from_message(
+            json.dumps(
+                {
+                    "type": "progress",
+                    "data": {"value": 17, "max": 20, "prompt_id": "prompt-1"},
+                }
+            ),
+            "prompt-1",
+        )
+        == 85
+    )
+    assert (
+        _progress_from_message(
+            json.dumps(
+                {
+                    "type": "progress",
+                    "data": {"value": 17, "max": 20, "prompt_id": "another"},
+                }
+            ),
+            "prompt-1",
+        )
+        is None
+    )
+    assert _progress_from_message("not-json", "prompt-1") is None
 
 
 @pytest.mark.asyncio

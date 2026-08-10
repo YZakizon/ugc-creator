@@ -237,10 +237,16 @@ async def _monitor(attempt_id: UUID) -> str:
     renderer = ComfyUIRenderer(base_url=node.base_url, client_id=attempt.client_id)
     status = await renderer.get_status(attempt.external_job_id)
     if status.state in {"queued", "running"}:
+        live_progress = await renderer.get_live_progress(attempt.external_job_id)
         progress = (
             max(attempt.progress, 1)
-            if status.progress is None
-            else max(attempt.progress, 1, int(status.progress))
+            if status.progress is None and live_progress is None
+            else max(
+                attempt.progress,
+                1,
+                int(status.progress or 0),
+                int(live_progress or 0),
+            )
         )
         repo.update_progress(
             attempt_id,

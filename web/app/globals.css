@@ -477,6 +477,8 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .node-health.healthy { color: #237952; background: #e7f7ef; }
 .node-health.unavailable { color: #a94343; background: #fff0f0; }
 .job-render-progress { color: #6b58cf !important; font-weight: 700; }
+.comfy-progress { display: flex; align-items: center; gap: 8px; color: #6b58cf; font-size: 12px; font-weight: 800; }
+.comfy-progress progress { width: min(180px, 40vw); height: 7px; accent-color: #6b58cf; }
 .render-library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 .render-library-card { display: grid; gap: 9px; padding: 14px; border: 1px solid #e7e5ef; border-radius: 11px; background: #fff; }
 .render-library-card small, .render-library-card span { color: #92939f; font-size: 11px; overflow-wrap: anywhere; }

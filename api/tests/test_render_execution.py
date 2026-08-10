@@ -25,11 +25,12 @@ from app.providers.render.comfyui import (
     ComfyUIProviderError,
     ComfyUISubmissionOutcomeUnknown,
 )
-from app.providers.render.contracts import RenderOutput
+from app.providers.render.contracts import RenderOutput, RenderStatus
 from app.render_repository import RenderExecutionRepository
 from app.schemas import RenderNodeCreate
 from app.services.media_service import MediaProcessingError
 from app.workers.render_tasks import (
+    _monitor,
     _prepare_and_submit,
     apply_default_workflow_media,
     render_has_timed_out,
@@ -37,6 +38,59 @@ from app.workers.render_tasks import (
     select_video_output,
     submit_render,
 )
+
+
+@pytest.mark.asyncio
+async def test_monitor_persists_live_comfyui_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    attempt = SimpleNamespace(
+        id=attempt_id,
+        status="rendering",
+        progress=12,
+        external_job_id="prompt-live",
+        submitted_at=datetime.now(UTC),
+        client_id="attempt-client",
+    )
+    updates: list[tuple[object, str, int]] = []
+    scheduled: list[tuple[list[str], int]] = []
+
+    class FakeRepository:
+        def execution_context(self, _attempt_id: object) -> tuple[object, ...]:
+            return (
+                attempt,
+                SimpleNamespace(),
+                SimpleNamespace(),
+                SimpleNamespace(base_url="http://comfyui"),
+                SimpleNamespace(),
+            )
+
+        def update_progress(
+            self, stored_attempt_id: object, status: str, progress: int
+        ) -> None:
+            updates.append((stored_attempt_id, status, progress))
+
+    class FakeRenderer:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        async def get_status(self, external_job_id: str) -> RenderStatus:
+            return RenderStatus(external_job_id=external_job_id, state="running")
+
+        async def get_live_progress(self, _external_job_id: str) -> float:
+            return 47.8
+
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+    monkeypatch.setattr("app.workers.render_tasks.ComfyUIRenderer", FakeRenderer)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.monitor_render.apply_async",
+        lambda *, args, countdown: scheduled.append((args, countdown)),
+    )
+
+    assert await _monitor(attempt_id) == "rendering"
+    assert updates == [(attempt_id, "rendering", 47)]
+    assert scheduled == [([str(attempt_id)], 5)]
 
 
 def test_unknown_submission_outcome_stays_reconcilable(

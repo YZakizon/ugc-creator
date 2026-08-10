@@ -1744,8 +1744,9 @@ Append decisions here as implementation clarifies unknowns.
 - Workflow preparation validates the complete binding set, deep-copies the
   template, applies typed values, and rejects unknown placeholders before any
   renderer call.
-- The ComfyUI adapter owns `/prompt`, `/history`, `/system_stats`, upload, and
-  interrupt transport details behind the normalized `VideoRenderer` contract.
+- The ComfyUI adapter owns `/prompt`, `/history`, `/system_stats`, `/ws` progress,
+  upload, and interrupt transport details behind the normalized `VideoRenderer`
+  contract. Workers persist prompt-scoped percentages for normal API polling.
 - The ComfyUI base URL is server-side configuration and defaults to the host
   gateway for local Docker development; LTX and WAN remain workflow/profile
   choices rather than renderer classes.
@@ -1997,7 +1998,8 @@ Resolve only when the related milestone needs the answer.
   and RenderAttempt outputs. Revisit a ContentItem/RenderJob split only if future
   comparison requirements cannot be represented by existing attempt history.
 - [ ] How imported ComfyUI workflow files/media references are normalized across remote GPU nodes.
-- [ ] Whether ComfyUI WebSocket progress is proxied live or normalized by worker/event publication only.
+- [x] ComfyUI WebSocket progress is normalized and persisted by workers; browser
+  clients read the authoritative render attempt through normal API polling.
 - [ ] Authentication/encryption strategy for user-supplied provider keys.
 - [ ] Current Kling API capabilities/limits when Milestone 12 starts.
 
