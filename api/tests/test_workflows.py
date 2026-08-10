@@ -72,6 +72,32 @@ def test_prepare_workflow_rejects_unknown_placeholder() -> None:
         prepare_workflow(invalid_workflow, binding_fixture(), {})
 
 
+def test_prepare_workflow_evaluates_audio_duration_offset_as_number() -> None:
+    workflow = {
+        "1": {
+            "class_type": "PrimitiveFloat",
+            "inputs": {"value": "{{AUDIO_DURATION + 1}}"},
+        }
+    }
+
+    prepared = prepare_workflow(workflow, [], {"audio_duration": 12.25})
+
+    assert prepared["1"]["inputs"]["value"] == 13.25  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["{{AUDIO_DURATION * 2}}", "{{AUDIO_DURATION + __import__}}"],
+)
+def test_prepare_workflow_rejects_unsupported_audio_duration_expression(
+    expression: str,
+) -> None:
+    workflow = {"1": {"class_type": "PrimitiveFloat", "inputs": {"value": expression}}}
+
+    with pytest.raises(WorkflowValidationError, match="Unknown workflow placeholder"):
+        prepare_workflow(workflow, [], {"audio_duration": 12.25})
+
+
 def test_prepare_workflow_accepts_custom_provider_semantic_key() -> None:
     workflow = {"1": {"class_type": "Camera", "inputs": {"strength": 0.5}}}
     prepared = prepare_workflow(

@@ -1,8 +1,28 @@
 import { expect, test } from "@playwright/test";
 
+function wavBuffer(durationSeconds = 1, sampleRate = 8_000) {
+  const dataSize = durationSeconds * sampleRate * 2;
+  const buffer = Buffer.alloc(44 + dataSize);
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVEfmt ", 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  return buffer;
+}
+
 const workflow = JSON.stringify({
   "1": { class_type: "LoadImage", inputs: { image: "source.png" } },
   "2": { class_type: "LoadAudio", inputs: { audio: "voice.wav" } },
+  "3": { class_type: "PrimitiveFloat", _meta: { title: "Duration" }, inputs: { value: 30 } },
+  "4": { class_type: "PrimitiveStringMultiline", _meta: { title: "LTX 2.3 Prompt" }, inputs: { value: "A creator speaks." } },
 });
 
 test.describe("workspace customer journeys", () => {
@@ -113,6 +133,26 @@ test.describe("workspace customer journeys", () => {
     await expect(page.getByText("Current file: source.png")).toBeVisible();
     await page.getByLabel("Default audio").setInputFiles({ name: "voice.wav", mimeType: "audio/wav", buffer: Buffer.from("fake-audio") });
     await expect(page.getByText("Current file: voice.wav")).toBeVisible();
+    await page.getByRole("button", { name: /Image source/i }).click();
+    await expect(page.getByRole("button", { name: /SOURCE_IMAGE/ })).toBeVisible();
+    await page.getByRole("button", { name: /Audio source/i }).click();
+    await expect(page.getByRole("button", { name: /\{\{AUDIO\}\}/ })).toBeVisible();
+    await page.getByRole("button", { name: /Duration.*30/i }).click();
+    await page.getByRole("button", { name: /AUDIO_DURATION/ }).click();
+    await page.locator(".workflow-ltx-control")
+      .filter({ hasText: "Duration" })
+      .locator("input")
+      .fill("{{AUDIO_DURATION + 1}}");
+    await expect(page.getByLabel("ComfyUI API workflow JSON")).toHaveValue(/\{\{AUDIO_DURATION \+ 1\}\}/);
+
+    const imageUpload = page.getByLabel("Default source image").locator("..");
+    const audioUpload = page.getByLabel("Default audio").locator("..");
+    await imageUpload.getByRole("button", { name: "Remove", exact: true }).click();
+    await audioUpload.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect(imageUpload).toContainText("No default image saved");
+    await expect(audioUpload).toContainText("No default audio saved");
+    await page.getByLabel("Default source image").setInputFiles({ name: "source.png", mimeType: "image/png", buffer: Buffer.from("fake-image") });
+    await page.getByLabel("Default audio").setInputFiles({ name: "voice.wav", mimeType: "audio/wav", buffer: Buffer.from("fake-audio") });
     const workflowResponse = page.waitForResponse((response) => response.url().includes("workflow-templates") && response.request().method() === "POST");
     await page.getByRole("button", { name: "Import workflow" }).click();
     expect((await workflowResponse).status()).toBe(201);
@@ -194,12 +234,12 @@ test.describe("workspace customer journeys", () => {
     await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toHaveValue(workflowTemplateId);
     await expect(firstJob.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", `/workflows#workflow-${workflowTemplateId}`);
-    await expect(firstJob.locator(".job-render-audio").getByText(/speech-.*\.mp3/)).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText(/speech-.*\.wav/)).toBeVisible();
     await expect(firstJob.getByRole("link", { name: "Download render audio" })).toHaveCount(0);
     const audioUploadResponse = page.waitForResponse((response) => response.url().includes(`/api/v1/jobs/`) && response.url().endsWith("/audio") && response.request().method() === "POST");
-    await firstJob.getByLabel("Upload different audio").setInputFiles({ name: "replacement.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("replacement audio") });
+    await firstJob.getByLabel("Upload different audio").setInputFiles({ name: "replacement.wav", mimeType: "audio/wav", buffer: wavBuffer() });
     expect((await audioUploadResponse).status()).toBe(200);
-    await expect(firstJob.locator(".job-render-audio").getByText("replacement.mp3")).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText("replacement.wav")).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,

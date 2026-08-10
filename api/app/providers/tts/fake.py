@@ -1,12 +1,23 @@
+import io
+import wave
+
 from app.providers.tts.contracts import TTSRequest, TTSResult, TTSUsage
 
 
 class FakeTTSProvider:
     async def synthesize(self, request: TTSRequest) -> TTSResult:
+        sample_rate = 8_000
+        duration_seconds = max(1, min(10, len(request.text.split()) // 3))
+        output = io.BytesIO()
+        with wave.open(output, "wb") as audio:
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(sample_rate)
+            audio.writeframes(b"\x00\x00" * sample_rate * duration_seconds)
         return TTSResult(
-            audio=b"ID3" + request.text.encode("utf-8"),
-            content_type="audio/mpeg",
-            extension="mp3",
+            audio=output.getvalue(),
+            content_type="audio/wav",
+            extension="wav",
             provider_request_id="fake-tts-request",
             usage=TTSUsage(
                 generated_units=len(request.text),
