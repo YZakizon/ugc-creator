@@ -264,6 +264,17 @@ export function createBatch(input: CreateBatchInput): Promise<Batch> {
   });
 }
 
+export function getBatches(): Promise<{ items: Batch[]; total: number; limit: number; offset: number }> {
+  return request<{ items: Batch[]; total: number; limit: number; offset: number }>("/api/v1/batches?limit=100");
+}
+
+export function updateJobRenderProfile(jobId: string, renderProfileId: string): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/render-profile`, {
+    method: "PATCH",
+    body: JSON.stringify({ render_profile_id: renderProfileId }),
+  });
+}
+
 export function generateJobContent(jobId: string): Promise<Job> {
   return request<Job>(`/api/v1/jobs/${jobId}/generate-content`, {
     method: "POST",

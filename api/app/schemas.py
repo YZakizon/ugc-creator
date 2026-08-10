@@ -85,6 +85,10 @@ class JobRead(BaseModel):
     updated_at: datetime
 
 
+class JobRenderProfileUpdate(BaseModel):
+    render_profile_id: UUID
+
+
 class BatchRead(BaseModel):
     id: UUID
     name: str

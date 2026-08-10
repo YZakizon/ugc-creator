@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
-import { generateJobContent, generateJobSpeech, getDashboardSummary, getRenderAttempts, getRenderNodes, queueJobRender } from "@/lib/api";
+import { generateJobContent, generateJobSpeech, getBatches, getDashboardSummary, getRenderAttempts, getRenderNodes, getRenderProfiles, queueJobRender, updateJobRenderProfile } from "@/lib/api";
 import type { Job, RenderAttempt } from "@/lib/api";
 
 export function failedJobRetryKind(
@@ -93,8 +93,28 @@ function JobResult({ title, value }: { title: string; value: Record<string, unkn
   return <section className="job-result-block"><h4>{title}</h4><pre>{JSON.stringify(value, null, 2)}</pre></section>;
 }
 
+function CopyId({ label, value, copied, onCopy }: { label: string; value: string; copied: string | null; onCopy: (label: string, value: string) => void }) {
+  return <div><dt>{label}</dt><dd><code>{value}</code><button className="job-copy-id" type="button" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={() => onCopy(label, value)}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" /></svg></button>{copied === label && <span role="status">Copied</span>}</dd></div>;
+}
+
+function JobIds({ job, attempt }: { job: Job; attempt?: RenderAttempt }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (label: string, value: string) => {
+    void navigator.clipboard?.writeText(value);
+    setCopied(label);
+    window.setTimeout(() => setCopied(null), 2000);
+  };
+  return <details className="job-id-disclosure"><summary aria-label="Reveal technical IDs" title="Reveal technical IDs"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6m0-10h.01" /></svg></summary><div><strong>Technical IDs</strong><dl><CopyId label="Job ID" value={job.id} copied={copied} onCopy={copy} /><CopyId label="Batch ID" value={job.batch_id} copied={copied} onCopy={copy} />{job.render_profile_id && <CopyId label="Render profile ID" value={job.render_profile_id} copied={copied} onCopy={copy} />}{attempt && <CopyId label="Render attempt ID" value={attempt.id} copied={copied} onCopy={copy} />}{attempt?.external_job_id && <CopyId label="ComfyUI prompt ID" value={attempt.external_job_id} copied={copied} onCopy={copy} />}</dl></div></details>;
+}
+
+type ContentTab = "script" | "instagram" | "tiktok";
+type GenerationTab = "speech" | "render";
+
 export function RecentJobs({ contentGenerationReady, speechGenerationReady, detailed = false }: { contentGenerationReady: boolean; speechGenerationReady: boolean; detailed?: boolean }) {
   const queryClient = useQueryClient();
+  const [contentTabs, setContentTabs] = useState<Record<string, ContentTab>>({});
+  const [generationTabs, setGenerationTabs] = useState<Record<string, GenerationTab>>({});
+  const [profileSelections, setProfileSelections] = useState<Record<string, string>>({});
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard-summary"],
     queryFn: getDashboardSummary,
@@ -102,6 +122,8 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
   });
   const nodes = useQuery({ queryKey: ["render-nodes"], queryFn: getRenderNodes });
   const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
+  const batches = useQuery({ queryKey: ["batches"], queryFn: getBatches, enabled: detailed });
+  const profiles = useQuery({ queryKey: ["render-profiles"], queryFn: getRenderProfiles, enabled: detailed });
   const contentMutation = useMutation({
     mutationFn: generateJobContent,
     onSuccess: () => {
@@ -119,6 +141,13 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["render-attempts"] });
+    },
+  });
+  const profileMutation = useMutation({
+    mutationFn: ({ jobId, profileId }: { jobId: string; profileId: string }) => updateJobRenderProfile(jobId, profileId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["batches"] });
     },
   });
   const jobs = data?.recent_jobs ?? [];
@@ -149,7 +178,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
         const failedSpeech = failedJobRetryKind(job, attempt) === "tts";
         const failureMessage = jobFailureMessage(job);
         const canRender = job.status === "tts_ready" || job.status === "ready_to_render" || failedRender;
-        const actions = <>
+        const contentAction = <>
           {(job.status === "draft" || failedContent) && (
             <button
               className="job-action"
@@ -161,6 +190,8 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
               {contentMutation.isPending && contentMutation.variables === job.id ? "Queuing…" : contentGenerationReady ? "Generate content" : "OpenAI setup required"}
             </button>
           )}
+        </>;
+        const speechAction = <>
           {(job.status === "content_ready" || failedSpeech) && (
             <button
               className="job-action"
@@ -172,52 +203,50 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
               {speechMutation.isPending && speechMutation.variables === job.id ? "Queuing…" : speechGenerationReady ? failedSpeech ? "Retry speech" : "Generate speech" : "ElevenLabs setup required"}
             </button>
           )}
+        </>;
+        const renderAction = <>
           {canRender && (
             <button className="job-action" type="button" disabled={renderMutation.isPending || !nodes.data?.items.some((node) => node.is_active)} onClick={() => { const node = nodes.data?.items.find((item) => item.health_status === "healthy") ?? nodes.data?.items.find((item) => item.is_active); if (node) renderMutation.mutate({ jobId: job.id, nodeId: node.id }); }}>{renderMutation.isPending && renderMutation.variables?.jobId === job.id ? "Queuing render…" : failedRender ? "Retry render" : "Render with ComfyUI"}</button>
           )}
         </>;
+        const actions = <>{contentAction}{speechAction}{renderAction}</>;
 
         if (detailed) {
           const hasGeneratedContent = Boolean(job.speech_script || job.hook || job.instagram_metadata || job.tiktok_metadata);
+          const contentTab = contentTabs[job.id] ?? "script";
+          const generationTab = generationTabs[job.id] ?? "speech";
+          const batchName = batches.data?.items?.find((batch) => batch.id === job.batch_id)?.name ?? (batches.isLoading ? "Loading batch…" : "Batch unavailable");
+          const profile = profiles.data?.items?.find((item) => item.id === job.render_profile_id);
+          const profileName = profile?.name ?? (profiles.isLoading ? "Loading profile…" : job.render_profile_id ? "Unavailable profile" : "Not assigned");
+          const selectedProfileId = profileSelections[job.id] ?? job.render_profile_id ?? "";
+          const profileChanged = selectedProfileId !== (job.render_profile_id ?? "");
+          const profileLocked = ["queued", "submitting_render", "rendering", "downloading_output", "completed"].includes(job.status);
           return <details className="job-card" key={job.id}>
             <summary className="job-card-summary">
               <span className="job-status-dot" />
-              <span className="job-card-title"><strong>{job.topic}</strong><small>{job.status.replaceAll("_", " ")} · Updated <HumanDate value={job.updated_at} /></small></span>
+              <span className="job-card-title"><strong>{job.topic}</strong><small><span>Batch: {batchName}</span><span>Render: {profileName}</span><span>{job.status.replaceAll("_", " ")} · Updated <HumanDate value={job.updated_at} /></span></small></span>
               <b>{job.target_duration_seconds}s</b>
               {attempt && <small className="job-render-progress">{attempt.status.replaceAll("_", " ")} · {renderProgressLabel(attempt)}</small>}
               <span className="job-chevron" aria-hidden="true">⌄</span>
             </summary>
             <div className="job-card-details">
-              <dl className="job-detail-grid">
-                <div><dt>Job ID</dt><dd>{job.id}</dd></div>
-                <div><dt>Batch ID</dt><dd>{job.batch_id}</dd></div>
-                <div><dt>Render profile</dt><dd>{job.render_profile_id ?? "Not assigned"}</dd></div>
-                <div><dt>Content model</dt><dd>{job.llm_provider && job.llm_model ? `${job.llm_provider} · ${job.llm_model}` : "Not generated"}</dd></div>
-              </dl>
+              <div className="job-context"><div><span>Batch</span><strong>{batchName}</strong></div><div><span>Render profile</span><strong>{profileName}</strong></div><div><span>Content model</span><strong>{job.llm_provider && job.llm_model ? `${job.llm_provider} · ${job.llm_model}` : "Not generated"}</strong></div><JobIds job={job} attempt={attempt} /></div>
               {failureMessage && <p className="job-error" role="alert">{failureMessage}</p>}
-              <div className="job-detail-actions">{actions}</div>
-              <section className="job-results" aria-label={`Results for ${job.topic}`}>
-                <h3>Content results</h3>
+              <section className="job-results job-content-section" aria-label={`Content results for ${job.topic}`}>
+                <div className="job-tabs" role="tablist" aria-label="Generated content">
+                  <button type="button" role="tab" aria-selected={contentTab === "script"} className={contentTab === "script" ? "active" : ""} onClick={() => setContentTabs((current) => ({ ...current, [job.id]: "script" }))}>Hook + Speech Script</button>
+                  <button type="button" role="tab" aria-selected={contentTab === "instagram"} className={contentTab === "instagram" ? "active" : ""} onClick={() => setContentTabs((current) => ({ ...current, [job.id]: "instagram" }))}>Instagram</button>
+                  <button type="button" role="tab" aria-selected={contentTab === "tiktok"} className={contentTab === "tiktok" ? "active" : ""} onClick={() => setContentTabs((current) => ({ ...current, [job.id]: "tiktok" }))}>TikTok</button>
+                </div>
                 {!hasGeneratedContent && <p className="field-hint">No generated content yet.</p>}
-                {job.hook && <div className="job-result-block"><h4>Hook</h4><p>{job.hook}</p></div>}
-                {job.speech_script && <div className="job-result-block"><h4>Speech script</h4><div className="job-script">{speechScriptLines(job.speech_script).map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div></div>}
-                <JobResult title="Instagram" value={job.instagram_metadata} />
-                <JobResult title="TikTok" value={job.tiktok_metadata} />
-                {job.audio_asset && <div className="job-result-block"><h4>Generated speech</h4><audio controls preload="none" src={job.audio_asset.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={job.audio_asset.download_url} download={job.audio_asset.filename} aria-label="Download generated speech" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></div>}
+                <div role="tabpanel" hidden={contentTab !== "script"}>{job.hook && <div className="job-result-block"><h4>Hook</h4><p>{job.hook}</p></div>}{job.speech_script && <div className="job-result-block"><h4>Speech script</h4><div className="job-script">{speechScriptLines(job.speech_script).map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}</div></div>}{contentAction}</div>
+                <div role="tabpanel" hidden={contentTab !== "instagram"}><JobResult title="Instagram" value={job.instagram_metadata} />{!job.instagram_metadata && <p className="field-hint">Instagram content has not been generated.</p>}</div>
+                <div role="tabpanel" hidden={contentTab !== "tiktok"}><JobResult title="TikTok" value={job.tiktok_metadata} />{!job.tiktok_metadata && <p className="field-hint">TikTok content has not been generated.</p>}</div>
               </section>
-              <section className="job-results" aria-label={`Render results for ${job.topic}`}>
-                <h3>Render results</h3>
-                {!attempt && <p className="field-hint">No render attempt yet.</p>}
-                {attempt && <>
-                  <dl className="job-detail-grid">
-                    <div><dt>Attempt ID</dt><dd>{attempt.id}</dd></div>
-                    <div><dt>Provider</dt><dd>{attempt.provider}</dd></div>
-                    <div><dt>Status</dt><dd>{attempt.status.replaceAll("_", " ")} · {renderProgressLabel(attempt)}</dd></div>
-                    <div><dt>Provider job ID</dt><dd>{attempt.external_job_id ?? "Not submitted"}</dd></div>
-                  </dl>
-                  {attempt.error_message && <p className="job-error" role="alert">{attempt.error_message}</p>}
-                  {attempt.assets.length > 0 ? <div className="job-output-list">{attempt.assets.map((asset) => <a className="button button-secondary" href={asset.download_url} download={asset.filename} key={asset.id}>Download {asset.filename}</a>)}</div> : <p className="field-hint">No output files yet.</p>}
-                </>}
+              <section className="job-results job-generation-section" aria-label={`Generation steps for ${job.topic}`}>
+                <div className="job-tabs generation-tabs" role="tablist" aria-label="Generation steps"><button type="button" role="tab" aria-selected={generationTab === "speech"} className={generationTab === "speech" ? "active" : ""} onClick={() => setGenerationTabs((current) => ({ ...current, [job.id]: "speech" }))}>Generate speech</button><button type="button" role="tab" aria-selected={generationTab === "render"} className={generationTab === "render" ? "active" : ""} onClick={() => setGenerationTabs((current) => ({ ...current, [job.id]: "render" }))}>Render ComfyUI</button></div>
+                <div className="job-generation-panel" role="tabpanel" hidden={generationTab !== "speech"}><p className="field-hint">Create ElevenLabs speech from the generated script.</p>{speechAction}{job.audio_asset && <div className="job-audio-result"><audio controls preload="none" src={job.audio_asset.download_url}>Your browser does not support audio playback.</audio><a className="voice-preview-download" href={job.audio_asset.download_url} download={job.audio_asset.filename} aria-label="Download generated speech" title="Download audio"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a></div>}</div>
+                <div className="job-generation-panel" role="tabpanel" hidden={generationTab !== "render"}><label className="job-profile-select"><span>Render profile</span><select value={selectedProfileId} disabled={profileLocked || profiles.isLoading || profileMutation.isPending} onChange={(event) => setProfileSelections((current) => ({ ...current, [job.id]: event.target.value }))}><option value="" disabled>Select a render profile</option>{(profiles.data?.items ?? []).filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{profileChanged && <button className="job-action" type="button" disabled={!selectedProfileId || profileMutation.isPending} onClick={() => profileMutation.mutate({ jobId: job.id, profileId: selectedProfileId })}>{profileMutation.isPending ? "Saving…" : "Save render profile"}</button>}{profileLocked && <p className="field-hint">The render profile is locked while this job is active or completed.</p>}{renderAction}{!attempt && <p className="field-hint">No render attempt yet.</p>}{attempt && <div className="job-render-status"><strong>{attempt.provider} · {attempt.status.replaceAll("_", " ")}</strong><span>{renderProgressLabel(attempt)}</span>{attempt.error_message && <p className="job-error" role="alert">{attempt.error_message}</p>}{attempt.assets.length > 0 ? <div className="job-output-list">{attempt.assets.map((asset) => <a className="button button-secondary" href={asset.download_url} download={asset.filename} key={asset.id}>Download {asset.filename}</a>)}</div> : <p className="field-hint">No output files yet.</p>}</div>}</div>
               </section>
             </div>
           </details>;
@@ -240,6 +269,7 @@ export function RecentJobs({ contentGenerationReady, speechGenerationReady, deta
       {contentMutation.isError && <p className="form-error" role="alert">{contentMutation.error.message}</p>}
       {speechMutation.isError && <p className="form-error" role="alert">{speechMutation.error.message}</p>}
       {renderMutation.isError && <p className="form-error" role="alert">{renderMutation.error.message}</p>}
+      {profileMutation.isError && <p className="form-error" role="alert">{profileMutation.error.message}</p>}
       {!nodes.isLoading && nodes.data?.items.length === 0 && <p className="field-hint">Add a ComfyUI render node in Settings before rendering.</p>}
     </div>
   );
