@@ -1,5 +1,6 @@
 import asyncio
 import os
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import PurePath
 from uuid import UUID
@@ -11,6 +12,7 @@ from app.providers.render.comfyui import (
     ComfyUIRenderer,
     ComfyUISubmissionOutcomeUnknown,
 )
+from app.providers.render.comfyui_controls import apply_explicit_media_loader_overrides
 from app.providers.render.contracts import RenderOutput, RenderRequest
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
@@ -45,6 +47,21 @@ def repository() -> RenderExecutionRepository:
 def render_input_filename(filename: str, attempt_id: UUID | str) -> str:
     """Give each render fresh ComfyUI input names to bypass stale node caches."""
     return f"{attempt_id}-{PurePath(filename).name}"
+
+
+def newest_media_asset(assets: Iterable[object], kind: str) -> object | None:
+    matching = [asset for asset in assets if getattr(asset, "kind", None) == kind]
+    if not matching:
+        return None
+    return sorted(
+        matching,
+        key=lambda asset: (
+            getattr(asset, "created_at", None) or datetime.min.replace(tzinfo=UTC),
+            getattr(asset, "updated_at", None) or datetime.min.replace(tzinfo=UTC),
+            str(getattr(asset, "id", "")),
+        ),
+        reverse=True,
+    )[0]
 
 
 async def apply_default_workflow_media(
@@ -153,11 +170,18 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
             "character_name": profile.character.name,
         }
     )
-    audio_asset = next(
-        (asset for asset in job.media_assets if asset.kind == "audio"), None
-    )
+    values.update(job.render_overrides or {})
+    audio_asset = newest_media_asset(job.media_assets, "audio")
+    source_image_asset = newest_media_asset(job.media_assets, "source_image")
+    storage = LocalStorageProvider()
+    if source_image_asset is not None:
+        image_content = storage.get(source_image_asset.object_key)
+        values["source_image"] = await renderer.upload(
+            render_input_filename(source_image_asset.filename, attempt_id),
+            image_content,
+            "image",
+        )
     if audio_asset is not None:
-        storage = LocalStorageProvider()
         audio_content = storage.get(audio_asset.object_key)
         if needs_audio_duration:
             values["audio_duration"] = probe_audio_duration(
@@ -179,6 +203,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     workflow = prepare_workflow(
         attempt.workflow_snapshot, attempt.binding_snapshot, values
     )
+    apply_explicit_media_loader_overrides(workflow, values)
     repo.save_prepared(attempt_id, workflow, values)
     if not repo.mark_submission_started(attempt_id):
         submit_render.apply_async(args=[str(attempt_id)], countdown=1)

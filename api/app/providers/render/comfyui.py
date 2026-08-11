@@ -77,7 +77,17 @@ class ComfyUIRenderer(VideoRenderer):
         payload = _json_object(response)
         history = payload.get(external_job_id)
         if not isinstance(history, dict):
-            return RenderStatus(external_job_id=external_job_id, state="queued")
+            queue = _json_object(await self._request("GET", "/queue"))
+            if _prompt_id_in_queue(queue, external_job_id):
+                return RenderStatus(external_job_id=external_job_id, state="queued")
+            return RenderStatus(
+                external_job_id=external_job_id,
+                state="failed",
+                message=(
+                    "ComfyUI no longer has this prompt in history or queue. "
+                    "It may have been lost after a ComfyUI or machine restart."
+                ),
+            )
 
         status = history.get("status")
         if isinstance(status, dict):
@@ -319,6 +329,17 @@ def _find_client_prompt_in_queue(
             if prompt_id is not None:
                 return prompt_id
     return None
+
+
+def _prompt_id_in_queue(payload: Mapping[str, object], prompt_id: str) -> bool:
+    for queue_name in ("queue_running", "queue_pending"):
+        entries = payload.get(queue_name)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, list) and len(entry) >= 2 and entry[1] == prompt_id:
+                return True
+    return False
 
 
 def _find_client_prompt_in_history(

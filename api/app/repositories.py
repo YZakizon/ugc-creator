@@ -122,6 +122,7 @@ class InMemoryBatchRepository:
             target_duration_seconds=payload.target_duration_seconds,
             auto_fit_duration=payload.auto_fit_duration,
             next_content_number=len(payload.topics) + 1,
+            creation_mode="topic",
             created_at=now,
             updated_at=now,
         )
@@ -164,7 +165,143 @@ class InMemoryBatchRepository:
         return batches[offset : offset + limit], len(batches)
 
     def list_topics(self, limit: int, offset: int) -> tuple[list[Batch], int]:
-        return self.list_batches(limit, offset)
+        topics = [
+            batch
+            for batch in sorted(
+                self.batches.values(), key=lambda item: item.created_at, reverse=True
+            )
+            if getattr(batch, "creation_mode", "topic") == "topic"
+        ]
+        return topics[offset : offset + limit], len(topics)
+
+    def list_on_demand_videos(self, limit: int, offset: int) -> tuple[list[Batch], int]:
+        videos = [
+            batch
+            for batch in sorted(
+                self.batches.values(), key=lambda item: item.updated_at, reverse=True
+            )
+            if getattr(batch, "creation_mode", "topic") == "created_video"
+        ]
+        return videos[offset : offset + limit], len(videos)
+
+    def create_on_demand_video(
+        self,
+        *,
+        title: str,
+        render_profile_id: UUID,
+        voice_profile_id: UUID | None,
+        workflow_template_id: UUID | None,
+        target_duration_seconds: int,
+        speech_script: str | None,
+        render_overrides: dict[str, object],
+    ) -> Batch:
+        now = utc_now()
+        batch = Batch(
+            id=uuid4(),
+            name=title,
+            status=BatchStatus.DRAFT.value,
+            default_render_profile_id=render_profile_id,
+            target_duration_seconds=target_duration_seconds,
+            auto_fit_duration=False,
+            next_content_number=2,
+            creation_mode="created_video",
+            created_at=now,
+            updated_at=now,
+        )
+        job = TopicJob(
+            id=uuid4(),
+            batch_id=batch.id,
+            topic=title,
+            content_number=1,
+            status=(
+                JobStatus.CONTENT_READY.value
+                if speech_script
+                else JobStatus.DRAFT.value
+            ),
+            render_profile_id=render_profile_id,
+            voice_profile_id=voice_profile_id,
+            workflow_template_id=workflow_template_id,
+            target_duration_seconds=target_duration_seconds,
+            speech_script=speech_script,
+            render_overrides=render_overrides,
+            created_at=now,
+            updated_at=now,
+        )
+        batch.jobs = [job]
+        self.batches[batch.id] = batch
+        self.jobs[job.id] = job
+        return batch
+
+    def update_on_demand_video(
+        self,
+        topic_id: UUID,
+        *,
+        title: str,
+        render_profile_id: UUID,
+        voice_profile_id: UUID | None,
+        workflow_template_id: UUID | None,
+        target_duration_seconds: int,
+        speech_script: str | None,
+        render_overrides: dict[str, object],
+    ) -> Batch | None:
+        batch = self.batches.get(topic_id)
+        if batch is None or getattr(batch, "creation_mode", "topic") != "created_video":
+            return None
+        if any(job.status in ACTIVE_CONTENT_STATUSES for job in batch.jobs):
+            raise ValueError(
+                "Created video cannot be edited while generation is active"
+            )
+        job = min(batch.jobs, key=lambda item: item.content_number)
+        batch.name = title
+        batch.default_render_profile_id = render_profile_id
+        batch.target_duration_seconds = target_duration_seconds
+        batch.updated_at = utc_now()
+        job.topic = title
+        job.render_profile_id = render_profile_id
+        job.voice_profile_id = voice_profile_id
+        job.workflow_template_id = workflow_template_id
+        job.target_duration_seconds = target_duration_seconds
+        job.render_overrides = render_overrides
+        if speech_script is not None and speech_script != job.speech_script:
+            for asset in job.__dict__.get("media_assets", []):
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+            job.tts_provider = None
+            job.tts_voice_id = None
+            job.tts_model = None
+            job.tts_settings = None
+            job.tts_provider_request_id = None
+        job.speech_script = speech_script
+        if speech_script and job.status in {
+            JobStatus.DRAFT.value,
+            JobStatus.FAILED.value,
+            JobStatus.READY_TO_RENDER.value,
+            JobStatus.TTS_READY.value,
+            JobStatus.COMPLETED.value,
+        }:
+            job.status = JobStatus.CONTENT_READY.value
+        elif not speech_script and job.status == JobStatus.CONTENT_READY.value:
+            job.status = JobStatus.DRAFT.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return batch
+
+    def clone_on_demand_video(self, topic_id: UUID) -> Batch | None:
+        batch = self.batches.get(topic_id)
+        if batch is None or getattr(batch, "creation_mode", "topic") != "created_video":
+            return None
+        if batch.default_render_profile_id is None:
+            return None
+        source = min(batch.jobs, key=lambda item: item.content_number)
+        return self.create_on_demand_video(
+            title=f"{batch.name} copy",
+            render_profile_id=batch.default_render_profile_id,
+            voice_profile_id=source.voice_profile_id,
+            workflow_template_id=source.workflow_template_id,
+            target_duration_seconds=batch.target_duration_seconds,
+            speech_script=source.speech_script,
+            render_overrides=dict(source.render_overrides or {}),
+        )
 
     def list_topic_contents(
         self, topic_id: UUID, limit: int, offset: int
@@ -358,6 +495,113 @@ class InMemoryBatchRepository:
             job.updated_at = utc_now()
         return job
 
+    def update_job_script(self, job_id: UUID, speech_script: str) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        if job.status in ACTIVE_CONTENT_STATUSES:
+            raise ValueError("Audio script cannot change while generation is active")
+        if speech_script != job.speech_script:
+            for asset in job.__dict__.get("media_assets", []):
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+            job.tts_provider = None
+            job.tts_voice_id = None
+            job.tts_model = None
+            job.tts_settings = None
+            job.tts_provider_request_id = None
+        job.speech_script = speech_script
+        job.status = JobStatus.CONTENT_READY.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return job
+
+    def update_job_render_overrides(
+        self, job_id: UUID, render_overrides: dict[str, object]
+    ) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        if job.status in ACTIVE_CONTENT_STATUSES:
+            raise ValueError("Render controls cannot change while generation is active")
+        job.render_overrides = render_overrides
+        if "duration" in render_overrides and isinstance(
+            render_overrides["duration"], int
+        ):
+            job.target_duration_seconds = render_overrides["duration"]
+        if job.status == JobStatus.COMPLETED.value:
+            job.status = JobStatus.READY_TO_RENDER.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return job
+
+    def select_job_audio(self, job_id: UUID, asset_id: UUID) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        if job.status in ACTIVE_CONTENT_STATUSES:
+            raise ValueError("Audio cannot change while generation is active")
+        selected = None
+        for asset in job.__dict__.get("media_assets", []):
+            if asset.id == asset_id and asset.kind in {"audio", "audio_archive"}:
+                selected = asset
+                break
+        if selected is None:
+            raise LookupError("Audio asset not found")
+        for asset in job.__dict__.get("media_assets", []):
+            if asset.kind == "audio":
+                asset.kind = "audio_archive"
+        selected.kind = "audio"
+        job.status = JobStatus.READY_TO_RENDER.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return job
+
+    def delete_job_audio_asset(self, asset_id: UUID) -> tuple[str, TopicJob] | None:
+        asset_job = next(
+            (
+                (asset, job)
+                for job in self.jobs.values()
+                for asset in job.__dict__.get("media_assets", [])
+                if asset.id == asset_id
+            ),
+            None,
+        )
+        if asset_job is None:
+            return None
+        asset, job = asset_job
+        if asset.kind not in {"audio", "audio_archive"}:
+            raise ValueError("Only generated audio can be deleted here")
+        if job.status in ACTIVE_CONTENT_STATUSES:
+            raise ValueError("Audio cannot be deleted while generation is active")
+        assets = job.__dict__.setdefault("media_assets", [])
+        was_active = asset.kind == "audio"
+        object_key = asset.object_key
+        assets.remove(asset)
+        remaining_audio = [
+            item
+            for item in sorted(assets, key=lambda item: item.created_at, reverse=True)
+            if item.kind in {"audio", "audio_archive"}
+        ]
+        if was_active:
+            if remaining_audio:
+                remaining_audio[0].kind = "audio"
+                job.status = JobStatus.READY_TO_RENDER.value
+            elif job.speech_script:
+                job.status = JobStatus.CONTENT_READY.value
+            else:
+                job.status = JobStatus.DRAFT.value
+            job.tts_provider = None
+            job.tts_voice_id = None
+            job.tts_model = None
+            job.tts_settings = None
+            job.tts_provider_request_id = None
+        if job.status == JobStatus.COMPLETED.value:
+            job.status = JobStatus.READY_TO_RENDER.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return object_key, job
+
     def update_job_workflow_template(
         self, job_id: UUID, workflow_template_id: UUID
     ) -> TopicJob | None:
@@ -378,6 +622,7 @@ class InMemoryBatchRepository:
         filename: str,
         content_type: str,
         size_bytes: int,
+        generation_metadata: dict[str, object] | None = None,
     ) -> TopicJob | None:
         job = self.jobs.get(job_id)
         if job is None:
@@ -396,6 +641,7 @@ class InMemoryBatchRepository:
                 filename=filename,
                 content_type=content_type,
                 size_bytes=size_bytes,
+                generation_metadata=generation_metadata,
                 created_at=utc_now(),
                 updated_at=utc_now(),
             )
@@ -405,10 +651,52 @@ class InMemoryBatchRepository:
         job.updated_at = utc_now()
         return job
 
+    def replace_job_source_image(
+        self,
+        job_id: UUID,
+        *,
+        object_key: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        generation_metadata: dict[str, object] | None = None,
+    ) -> TopicJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        assets = job.__dict__.setdefault("media_assets", [])
+        for asset in assets:
+            if asset.kind == "source_image":
+                asset.kind = "source_image_archive"
+        assets.append(
+            MediaAsset(
+                id=uuid4(),
+                job_id=job.id,
+                render_attempt_id=None,
+                kind="source_image",
+                object_key=object_key,
+                filename=filename,
+                content_type=content_type,
+                size_bytes=size_bytes,
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+        )
+        if job.status == JobStatus.COMPLETED.value:
+            job.status = JobStatus.READY_TO_RENDER.value
+        job.error_message = None
+        job.updated_at = utc_now()
+        return job
+
     def list_jobs(self, limit: int = 5) -> list[TopicJob]:
-        return sorted(
-            self.jobs.values(), key=lambda item: item.created_at, reverse=True
-        )[:limit]
+        return [
+            job
+            for job in sorted(
+                self.jobs.values(), key=lambda item: item.created_at, reverse=True
+            )
+            if getattr(self.batches.get(job.batch_id), "creation_mode", "topic")
+            == "topic"
+        ][:limit]
 
     def count_jobs(self, statuses: set[JobStatus]) -> int:
         expected = {status.value for status in statuses}
@@ -428,6 +716,7 @@ class SqlAlchemyBatchRepository:
                 target_duration_seconds=payload.target_duration_seconds,
                 auto_fit_duration=payload.auto_fit_duration,
                 next_content_number=len(payload.topics) + 1,
+                creation_mode="topic",
             )
             batch.jobs = [
                 TopicJob(
@@ -456,6 +745,7 @@ class SqlAlchemyBatchRepository:
                     target_duration_seconds=payload.target_duration_seconds,
                     auto_fit_duration=payload.auto_fit_duration,
                     next_content_number=2,
+                    creation_mode="topic",
                     jobs=[
                         TopicJob(
                             topic=topic,
@@ -503,13 +793,187 @@ class SqlAlchemyBatchRepository:
                 .options(
                     selectinload(Batch.jobs).load_only(TopicJob.id, TopicJob.status)
                 )
+                .where(Batch.creation_mode == "topic")
                 .order_by(Batch.created_at.desc())
                 .limit(limit)
                 .offset(offset)
             )
             topics = list(session.scalars(query).unique().all())
-            total = session.scalar(select(func.count()).select_from(Batch)) or 0
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Batch)
+                    .where(Batch.creation_mode == "topic")
+                )
+                or 0
+            )
             return topics, total
+
+    def list_on_demand_videos(self, limit: int, offset: int) -> tuple[list[Batch], int]:
+        with self.factory() as session:
+            query = (
+                select(Batch)
+                .options(selectinload(Batch.jobs).selectinload(TopicJob.media_assets))
+                .where(Batch.creation_mode == "created_video")
+                .order_by(Batch.updated_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            videos = list(session.scalars(query).unique().all())
+            total = (
+                session.scalar(
+                    select(func.count())
+                    .select_from(Batch)
+                    .where(Batch.creation_mode == "created_video")
+                )
+                or 0
+            )
+            return videos, total
+
+    def create_on_demand_video(
+        self,
+        *,
+        title: str,
+        render_profile_id: UUID,
+        voice_profile_id: UUID | None,
+        workflow_template_id: UUID | None,
+        target_duration_seconds: int,
+        speech_script: str | None,
+        render_overrides: dict[str, object],
+    ) -> Batch:
+        with self.factory() as session:
+            batch = Batch(
+                name=title,
+                status=BatchStatus.DRAFT.value,
+                default_render_profile_id=render_profile_id,
+                target_duration_seconds=target_duration_seconds,
+                auto_fit_duration=False,
+                next_content_number=2,
+                creation_mode="created_video",
+                jobs=[
+                    TopicJob(
+                        topic=title,
+                        content_number=1,
+                        status=(
+                            JobStatus.CONTENT_READY.value
+                            if speech_script
+                            else JobStatus.DRAFT.value
+                        ),
+                        render_profile_id=render_profile_id,
+                        voice_profile_id=voice_profile_id,
+                        workflow_template_id=workflow_template_id,
+                        target_duration_seconds=target_duration_seconds,
+                        speech_script=speech_script,
+                        render_overrides=render_overrides,
+                    )
+                ],
+            )
+            session.add(batch)
+            session.commit()
+            return (
+                session.scalar(
+                    select(Batch)
+                    .options(
+                        selectinload(Batch.jobs).selectinload(TopicJob.media_assets)
+                    )
+                    .where(Batch.id == batch.id)
+                )
+                or batch
+            )
+
+    def update_on_demand_video(
+        self,
+        topic_id: UUID,
+        *,
+        title: str,
+        render_profile_id: UUID,
+        voice_profile_id: UUID | None,
+        workflow_template_id: UUID | None,
+        target_duration_seconds: int,
+        speech_script: str | None,
+        render_overrides: dict[str, object],
+    ) -> Batch | None:
+        with self.factory() as session:
+            batch = session.scalar(
+                select(Batch)
+                .options(selectinload(Batch.jobs).selectinload(TopicJob.media_assets))
+                .where(
+                    Batch.id == topic_id,
+                    Batch.creation_mode == "created_video",
+                )
+                .with_for_update()
+            )
+            if batch is None or not batch.jobs:
+                return None
+            if any(job.status in ACTIVE_CONTENT_STATUSES for job in batch.jobs):
+                raise ValueError(
+                    "Created video cannot be edited while generation is active"
+                )
+            job = min(batch.jobs, key=lambda item: item.content_number)
+            batch.name = title
+            batch.default_render_profile_id = render_profile_id
+            batch.target_duration_seconds = target_duration_seconds
+            batch.updated_at = utc_now()
+            job.topic = title
+            job.render_profile_id = render_profile_id
+            job.voice_profile_id = voice_profile_id
+            job.workflow_template_id = workflow_template_id
+            job.target_duration_seconds = target_duration_seconds
+            job.render_overrides = render_overrides
+            if speech_script is not None and speech_script != job.speech_script:
+                for asset in job.media_assets:
+                    if asset.kind == "audio":
+                        asset.kind = "audio_archive"
+                job.tts_provider = None
+                job.tts_voice_id = None
+                job.tts_model = None
+                job.tts_settings = None
+                job.tts_provider_request_id = None
+            job.speech_script = speech_script
+            if speech_script and job.status in {
+                JobStatus.DRAFT.value,
+                JobStatus.FAILED.value,
+                JobStatus.READY_TO_RENDER.value,
+                JobStatus.TTS_READY.value,
+                JobStatus.COMPLETED.value,
+            }:
+                job.status = JobStatus.CONTENT_READY.value
+            elif not speech_script and job.status == JobStatus.CONTENT_READY.value:
+                job.status = JobStatus.DRAFT.value
+            job.error_message = None
+            session.commit()
+            return session.scalar(
+                select(Batch)
+                .options(selectinload(Batch.jobs).selectinload(TopicJob.media_assets))
+                .where(Batch.id == topic_id)
+            )
+
+    def clone_on_demand_video(self, topic_id: UUID) -> Batch | None:
+        with self.factory() as session:
+            batch = session.scalar(
+                select(Batch)
+                .options(selectinload(Batch.jobs))
+                .where(
+                    Batch.id == topic_id,
+                    Batch.creation_mode == "created_video",
+                )
+            )
+            if (
+                batch is None
+                or not batch.jobs
+                or batch.default_render_profile_id is None
+            ):
+                return None
+            source = min(batch.jobs, key=lambda item: item.content_number)
+            return self.create_on_demand_video(
+                title=f"{batch.name} copy",
+                render_profile_id=batch.default_render_profile_id,
+                voice_profile_id=source.voice_profile_id,
+                workflow_template_id=source.workflow_template_id,
+                target_duration_seconds=batch.target_duration_seconds,
+                speech_script=source.speech_script,
+                render_overrides=dict(source.render_overrides or {}),
+            )
 
     def list_topic_contents(
         self, topic_id: UUID, limit: int, offset: int
@@ -804,6 +1268,163 @@ class SqlAlchemyBatchRepository:
                 .where(TopicJob.id == job_id)
             )
 
+    def update_job_script(self, job_id: UUID, speech_script: str) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+                .with_for_update()
+            )
+            if job is None:
+                return None
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError(
+                    "Audio script cannot change while generation is active"
+                )
+            if speech_script != job.speech_script:
+                for asset in job.media_assets:
+                    if asset.kind == "audio":
+                        asset.kind = "audio_archive"
+                job.tts_provider = None
+                job.tts_voice_id = None
+                job.tts_model = None
+                job.tts_settings = None
+                job.tts_provider_request_id = None
+            job.speech_script = speech_script
+            job.status = JobStatus.CONTENT_READY.value
+            job.error_message = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def update_job_render_overrides(
+        self, job_id: UUID, render_overrides: dict[str, object]
+    ) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+                .with_for_update()
+            )
+            if job is None:
+                return None
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError(
+                    "Render controls cannot change while generation is active"
+                )
+            job.render_overrides = render_overrides
+            duration = render_overrides.get("duration")
+            if isinstance(duration, int):
+                job.target_duration_seconds = duration
+            if job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
+            job.error_message = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def select_job_audio(self, job_id: UUID, asset_id: UUID) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+                .with_for_update()
+            )
+            if job is None:
+                return None
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError("Audio cannot change while generation is active")
+            selected = next(
+                (
+                    asset
+                    for asset in job.media_assets
+                    if asset.id == asset_id and asset.kind in {"audio", "audio_archive"}
+                ),
+                None,
+            )
+            if selected is None:
+                raise LookupError("Audio asset not found")
+            for asset in job.media_assets:
+                if asset.kind == "audio":
+                    asset.kind = "audio_archive"
+            selected.kind = "audio"
+            job.status = JobStatus.READY_TO_RENDER.value
+            job.error_message = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def delete_job_audio_asset(self, asset_id: UUID) -> tuple[str, TopicJob] | None:
+        with self.factory() as session:
+            asset = session.scalar(
+                select(MediaAsset)
+                .join(TopicJob, TopicJob.id == MediaAsset.job_id)
+                .options(
+                    selectinload(MediaAsset.job).selectinload(TopicJob.media_assets)
+                )
+                .where(MediaAsset.id == asset_id)
+                .with_for_update()
+            )
+            if asset is None:
+                return None
+            if asset.kind not in {"audio", "audio_archive"}:
+                raise ValueError("Only generated audio can be deleted here")
+            job = asset.job
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError("Audio cannot be deleted while generation is active")
+            was_active = asset.kind == "audio"
+            object_key = asset.object_key
+            session.delete(asset)
+            session.flush()
+            remaining_audio = list(
+                session.scalars(
+                    select(MediaAsset)
+                    .where(
+                        MediaAsset.job_id == job.id,
+                        MediaAsset.kind.in_(["audio", "audio_archive"]),
+                    )
+                    .order_by(MediaAsset.created_at.desc())
+                ).all()
+            )
+            if was_active:
+                if remaining_audio:
+                    remaining_audio[0].kind = "audio"
+                    job.status = JobStatus.READY_TO_RENDER.value
+                elif job.speech_script:
+                    job.status = JobStatus.CONTENT_READY.value
+                else:
+                    job.status = JobStatus.DRAFT.value
+                job.tts_provider = None
+                job.tts_voice_id = None
+                job.tts_model = None
+                job.tts_settings = None
+                job.tts_provider_request_id = None
+            if job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
+            job.error_message = None
+            job.updated_at = utc_now()
+            session.commit()
+            loaded = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job.id)
+            )
+            if loaded is None:
+                return None
+            return object_key, loaded
+
     def update_job_workflow_template(
         self, job_id: UUID, workflow_template_id: UUID
     ) -> TopicJob | None:
@@ -830,6 +1451,7 @@ class SqlAlchemyBatchRepository:
         filename: str,
         content_type: str,
         size_bytes: int,
+        generation_metadata: dict[str, object] | None = None,
     ) -> TopicJob | None:
         with self.factory() as session:
             job = session.scalar(
@@ -851,9 +1473,51 @@ class SqlAlchemyBatchRepository:
                     filename=filename,
                     content_type=content_type,
                     size_bytes=size_bytes,
+                    generation_metadata=generation_metadata,
                 )
             )
             job.status = JobStatus.READY_TO_RENDER.value
+            job.error_message = None
+            session.commit()
+            return session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+
+    def replace_job_source_image(
+        self,
+        job_id: UUID,
+        *,
+        object_key: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+    ) -> TopicJob | None:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob)
+                .options(selectinload(TopicJob.media_assets))
+                .where(TopicJob.id == job_id)
+            )
+            if job is None:
+                return None
+            for asset in job.media_assets:
+                if asset.kind == "source_image":
+                    asset.kind = "source_image_archive"
+            session.add(
+                MediaAsset(
+                    job_id=job.id,
+                    render_attempt_id=None,
+                    kind="source_image",
+                    object_key=object_key,
+                    filename=filename,
+                    content_type=content_type,
+                    size_bytes=size_bytes,
+                )
+            )
+            if job.status == JobStatus.COMPLETED.value:
+                job.status = JobStatus.READY_TO_RENDER.value
             job.error_message = None
             session.commit()
             return session.scalar(
@@ -867,7 +1531,9 @@ class SqlAlchemyBatchRepository:
             return list(
                 session.scalars(
                     select(TopicJob)
+                    .join(Batch, Batch.id == TopicJob.batch_id)
                     .options(selectinload(TopicJob.media_assets))
+                    .where(Batch.creation_mode == "topic")
                     .order_by(TopicJob.created_at.desc())
                     .limit(limit)
                 ).all()
@@ -1952,6 +2618,7 @@ def batch_to_dict(batch: Batch) -> dict[str, object]:
         "target_duration_seconds": batch.target_duration_seconds,
         "auto_fit_duration": batch.auto_fit_duration,
         "job_count": len(jobs),
+        "creation_mode": getattr(batch, "creation_mode", "topic"),
         "created_at": batch.created_at,
         "updated_at": batch.updated_at,
         "jobs": [job_to_dict(job) for job in jobs],
@@ -1982,6 +2649,7 @@ def topic_summary_to_dict(batch: Batch) -> dict[str, object]:
         "default_render_profile_id": batch.default_render_profile_id,
         "target_duration_seconds": batch.target_duration_seconds,
         "auto_fit_duration": batch.auto_fit_duration,
+        "creation_mode": getattr(batch, "creation_mode", "topic"),
         "content_count": len(jobs),
         "created_at": batch.created_at,
         "updated_at": batch.updated_at,
@@ -2011,6 +2679,29 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
         for asset in sorted(assets, key=lambda item: item.created_at, reverse=True)
         if asset.kind in {"audio", "audio_archive"}
     ]
+    source_image_asset = next(
+        (
+            asset
+            for asset in sorted(assets, key=lambda item: item.created_at, reverse=True)
+            if asset.kind == "source_image"
+        ),
+        None,
+    )
+
+    def media_asset_to_dict(asset: MediaAsset) -> dict[str, object]:
+        return {
+            "id": asset.id,
+            "job_id": asset.job_id,
+            "render_attempt_id": asset.render_attempt_id,
+            "kind": asset.kind,
+            "filename": asset.filename,
+            "content_type": asset.content_type,
+            "size_bytes": asset.size_bytes,
+            "generation_metadata": asset.generation_metadata,
+            "download_url": f"/api/v1/assets/{asset.id}/download",
+            "created_at": asset.created_at,
+        }
+
     return {
         "id": job.id,
         "batch_id": job.batch_id,
@@ -2033,37 +2724,14 @@ def job_to_dict(job: TopicJob) -> dict[str, object]:
         "tts_voice_id": job.tts_voice_id,
         "tts_model": job.tts_model,
         "tts_provider_request_id": job.tts_provider_request_id,
-        "audio_asset": (
-            {
-                "id": audio_asset.id,
-                "job_id": audio_asset.job_id,
-                "render_attempt_id": audio_asset.render_attempt_id,
-                "kind": audio_asset.kind,
-                "filename": audio_asset.filename,
-                "content_type": audio_asset.content_type,
-                "size_bytes": audio_asset.size_bytes,
-                "generation_metadata": audio_asset.generation_metadata,
-                "download_url": f"/api/v1/assets/{audio_asset.id}/download",
-                "created_at": audio_asset.created_at,
-            }
-            if audio_asset is not None
-            else None
-        ),
-        "audio_assets": [
-            {
-                "id": asset.id,
-                "job_id": asset.job_id,
-                "render_attempt_id": asset.render_attempt_id,
-                "kind": asset.kind,
-                "filename": asset.filename,
-                "content_type": asset.content_type,
-                "size_bytes": asset.size_bytes,
-                "generation_metadata": asset.generation_metadata,
-                "download_url": f"/api/v1/assets/{asset.id}/download",
-                "created_at": asset.created_at,
-            }
-            for asset in audio_assets
-        ],
+        "render_overrides": job.render_overrides or {},
+        "source_image_asset": media_asset_to_dict(source_image_asset)
+        if source_image_asset is not None
+        else None,
+        "audio_asset": media_asset_to_dict(audio_asset)
+        if audio_asset is not None
+        else None,
+        "audio_assets": [media_asset_to_dict(asset) for asset in audio_assets],
         "created_at": job.created_at,
         "updated_at": job.updated_at,
     }

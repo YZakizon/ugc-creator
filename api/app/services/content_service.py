@@ -1,4 +1,5 @@
 import asyncio
+import re
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -6,6 +7,25 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.statuses import JobStatus
 from app.db.models import TopicJob
 from app.providers.llm.contracts import LLMProvider, UGCContentRequest
+
+
+def format_speech_script_for_reading(script: str) -> str:
+    """Add readable paragraph breaks to generated speech without changing words."""
+    normalized = re.sub(r"\r\n?", "\n", script).strip()
+    if not normalized:
+        return normalized
+    paragraphs = [
+        paragraph.strip()
+        for paragraph in re.split(r"\n\s*\n+", normalized)
+        if paragraph.strip()
+    ]
+    formatted: list[str] = []
+    for paragraph in paragraphs:
+        lines = [line.strip() for line in paragraph.splitlines() if line.strip()]
+        joined = " ".join(lines)
+        sentences = re.findall(r"[^.!?]+(?:[.!?]+[”\"']?|$)", joined)
+        formatted.extend(sentence.strip() for sentence in sentences if sentence.strip())
+    return "\n\n".join(formatted)
 
 
 class ContentService:
@@ -48,7 +68,9 @@ class ContentService:
             if completed_job is None:
                 raise ValueError("Job disappeared during content generation")
             completed_job.status = JobStatus.CONTENT_READY.value
-            completed_job.speech_script = result.content.speech_script
+            completed_job.speech_script = format_speech_script_for_reading(
+                result.content.speech_script
+            )
             completed_job.hook = result.content.hook
             completed_job.instagram_metadata = result.content.instagram.model_dump()
             completed_job.tiktok_metadata = result.content.tiktok.model_dump()

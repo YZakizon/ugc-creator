@@ -194,6 +194,47 @@ async def test_comfyui_history_polling_reports_indeterminate_progress() -> None:
     assert status.progress is None
 
 
+@pytest.mark.asyncio
+async def test_comfyui_missing_history_checks_queue_before_failing() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/history/prompt-queued":
+            return httpx.Response(200, json={})
+        if request.url.path == "/queue":
+            return httpx.Response(
+                200,
+                json={"queue_running": [], "queue_pending": [[1, "prompt-queued"]]},
+            )
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        status = await ComfyUIRenderer(
+            base_url="http://comfyui.test", client=client
+        ).get_status("prompt-queued")
+
+    assert status.state == "queued"
+
+
+@pytest.mark.asyncio
+async def test_comfyui_missing_history_and_queue_is_lost_prompt() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/history/prompt-lost":
+            return httpx.Response(200, json={})
+        if request.url.path == "/queue":
+            return httpx.Response(
+                200, json={"queue_running": [], "queue_pending": []}
+            )
+        raise AssertionError(f"Unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        status = await ComfyUIRenderer(
+            base_url="http://comfyui.test", client=client
+        ).get_status("prompt-lost")
+
+    assert status.state == "failed"
+    assert status.message is not None
+    assert "no longer has this prompt" in status.message
+
+
 def test_comfyui_builds_prompt_progress_websocket_url() -> None:
     assert _websocket_url("http://comfyui.test:8188", "client one") == (
         "ws://comfyui.test:8188/ws?clientId=client+one"

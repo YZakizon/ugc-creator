@@ -36,6 +36,8 @@ export type Job = {
   tts_voice_id: string | null;
   tts_model: string | null;
   tts_provider_request_id: string | null;
+  render_overrides?: Record<string, unknown>;
+  source_image_asset?: MediaAsset | null;
   audio_asset: MediaAsset | null;
   audio_assets: MediaAsset[];
   created_at: string;
@@ -62,6 +64,7 @@ export type Topic = {
   default_render_profile_id: string | null;
   target_duration_seconds: number;
   auto_fit_duration: boolean;
+  creation_mode: string;
   content_count: number;
   created_at: string;
   updated_at: string;
@@ -216,6 +219,7 @@ export type MediaAsset = {
     settings?: Record<string, unknown>;
     provider_request_id?: string | null;
     script_sha256?: string;
+    duration_seconds?: number;
     generated_at?: string;
   } | null;
   download_url: string;
@@ -237,6 +241,8 @@ export type RenderAttempt = {
   output_deleted_at: string | null;
   effective_values: Record<string, unknown>;
   rendered_controls: RenderedWorkflowControl[];
+  submitted_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
   assets: MediaAsset[];
@@ -334,6 +340,52 @@ export function getTopics(limit = 20, offset = 0): Promise<{ items: TopicSummary
   return request<{ items: TopicSummary[]; total: number; limit: number; offset: number }>(`/api/v1/topics?limit=${limit}&offset=${offset}`);
 }
 
+export type OnDemandRenderOverrides = {
+  video_prompt?: string | null;
+  fps?: number | null;
+  duration?: number | null;
+  seed?: number | null;
+  create_video?: Record<string, unknown>;
+};
+
+export type OnDemandVideoSaveInput = {
+  title: string;
+  render_profile_id: string;
+  workflow_template_id?: string | null;
+  target_duration_seconds: number;
+  speech_script?: string | null;
+  render_overrides: OnDemandRenderOverrides;
+};
+
+export function getOnDemandVideos(limit = 50, offset = 0): Promise<{ items: TopicSummary[]; total: number; limit: number; offset: number }> {
+  return request<{ items: TopicSummary[]; total: number; limit: number; offset: number }>(`/api/v1/on-demand-videos?limit=${limit}&offset=${offset}`);
+}
+
+export function createOnDemandVideo(input: OnDemandVideoSaveInput): Promise<Topic> {
+  return request<Topic>("/api/v1/on-demand-videos", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateOnDemandVideo(topicId: string, input: OnDemandVideoSaveInput): Promise<Topic> {
+  return request<Topic>(`/api/v1/on-demand-videos/${topicId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function cloneOnDemandVideo(topicId: string): Promise<Topic> {
+  return request<Topic>(`/api/v1/on-demand-videos/${topicId}/clone`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function getTopic(topicId: string): Promise<Topic> {
+  return request<Topic>(`/api/v1/topics/${topicId}`);
+}
+
 export function getTopicContents(topicId: string, limit = 20, offset = 0): Promise<{ items: Job[]; total: number; limit: number; offset: number }> {
   return request<{ items: Job[]; total: number; limit: number; offset: number }>(`/api/v1/topics/${topicId}/contents?limit=${limit}&offset=${offset}`);
 }
@@ -367,6 +419,44 @@ export function updateJobVoiceProfile(jobId: string, voiceProfileId: string): Pr
   });
 }
 
+export function attachJobElevenLabsVoice(jobId: string, input: {
+  voice_id: string;
+  name: string;
+  model?: string | null;
+  speed?: number;
+  stability?: number | null;
+  similarity?: number | null;
+  style_exaggeration?: number | null;
+  output_format?: string;
+  speaker_boost?: boolean;
+}): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/elevenlabs-voice`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateJobScript(jobId: string, speechScript: string): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/script`, {
+    method: "PATCH",
+    body: JSON.stringify({ speech_script: speechScript }),
+  });
+}
+
+export function updateJobRenderOverrides(jobId: string, renderOverrides: OnDemandRenderOverrides): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/render-overrides`, {
+    method: "PATCH",
+    body: JSON.stringify(renderOverrides),
+  });
+}
+
+export function selectJobAudio(jobId: string, assetId: string): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/audio/${assetId}/active`, {
+    method: "PATCH",
+    body: JSON.stringify({}),
+  });
+}
+
 export function updateJobWorkflowTemplate(jobId: string, workflowTemplateId: string): Promise<Job> {
   return request<Job>(`/api/v1/jobs/${jobId}/workflow-template`, {
     method: "PATCH",
@@ -380,6 +470,17 @@ export function uploadJobAudio(jobId: string, input: {
   content_type: string;
 }): Promise<Job> {
   return request<Job>(`/api/v1/jobs/${jobId}/audio`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function uploadJobSourceImage(jobId: string, input: {
+  filename: string;
+  content_base64: string;
+  content_type: string;
+}): Promise<Job> {
+  return request<Job>(`/api/v1/jobs/${jobId}/source-image`, {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -616,6 +717,10 @@ export function deleteRenderNode(nodeId: string): Promise<void> {
 
 export function queueJobRender(jobId: string, nodeId: string): Promise<RenderAttempt> {
   return request<RenderAttempt>(`/api/v1/jobs/${jobId}/render?node_id=${encodeURIComponent(nodeId)}`, { method: "POST", body: JSON.stringify({}) });
+}
+
+export function cancelRenderAttempt(attemptId: string): Promise<RenderAttempt> {
+  return request<RenderAttempt>(`/api/v1/render-attempts/${attemptId}/cancel`, { method: "POST", body: JSON.stringify({}) });
 }
 
 export function getRenderAttempts(): Promise<{ items: RenderAttempt[]; total: number }> {

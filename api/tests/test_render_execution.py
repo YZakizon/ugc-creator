@@ -302,6 +302,154 @@ async def test_uncertain_comfyui_submission_is_not_resubmitted(
 
 
 @pytest.mark.asyncio
+async def test_render_uses_selected_create_video_audio_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempt_id = uuid4()
+    saved_values: dict[str, object] = {}
+    uploaded: list[tuple[str, bytes, str]] = []
+    scheduled: list[tuple[list[str], int]] = []
+    attempt = SimpleNamespace(
+        id=attempt_id,
+        external_job_id=None,
+        client_id="client-selected-audio",
+        status="queued",
+        workflow_snapshot={
+            "bound-audio": {
+                "class_type": "LoadAudio",
+                "inputs": {"audio": "workflow-bound-default.mp3"},
+            },
+            "downstream-audio": {
+                "class_type": "LoadAudio",
+                "inputs": {"audio": "workflow-actual-default.mp3"},
+            },
+            "1": {"class_type": "Text", "inputs": {"text": "ready"}},
+        },
+        binding_snapshot=[
+            {
+                "semantic_key": "audio",
+                "node_id": "bound-audio",
+                "input_name": "audio",
+                "value_type": "string",
+                "required": True,
+            }
+        ],
+    )
+    old_audio = SimpleNamespace(
+        id=uuid4(),
+        kind="audio",
+        object_key="audio/old-profile-default.mp3",
+        filename="old-profile-default.mp3",
+        created_at=datetime(2026, 8, 10, 10, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 10, 10, tzinfo=UTC),
+    )
+    selected_audio = SimpleNamespace(
+        id=uuid4(),
+        kind="audio",
+        object_key="audio/selected-create-video.mp3",
+        filename="selected-create-video.mp3",
+        created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+        updated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+    )
+    job = SimpleNamespace(
+        speech_script="Selected script",
+        topic="Selected topic",
+        hook=None,
+        target_duration_seconds=30,
+        render_overrides={},
+        media_assets=[old_audio, selected_audio],
+    )
+    profile = SimpleNamespace(
+        default_parameters={"audio": "profile-default.mp3"},
+        prompt_template=None,
+        character=SimpleNamespace(name="Elena"),
+    )
+
+    class FakeRepository:
+        def get_attempt(self, _attempt_id: object) -> object:
+            return attempt
+
+        def claim_submission(self, _attempt_id: object) -> tuple[bool, int]:
+            return True, 0
+
+        def execution_context(self, _attempt_id: object) -> tuple[object, ...]:
+            return (
+                attempt,
+                job,
+                profile,
+                SimpleNamespace(base_url="http://comfyui"),
+                SimpleNamespace(metadata_json={}),
+            )
+
+        def save_prepared(
+            self,
+            _attempt_id: object,
+            workflow: dict[str, object],
+            values: dict[str, object],
+        ) -> None:
+            saved_values.update(values)
+            saved_values["prepared_workflow"] = workflow
+
+        def mark_submission_started(self, _attempt_id: object) -> bool:
+            return True
+
+        def save_submission(
+            self,
+            _attempt_id: object,
+            _external_job_id: str,
+            _client_id: str,
+        ) -> bool:
+            return True
+
+    class FakeRenderer:
+        def __init__(self, **_values: object) -> None:
+            pass
+
+        async def upload(self, filename: str, content: bytes, input_type: str) -> str:
+            uploaded.append((filename, content, input_type))
+            return f"uploaded-{filename}"
+
+        async def submit(self, request: object) -> object:
+            return SimpleNamespace(
+                external_job_id="prompt-selected-audio",
+                client_id=request.client_id,
+            )
+
+    class FakeStorage:
+        def get(self, object_key: str) -> bytes:
+            return object_key.encode()
+
+    monkeypatch.setattr("app.workers.render_tasks.repository", FakeRepository)
+    monkeypatch.setattr("app.workers.render_tasks.ComfyUIRenderer", FakeRenderer)
+    monkeypatch.setattr("app.workers.render_tasks.LocalStorageProvider", FakeStorage)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.monitor_render.apply_async",
+        lambda *, args, countdown: scheduled.append((args, countdown)),
+    )
+
+    await _prepare_and_submit(attempt_id)
+
+    assert uploaded == [
+        (
+            f"{attempt_id}-selected-create-video.mp3",
+            b"audio/selected-create-video.mp3",
+            "audio",
+        )
+    ]
+    assert saved_values["audio"] == f"uploaded-{attempt_id}-selected-create-video.mp3"
+    prepared_workflow = saved_values["prepared_workflow"]
+    assert isinstance(prepared_workflow, dict)
+    assert (
+        prepared_workflow["bound-audio"]["inputs"]["audio"] == saved_values["audio"]  # type: ignore[index]
+    )
+    assert (
+        prepared_workflow["downstream-audio"]["inputs"]["audio"]
+        == saved_values["audio"]  # type: ignore[index]
+    )
+    assert scheduled == [([str(attempt_id)], 3)]
+
+
+@pytest.mark.asyncio
 async def test_batch_media_overrides_workflow_defaults() -> None:
     values: dict[str, object] = {
         "source_image": "batch-image.png",
@@ -494,6 +642,72 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None
         assert reset_job.status == "ready_to_render"
+
+
+def test_cancel_render_attempt_returns_job_to_ready_to_render() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        voice = VoiceProfile(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice"
+        )
+        character = Character(
+            name="Elena", slug="cancel-elena", default_voice_profile=voice
+        )
+        workflow = WorkflowTemplate(
+            name="LTX",
+            renderer_provider="comfyui",
+            workflow_json={
+                "1": {"class_type": "Text", "inputs": {"text": "{{SCRIPT}}"}}
+            },
+            checksum="cancel-checksum",
+        )
+        profile = RenderProfile(
+            name="Elena LTX",
+            character=character,
+            voice_profile=voice,
+            renderer_provider="comfyui",
+        )
+        session.add_all([workflow, profile])
+        session.flush()
+        profile.workflow_template_id = workflow.id
+        batch = Batch(name="Batch")
+        job = TopicJob(batch=batch, topic="Topic", render_profile_id=profile.id)
+        job.media_assets = [
+            MediaAsset(
+                kind="audio",
+                object_key="jobs/topic/audio.mp3",
+                filename="audio.mp3",
+                content_type="audio/mpeg",
+                size_bytes=5,
+            )
+        ]
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    repo = RenderExecutionRepository(factory)
+    node = repo.create_node(
+        RenderNodeCreate(name="Local", base_url="http://comfyui:8188")
+    )
+    attempt = repo.queue_attempt(job_id, node.id)
+    repo.save_prepared(
+        attempt.id,
+        {"1": {"class_type": "Text", "inputs": {"text": "Topic"}}},
+        {"script": "Topic"},
+    )
+
+    cancelled = repo.cancel_attempt(attempt.id)
+
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
+    assert cancelled.error_message == "Render cancelled."
+    with factory() as session:
+        loaded_job = session.get(TopicJob, job_id)
+        assert loaded_job is not None
+        assert loaded_job.status == "ready_to_render"
+        assert loaded_job.error_message is None
 
 
 def test_job_workflow_override_is_snapshotted_for_render() -> None:
@@ -722,3 +936,105 @@ def test_queued_attempt_keeps_workflow_and_binding_snapshots() -> None:
     assert queued is not None
     assert queued.workflow_snapshot["1"]["inputs"]["text"] == "old"  # type: ignore[index]
     assert queued.binding_snapshot[0]["semantic_key"] == "custom.camera_strength"
+
+
+def test_queued_attempt_infers_ltx_control_bindings() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        voice = VoiceProfile(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice"
+        )
+        character = Character(
+            name="Elena", slug="ltx-elena", default_voice_profile=voice
+        )
+        workflow = WorkflowTemplate(
+            name="LTX workflow",
+            renderer_provider="comfyui",
+            workflow_json={
+                "269": {
+                    "class_type": "LoadImage",
+                    "inputs": {"image": "workflow-default.png"},
+                },
+                "276": {
+                    "class_type": "LoadAudio",
+                    "inputs": {"audio": "workflow-default.mp3"},
+                },
+                "340:319": {
+                    "_meta": {"title": "Prompt"},
+                    "class_type": "PrimitiveStringMultiline",
+                    "inputs": {"value": "Elena says {{SCRIPT}}"},
+                },
+                "340:323": {
+                    "_meta": {"title": "Frame Rate"},
+                    "class_type": "PrimitiveInt",
+                    "inputs": {"value": 30},
+                },
+                "340:331": {
+                    "_meta": {"title": "Duration"},
+                    "class_type": "PrimitiveInt",
+                    "inputs": {"value": 25},
+                },
+                "340:286": {
+                    "_meta": {"title": "RandomNoise"},
+                    "class_type": "RandomNoise",
+                    "inputs": {"noise_seed": 473920259086225},
+                },
+            },
+            checksum="ltx-checksum",
+        )
+        profile = RenderProfile(
+            name="LTX profile",
+            character=character,
+            voice_profile=voice,
+            renderer_provider="comfyui",
+        )
+        session.add_all([workflow, profile])
+        session.flush()
+        profile.workflow_template_id = workflow.id
+        workflow.bindings = [
+            WorkflowParameterBinding(
+                semantic_key="audio",
+                node_id="276",
+                input_name="audio",
+                value_type="string",
+                required=True,
+            ),
+            WorkflowParameterBinding(
+                semantic_key="source_image",
+                node_id="269",
+                input_name="image",
+                value_type="string",
+                required=True,
+            ),
+        ]
+        batch = Batch(name="LTX batch")
+        job = TopicJob(batch=batch, topic="LTX topic", render_profile_id=profile.id)
+        job.media_assets = [
+            MediaAsset(
+                kind="audio",
+                object_key="jobs/ltx/audio.mp3",
+                filename="audio.mp3",
+                content_type="audio/mpeg",
+                size_bytes=5,
+            )
+        ]
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    repository = RenderExecutionRepository(factory)
+    node = repository.create_node(
+        RenderNodeCreate(name="LTX node", base_url="http://comfyui:8188")
+    )
+    attempt = repository.queue_attempt(job_id, node.id)
+
+    semantic_keys = {
+        binding["semantic_key"]: binding for binding in attempt.binding_snapshot
+    }
+    assert semantic_keys["video_prompt"]["node_id"] == "340:319"
+    assert semantic_keys["fps"]["node_id"] == "340:323"
+    assert semantic_keys["duration"]["node_id"] == "340:331"
+    assert semantic_keys["seed"]["node_id"] == "340:286"
+    assert semantic_keys["audio"]["node_id"] == "276"
