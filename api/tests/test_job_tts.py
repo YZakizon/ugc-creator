@@ -182,6 +182,9 @@ def test_job_tts_uses_profile_voice_and_persists_render_audio(
 
     monkeypatch.setattr(tts_tasks, "create_database_engine", lambda: engine)
     monkeypatch.setattr(tts_tasks, "tts_provider", lambda _provider: FakeTTSProvider())
+    monkeypatch.setattr(
+        tts_tasks, "probe_audio_duration", lambda _audio, _filename: 2.0
+    )
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
 
     result = tts_tasks.generate_job_tts.run(str(job_id))
@@ -261,6 +264,9 @@ def test_job_tts_uses_job_voice_override(
 
     monkeypatch.setattr(tts_tasks, "create_database_engine", lambda: engine)
     monkeypatch.setattr(tts_tasks, "tts_provider", lambda _provider: FakeTTSProvider())
+    monkeypatch.setattr(
+        tts_tasks, "probe_audio_duration", lambda _audio, _filename: 2.0
+    )
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
 
     tts_tasks.generate_job_tts.run(str(job_id))
