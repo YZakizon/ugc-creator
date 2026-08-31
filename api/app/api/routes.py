@@ -1158,7 +1158,11 @@ def upload_job_audio(
         filename=filename,
         content_type=payload.content_type,
         size_bytes=len(content),
-        generation_metadata={"source": "upload", "duration_seconds": duration_seconds},
+        generation_metadata={
+            "source": "upload",
+            "duration_seconds": duration_seconds,
+            "original_filename": source_filename,
+        },
     )
     if updated is None:
         storage.delete(object_key)
@@ -1220,6 +1224,7 @@ def upload_job_source_image(
         filename=filename,
         content_type=payload.content_type,
         size_bytes=len(content),
+        generation_metadata={"source": "upload", "original_filename": source_filename},
     )
     if updated is None:
         storage.delete(object_key)

@@ -25,6 +25,12 @@ def now() -> datetime:
 
 
 SUBMISSION_CLAIM_DURATION = timedelta(minutes=5)
+ACTIVE_RENDER_JOB_STATUSES = {
+    JobStatus.QUEUED.value,
+    JobStatus.SUBMITTING_RENDER.value,
+    JobStatus.RENDERING.value,
+    JobStatus.DOWNLOADING_OUTPUT.value,
+}
 
 
 class RenderExecutionRepository:
@@ -549,23 +555,6 @@ class RenderExecutionRepository:
             job = session.scalar(
                 select(TopicJob).where(TopicJob.id == asset.job_id).with_for_update()
             )
-            active_attempt = session.scalar(
-                select(RenderAttempt.id)
-                .where(
-                    RenderAttempt.job_id == asset.job_id,
-                    RenderAttempt.status.in_(
-                        [
-                            "queued",
-                            "submitting_render",
-                            "rendering",
-                            "downloading_output",
-                        ]
-                    ),
-                )
-                .limit(1)
-            )
-            if active_attempt is not None:
-                raise ValueError("Video cannot be deleted while a rerender is active")
             asset.render_attempt.output_filename = asset.filename
             asset.render_attempt.output_deleted_at = now()
             session.delete(asset)
@@ -575,7 +564,11 @@ class RenderExecutionRepository:
                 .where(MediaAsset.job_id == asset.job_id, MediaAsset.kind == "video")
                 .limit(1)
             )
-            if job is not None and remaining is None:
+            if (
+                job is not None
+                and remaining is None
+                and job.status not in ACTIVE_RENDER_JOB_STATUSES
+            ):
                 job.status = JobStatus.READY_TO_RENDER.value
                 job.error_message = None
             session.commit()

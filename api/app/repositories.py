@@ -678,6 +678,7 @@ class InMemoryBatchRepository:
                 filename=filename,
                 content_type=content_type,
                 size_bytes=size_bytes,
+                generation_metadata=generation_metadata,
                 created_at=utc_now(),
                 updated_at=utc_now(),
             )
@@ -1493,6 +1494,7 @@ class SqlAlchemyBatchRepository:
         filename: str,
         content_type: str,
         size_bytes: int,
+        generation_metadata: dict[str, object] | None = None,
     ) -> TopicJob | None:
         with self.factory() as session:
             job = session.scalar(
@@ -1514,6 +1516,7 @@ class SqlAlchemyBatchRepository:
                     filename=filename,
                     content_type=content_type,
                     size_bytes=size_bytes,
+                    generation_metadata=generation_metadata,
                 )
             )
             if job.status == JobStatus.COMPLETED.value:

@@ -307,7 +307,7 @@ describe("CreateVideoPanel", () => {
 
     await waitFor(() => expect(requests).toContainEqual({ url: "/api/v1/assets/audio-1", method: "DELETE" }));
     expect(deleteVideoButton).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rendered LTX params" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show rendered LTX params for created-video_content1_0001-video.mp4" }));
     const paramsDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 params" });
     expect(within(paramsDialog).getByText("Image source")).toBeVisible();
     expect(within(paramsDialog).getByText("attempt-image.png")).toBeVisible();
@@ -401,6 +401,57 @@ describe("CreateVideoPanel", () => {
     await waitFor(() => expect(screen.getByLabelText("Duration")).toHaveValue("14"));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/render-overrides") && request.body?.includes('"duration":14'))).toBe(true));
     expect(screen.getByText("created-video_content1_0001-audio.mp3 · active")).toBeInTheDocument();
+  });
+
+  it("shows uploaded source image and audio in current Rendered LTX params", async () => {
+    const originalImage = mediaAsset("image-old", "source_image", "old-source.png");
+    const uploadedImage = { ...mediaAsset("image-new", "source_image", "created-video_0001.png"), generation_metadata: { source: "upload", original_filename: "new-source.png" } };
+    const originalAudio = { ...mediaAsset("audio-old", "audio", "old-audio.mp3"), generation_metadata: { source: "upload", duration_seconds: 8 } };
+    const uploadedAudio = { ...mediaAsset("audio-new", "audio", "created-video_0001.mp3"), generation_metadata: { source: "upload", duration_seconds: 11, original_filename: "new-audio.mp3" } };
+    let imageUploaded = false;
+    let audioUploaded = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const currentImage = imageUploaded ? uploadedImage : originalImage;
+      const currentAudio = audioUploaded ? uploadedAudio : originalAudio;
+      const currentJob = { ...job({ video_prompt: "Elena says {{SCRIPT}}", duration: audioUploaded ? 12 : 9 }), source_image_asset: currentImage, audio_asset: currentAudio, audio_assets: [currentAudio] };
+      if (url.includes("/topics/topic-1")) return json({ ...topic({ video_prompt: "Elena says {{SCRIPT}}", duration: audioUploaded ? 12 : 9 }), contents: [currentJob] });
+      if (url.includes("/on-demand-videos/topic-1")) return json({ ...topic({ video_prompt: "Elena says {{SCRIPT}}", duration: audioUploaded ? 12 : 9 }), contents: [currentJob] });
+      if (url.includes("/jobs/job-1/source-image") && init?.method === "POST") {
+        imageUploaded = true;
+        return json({ ...currentJob, source_image_asset: uploadedImage });
+      }
+      if (url.includes("/jobs/job-1/audio") && init?.method === "POST") {
+        audioUploaded = true;
+        return json({ ...currentJob, audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
+      }
+      if (url.includes("/jobs/job-1/render-overrides") && init?.method === "PATCH") return json({ ...currentJob, audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
+      if (url.includes("/workflow-templates")) return json({ items: [workflowTemplate()], total: 1 });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [{ voice_id: "voice-hope", name: "Hope", category: "saved", description: null, preview_url: null }], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/usage")) return json({ provider: "elevenlabs", configured: true, used_units: 10, limit_units: 100, remaining_units: 90, resets_at_unix: null, unit: "characters" });
+      if (url.includes("/render-nodes")) return json({ items: [], total: 0 });
+      if (url.includes("/render-attempts")) return json({ items: [], total: 0 });
+      return json({});
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+
+    const imageInput = await screen.findByLabelText("Source image", { selector: "input" });
+    fireEvent.change(imageInput, { target: { files: [new File(["image"], "new-source.png", { type: "image/png" })] } });
+    await waitFor(() => expect(screen.getByText("Override image: new-source.png")).toBeInTheDocument());
+    const audioInput = await screen.findByLabelText("Audio file", { selector: "input" });
+    fireEvent.change(audioInput, { target: { files: [new File(["audio"], "new-audio.mp3", { type: "audio/mpeg" })] } });
+
+    await waitFor(() => expect(screen.getByText("Override audio: new-audio.mp3")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Audio source")).toHaveValue("audio-new"));
+    fireEvent.click(await screen.findByRole("button", { name: "Rendered LTX params" }));
+
+    const paramsDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 params" });
+    expect(within(paramsDialog).getByText("new-source.png")).toBeVisible();
+    expect(within(paramsDialog).getByText("new-audio.mp3")).toBeVisible();
+    expect(within(paramsDialog).getByText("Elena says Saved script")).toBeVisible();
+    expect(within(paramsDialog).getByText("12")).toBeVisible();
   });
 
   it("updates LTX duration to selected audio duration plus one second", async () => {
@@ -519,6 +570,45 @@ describe("CreateVideoPanel", () => {
 
     await waitFor(() => expect(requests).toContainEqual({ url: "/api/v1/render-attempts/attempt-1/cancel", method: "POST" }));
   });
+
+  it("allows deleting a completed video while a new render is active", async () => {
+    const audioAsset = mediaAsset("audio-1", "audio", "active-audio.mp3");
+    const sourceImage = mediaAsset("image-1", "source_image", "source.png");
+    const completedVideo = mediaAsset("video-completed", "video", "completed.mp4");
+    const completedAttempt = renderAttempt(completedVideo, { id: "attempt-completed" });
+    const activeAttempt = renderAttempt(mediaAsset("video-active", "video", "pending.mp4"), {
+      id: "attempt-active",
+      status: "rendering",
+      progress: 47,
+      assets: [],
+      output_filename: null,
+      completed_at: null,
+    });
+    const requests: Array<{ url: string; method?: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, method: init?.method });
+      if (url.includes("/topics/topic-1")) {
+        return json({ ...topic(), contents: [{ ...job(), source_image_asset: sourceImage, audio_asset: audioAsset, audio_assets: [audioAsset], status: "rendering" }] });
+      }
+      if (url.includes("/render-attempts")) return json({ items: [activeAttempt, completedAttempt], total: 2 });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [{ voice_id: "voice-hope", name: "Hope", category: "saved", description: null, preview_url: null }], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/usage")) return json({ provider: "elevenlabs", configured: true, used_units: 10, limit_units: 100, remaining_units: 90, resets_at_unix: null, unit: "characters" });
+      if (url.includes("/render-nodes")) return json({ items: [], total: 0 });
+      if (url.includes("/workflow-templates")) return json({ items: [], total: 0 });
+      if (url.endsWith("/api/v1/assets/video-completed") && init?.method === "DELETE") return json({}, 204);
+      return json({ items: [], total: 0, limit: 50, offset: 0 });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+
+    const deleteCompletedVideo = await screen.findByRole("button", { name: "Delete completed.mp4" });
+    expect(deleteCompletedVideo).toBeEnabled();
+    fireEvent.click(deleteCompletedVideo);
+
+    await waitFor(() => expect(requests).toContainEqual({ url: "/api/v1/assets/video-completed", method: "DELETE" }));
+  });
 });
 
 function mediaAsset(id: string, kind: string, filename: string) {
@@ -570,7 +660,12 @@ function workflowTemplate() {
     id: "workflow-1",
     name: "LTX remembered workflow",
     description: null,
-    workflow_json: {},
+    workflow_json: {
+      image: { class_type: "LoadImage", inputs: { image: "workflow-source.png" } },
+      audio: { class_type: "LoadAudio", inputs: { audio: "workflow-audio.mp3" } },
+      prompt: { _meta: { title: "Prompt" }, class_type: "PrimitiveStringMultiline", inputs: { value: "Remembered LTX prompt" } },
+      duration: { _meta: { title: "Duration" }, class_type: "PrimitiveInt", inputs: { value: 30 } },
+    },
     metadata_json: {},
     version: 1,
     checksum: "abc",

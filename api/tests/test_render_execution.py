@@ -629,10 +629,12 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
     assert completed.assets[0].object_key == "jobs/video.mp4"
     rerender = repo.queue_attempt(job_id, node.id)
     assert rerender.id != first.id
-    with pytest.raises(ValueError, match="rerender is active"):
-        repo.delete_video_asset(completed.assets[0].id)
-    assert repo.update_progress(rerender.id, "failed", 0, "Stopped")
     assert repo.delete_video_asset(completed.assets[0].id)
+    with factory() as session:
+        active_job = session.get(TopicJob, job_id)
+        assert active_job is not None
+        assert active_job.status == "queued"
+    assert repo.update_progress(rerender.id, "failed", 0, "Stopped")
     deleted_attempt = repo.get_attempt(first.id)
     assert deleted_attempt is not None
     assert deleted_attempt.assets == []
@@ -641,7 +643,7 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
     with factory() as session:
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None
-        assert reset_job.status == "ready_to_render"
+        assert reset_job.status == "failed"
 
 
 def test_cancel_render_attempt_returns_job_to_ready_to_render() -> None:

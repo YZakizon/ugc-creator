@@ -124,6 +124,10 @@ function defaultRenderAudioAsset(job: Job | null | undefined): MediaAsset | null
   return latestGeneratedAudioAsset(job) ?? activeAudioAsset(job);
 }
 
+function mediaDisplayName(asset: MediaAsset | null | undefined): string {
+  return asset?.generation_metadata?.original_filename ?? asset?.filename ?? "";
+}
+
 function InfoTooltip({ label }: { label: string }) {
   return <span className="control-tooltip" aria-hidden="true" title={label}>?</span>;
 }
@@ -254,6 +258,8 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const [voiceOutputFormat, setVoiceOutputFormat] = useState("mp3_44100_128");
   const [voiceSpeakerBoost, setVoiceSpeakerBoost] = useState(true);
   const [selectedAudioAssetId, setSelectedAudioAssetId] = useState("");
+  const [pendingSourceImageName, setPendingSourceImageName] = useState("");
+  const [pendingAudioFileName, setPendingAudioFileName] = useState("");
   const [toast, setToast] = useState<{ message: string; variant: "success" | "danger" | "info" } | null>(null);
   const [renderPreflightError, setRenderPreflightError] = useState<string | null>(null);
   const [renderedLtxParams, setRenderedLtxParams] = useState<RenderedWorkflowControl[] | null>(null);
@@ -323,6 +329,9 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const active = currentJob ? ACTIVE_STATUSES.has(currentJob.status) : false;
   const selectedWorkflow = workflowTemplates.find((workflow) => workflow.id === workflowTemplateId);
   const firstProfile = renderProfiles.find((profile) => profile.id === renderProfileId);
+  const selectedAudioAsset = currentJob?.audio_assets?.find((asset) => asset.id === selectedAudioAssetId) ?? defaultRenderAudioAsset(currentJob);
+  const sourceImageDisplayName = pendingSourceImageName || mediaDisplayName(currentJob?.source_image_asset);
+  const audioFileDisplayName = pendingAudioFileName || mediaDisplayName(currentJob?.audio_asset);
 
   useEffect(() => {
     if (!latestAttemptStatus || !CANCELABLE_RENDER_STATUSES.has(latestAttemptStatus)) return;
@@ -420,6 +429,30 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       },
     };
   }, [duration, fps, seed, videoPrompt, voiceId, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId]);
+  const currentRenderedControls = useMemo(() => {
+    if (!selectedWorkflow || !currentJob) return [];
+    return previewLtxRenderControls(selectedWorkflow, {
+      ...currentJob,
+      audio_asset: selectedAudioAsset ?? currentJob.audio_asset,
+      source_image_asset: sourceImageDisplayName
+        ? {
+            ...(currentJob.source_image_asset ?? {
+              id: "pending-source-image",
+              job_id: currentJob.id,
+              kind: "source_image",
+              content_type: null,
+              size_bytes: 0,
+              generation_metadata: null,
+              download_url: "",
+              created_at: new Date(0).toISOString(),
+            }),
+            filename: sourceImageDisplayName,
+          }
+        : currentJob.source_image_asset,
+      render_overrides: renderOverrides(),
+      target_duration_seconds: Number.parseInt(duration, 10) || currentJob.target_duration_seconds,
+    });
+  }, [currentJob, duration, renderOverrides, selectedAudioAsset, selectedWorkflow, sourceImageDisplayName]);
 
   const saveInput = useCallback(() => {
     return {
@@ -653,10 +686,20 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         content_type: file.type || "image/png",
       });
     },
+    onMutate: async (file) => {
+      setPendingSourceImageName(file.name);
+      if (currentTopicId) {
+        await queryClient.cancelQueries({ queryKey: ["on-demand-video", currentTopicId] });
+      }
+    },
     onSuccess: (updatedJob) => {
       setRenderPreflightError(null);
+      setPendingSourceImageName(mediaDisplayName(updatedJob.source_image_asset));
       cacheUpdatedJob(updatedJob);
       invalidate();
+    },
+    onError: () => {
+      setPendingSourceImageName("");
     },
   });
 
@@ -669,18 +712,29 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         content_type: file.type || "audio/mpeg",
       });
     },
+    onMutate: async (file) => {
+      setPendingAudioFileName(file.name);
+      if (currentTopicId) {
+        await queryClient.cancelQueries({ queryKey: ["on-demand-video", currentTopicId] });
+      }
+    },
     onSuccess: (updatedJob) => {
       setRenderPreflightError(null);
       const nextDuration = applyAudioDuration(activeAudioAsset(updatedJob));
+      setPendingAudioFileName(mediaDisplayName(activeAudioAsset(updatedJob)));
       cacheUpdatedJob(updatedJob);
       if (nextDuration) {
         void updateJobRenderOverrides(updatedJob.id, renderOverrides(nextDuration)).then((savedJob) => {
+          setPendingAudioFileName(mediaDisplayName(activeAudioAsset(savedJob)));
           cacheUpdatedJob(savedJob);
           invalidate();
         }).catch(() => invalidate());
       } else {
         invalidate();
       }
+    },
+    onError: () => {
+      setPendingAudioFileName("");
     },
   });
 
@@ -869,12 +923,12 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
               <div className="create-video-override-item">
                 <span className="create-video-override-label">Source image</span>
                 <label className="create-video-file-control"><input type="file" accept="image/*" disabled={uploadSourceImage.isPending || active || !title.trim() || !renderProfileId} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadSourceImage.mutate(file); event.target.value = ""; }} /><span>{uploadSourceImage.isPending ? "Uploading image…" : "Source image"}</span></label>
-                <small className="field-hint">{currentJob?.source_image_asset?.filename ? `Override image: ${currentJob.source_image_asset.filename}` : "Using workflow default image until overridden."}</small>
+                <small className="field-hint">{sourceImageDisplayName ? `Override image: ${sourceImageDisplayName}` : "Using workflow default image until overridden."}</small>
               </div>
               <div className="create-video-override-item">
                 <span className="create-video-override-label">Audio file</span>
                 <label className="create-video-file-control"><input type="file" accept="audio/*" disabled={uploadAudio.isPending || active || !title.trim() || !renderProfileId} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadAudio.mutate(file); event.target.value = ""; }} /><span>{uploadAudio.isPending ? "Uploading audio…" : "Audio file"}</span></label>
-                <small className="field-hint">{currentJob?.audio_asset?.filename ? `Override audio: ${currentJob.audio_asset.filename}` : "Using workflow default audio until overridden."}</small>
+                <small className="field-hint">{audioFileDisplayName ? `Override audio: ${audioFileDisplayName}` : "Using workflow default audio until overridden."}</small>
               </div>
             </div>
             <label className="field-label">Audio source<select value={selectedAudioAssetId} disabled={!currentJob?.audio_assets?.length || selectAudio.isPending || active} onChange={(event) => handleAudioSourceChange(event.target.value)}><option value="">No generated audio selected</option>{currentJob?.audio_assets?.map((asset) => <option key={asset.id} value={asset.id}>{asset.filename}{asset.kind === "audio" ? " · active" : ""}</option>)}</select></label>
@@ -889,7 +943,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
           <div className="create-video-actions">
             <button className="button button-secondary" type="button" disabled={saveOverrides.isPending || !currentJob || active} onClick={() => saveOverrides.mutate()}>{saveOverrides.isPending ? "Saving controls…" : "Save LTX controls"}</button>
             <button className="button button-primary create-video-generate" type="button" disabled={generateVideo.isPending || selectAudio.isPending || !renderProfileId || active} onClick={handleGenerateVideo}>{generateVideo.isPending ? "Queuing video…" : "Generate Video"}</button>
-            <button className="button button-secondary rendered-settings-action" type="button" disabled={!latestAttempt} onClick={() => setRenderedLtxParams(latestAttempt?.rendered_controls ?? [])}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg>Rendered LTX params</button>
+            <button className="button button-secondary rendered-settings-action" type="button" disabled={!currentRenderedControls.length} onClick={() => setRenderedLtxParams(currentRenderedControls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg>Rendered LTX params</button>
           </div>
           {(!currentJob?.source_image_asset || !currentJob?.audio_asset) && <p className="field-hint">Source image and audio are required before rendering video.</p>}
           {latestAttempt && <div className="create-video-progress"><span>{renderProgress(latestAttempt)} <RenderElapsed attempt={latestAttempt} nowMs={renderNowMs} /></span><progress max={100} value={latestAttempt.progress > 1 ? latestAttempt.progress : undefined} />{CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <button className="job-media-icon danger" type="button" aria-label="Cancel rendering" title="Cancel rendering" disabled={cancelRender.isPending} onClick={() => cancelRender.mutate(latestAttempt.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}</div>}
@@ -897,7 +951,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Completed video history</h3><p>Completed renders for this created video.</p></div></div>
-          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? `${attempt.provider} render`}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button></div>{attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
+          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? `${attempt.provider} render`}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button></div>{attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
         </section>
       </div>
 

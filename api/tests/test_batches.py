@@ -348,6 +348,12 @@ async def test_on_demand_source_image_upload_sets_active_image(
 
     assert uploaded.status_code == 200
     assert uploaded.json()["source_image_asset"]["filename"].endswith(".png")
+    assert (
+        uploaded.json()["source_image_asset"]["generation_metadata"][
+            "original_filename"
+        ]
+        == "source.png"
+    )
 
 
 @pytest.mark.asyncio

@@ -221,6 +221,7 @@ export type MediaAsset = {
     script_sha256?: string;
     duration_seconds?: number;
     generated_at?: string;
+    original_filename?: string;
   } | null;
   download_url: string;
   created_at: string;
