@@ -105,7 +105,10 @@ async def test_openai_provider_uses_saved_prompt_text_and_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_provider_requires_server_key() -> None:
+async def test_openai_provider_requires_server_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     provider = OpenAIResponsesProvider(api_key=None)
     with pytest.raises(LLMProviderError, match="not configured"):
         await provider.generate_ugc_content(

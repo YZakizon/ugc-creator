@@ -220,9 +220,7 @@ async def test_comfyui_missing_history_and_queue_is_lost_prompt() -> None:
         if request.url.path == "/history/prompt-lost":
             return httpx.Response(200, json={})
         if request.url.path == "/queue":
-            return httpx.Response(
-                200, json={"queue_running": [], "queue_pending": []}
-            )
+            return httpx.Response(200, json={"queue_running": [], "queue_pending": []})
         raise AssertionError(f"Unexpected request: {request.url}")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:

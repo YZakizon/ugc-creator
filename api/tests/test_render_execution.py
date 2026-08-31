@@ -169,6 +169,7 @@ async def test_claim_expiring_during_preparation_schedules_reconciliation(
         hook=None,
         target_duration_seconds=30,
         media_assets=[],
+        render_overrides={},
     )
     profile = SimpleNamespace(
         default_parameters={},
