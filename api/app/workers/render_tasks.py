@@ -6,6 +6,7 @@ from pathlib import PurePath
 from uuid import UUID
 
 from app.core.media_naming import generated_media_filename
+from app.db.models import MediaAsset
 from app.db.session import create_database_engine, session_factory
 from app.providers.render.comfyui import (
     ComfyUIProviderError,
@@ -49,16 +50,16 @@ def render_input_filename(filename: str, attempt_id: UUID | str) -> str:
     return f"{attempt_id}-{PurePath(filename).name}"
 
 
-def newest_media_asset(assets: Iterable[object], kind: str) -> object | None:
-    matching = [asset for asset in assets if getattr(asset, "kind", None) == kind]
+def newest_media_asset(assets: Iterable[MediaAsset], kind: str) -> MediaAsset | None:
+    matching = [asset for asset in assets if asset.kind == kind]
     if not matching:
         return None
     return sorted(
         matching,
         key=lambda asset: (
-            getattr(asset, "created_at", None) or datetime.min.replace(tzinfo=UTC),
-            getattr(asset, "updated_at", None) or datetime.min.replace(tzinfo=UTC),
-            str(getattr(asset, "id", "")),
+            asset.created_at or datetime.min.replace(tzinfo=UTC),
+            asset.updated_at or datetime.min.replace(tzinfo=UTC),
+            str(asset.id),
         ),
         reverse=True,
     )[0]

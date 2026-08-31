@@ -650,7 +650,7 @@ def _workflow_for_on_demand_payload(
     payload: OnDemandVideoSave,
     profile: object,
     config_repo: ConfigurationRepository,
-):
+) -> object | None:
     workflow_template_id = payload.workflow_template_id or getattr(
         profile, "workflow_template_id"
     )
