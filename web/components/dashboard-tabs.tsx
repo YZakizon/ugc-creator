@@ -8,10 +8,11 @@ type DashboardTab = {
   content: ReactNode;
 };
 
-const tabIds = new Set(["overview", "create", "content", "library", "profiles", "workflows"]);
+const tabIds = new Set(["overview", "create-video", "create", "content", "library", "profiles", "workflows"]);
 
 function tabForHash(hash: string): string {
   const value = hash.replace(/^#/, "");
+  if (value === "create-video") return "create-video";
   if (value === "new-batch" || value === "new-topic" || value === "create") return "create";
   if (value === "new-profile" || value === "profiles" || value === "characters" || value === "voices") return "profiles";
   if (value === "jobs" || value === "content") return "content";

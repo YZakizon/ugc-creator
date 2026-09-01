@@ -1,14 +1,20 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 
 export type ToastVariant = "success" | "danger" | "info";
 
 export function Toast({ message, content, variant = "success", onClose }: { message: string; content?: React.ReactNode; variant?: ToastVariant; onClose: () => void }) {
+  const onCloseRef = useRef(onClose);
+
   useEffect(() => {
-    const timeout = window.setTimeout(onClose, 5000);
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => onCloseRef.current(), 5000);
     return () => window.clearTimeout(timeout);
-  }, [message, onClose]);
+  }, [message]);
 
   return (
     <div className={`toast toast-${variant}`} role={variant === "danger" ? "alert" : "status"}>

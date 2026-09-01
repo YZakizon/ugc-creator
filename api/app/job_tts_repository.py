@@ -141,6 +141,7 @@ class JobTTSRepository:
         filename: str,
         content_type: str,
         size_bytes: int,
+        duration_seconds: float | None = None,
     ) -> TopicJob | None:
         completed_at = datetime.now(UTC)
         voice = context.voice_profile
@@ -172,6 +173,7 @@ class JobTTSRepository:
                         "model": model_id,
                         "settings": settings,
                         "provider_request_id": provider_request_id,
+                        "duration_seconds": duration_seconds,
                         "script_sha256": hashlib.sha256(
                             context.speech_script.encode("utf-8")
                         ).hexdigest(),

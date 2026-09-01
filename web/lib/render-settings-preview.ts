@@ -13,6 +13,20 @@ function storedMediaName(workflow: WorkflowTemplate, key: "source_image" | "audi
   return (media[key] as string).split("/").at(-1);
 }
 
+function assetDisplayName(asset: Job["audio_asset"] | undefined): string | undefined {
+  return asset?.generation_metadata?.original_filename ?? asset?.filename;
+}
+
+function numericOverride(job: Job, key: string): number | undefined {
+  const value = job.render_overrides?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringOverride(job: Job, key: string): string | undefined {
+  const value = job.render_overrides?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function expand(value: Scalar, values: Record<string, string | number | undefined>): Scalar {
   if (typeof value !== "string") return value;
   return value.replace(/\{\{([A-Z0-9_]+)\}\}/g, (token, key: string) => {
@@ -26,10 +40,10 @@ function fields(workflow: WorkflowTemplate, job: Job): Field[] {
     SCRIPT: job.speech_script ?? job.topic,
     TOPIC: job.topic,
     HOOK: job.hook ?? "",
-    VIDEO_PROMPT: job.speech_script ?? job.topic,
-    DURATION: job.target_duration_seconds,
-    AUDIO: job.audio_asset?.filename ?? storedMediaName(workflow, "audio"),
-    SOURCE_IMAGE: storedMediaName(workflow, "source_image"),
+    VIDEO_PROMPT: stringOverride(job, "video_prompt") ?? job.speech_script ?? job.topic,
+    DURATION: numericOverride(job, "duration") ?? job.target_duration_seconds,
+    AUDIO: assetDisplayName(job.audio_asset) ?? storedMediaName(workflow, "audio"),
+    SOURCE_IMAGE: assetDisplayName(job.source_image_asset) ?? storedMediaName(workflow, "source_image"),
   };
   return Object.entries(workflow.workflow_json).flatMap(([nodeId, rawNode]) => {
     if (!isRecord(rawNode) || typeof rawNode.class_type !== "string" || !isRecord(rawNode.inputs)) return [];
@@ -87,6 +101,12 @@ function primarySeedField(workflow: WorkflowTemplate, items: Field[]): Field | u
 export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): RenderedWorkflowControl[] {
   const items = fields(workflow, job);
   const numeric = (field: Field) => typeof field.value === "number";
+  const prompt = stringOverride(job, "video_prompt");
+  const fps = numericOverride(job, "fps");
+  const duration = numericOverride(job, "duration");
+  const seed = numericOverride(job, "seed");
+  const sourceImage = assetDisplayName(job.source_image_asset) ?? storedMediaName(workflow, "source_image");
+  const audio = assetDisplayName(job.audio_asset) ?? storedMediaName(workflow, "audio");
   const controls: Array<[string, Field | undefined]> = [
     ["Image source", first(items, (field) => /loadimage/i.test(field.classType) && field.input_name === "image")],
     ["Audio source", first(items, (field) => /loadaudio/i.test(field.classType) && field.input_name === "audio")],
@@ -98,5 +118,23 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
     ["Width", first(items, (field) => numeric(field) && (/^width$/i.test(field.title.trim()) || /^width$/i.test(field.input_name)))],
     ["Height", first(items, (field) => numeric(field) && (/^height$/i.test(field.title.trim()) || /^height$/i.test(field.input_name)))],
   ];
-  return controls.flatMap(([label, field]) => field ? [{ label, node_id: field.node_id, input_name: field.input_name, value: field.value }] : []);
+  return controls.flatMap(([label, field]) => {
+    if (!field) return [];
+    let value = field.value;
+    if (label === "Image source" && sourceImage) value = sourceImage;
+    if (label === "Audio source" && audio) value = audio;
+    if (label === "Prompt" && prompt) value = expand(prompt, {
+      SCRIPT: job.speech_script ?? job.topic,
+      TOPIC: job.topic,
+      HOOK: job.hook ?? "",
+      VIDEO_PROMPT: prompt,
+      DURATION: duration ?? job.target_duration_seconds,
+      AUDIO: audio,
+      SOURCE_IMAGE: sourceImage,
+    });
+    if (label === "FPS" && fps !== undefined) value = fps;
+    if (label === "Duration" && duration !== undefined) value = duration;
+    if (label === "Seed" && seed !== undefined) value = seed;
+    return [{ label, node_id: field.node_id, input_name: field.input_name, value }];
+  });
 }

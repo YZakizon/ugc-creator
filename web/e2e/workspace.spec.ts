@@ -130,7 +130,7 @@ test.describe("workspace customer journeys", () => {
     const renderProfileName = `Elena Shelf ${suffix}`;
     const nodeName = `Fake ComfyUI ${suffix}`;
     const topicName = `Burnout is not laziness ${suffix}`;
-    const mediaBase = `burnout-is-not-laziness-${suffix}`;
+    const mediaBase = "burnout-is-not-laz";
     await page.getByRole("link", { name: "Workflows" }).click();
     await expect(page.getByRole("heading", { name: "Workflows" })).toBeVisible();
     await page.getByRole("tab", { name: "Create workflow" }).click();
@@ -201,7 +201,7 @@ test.describe("workspace customer journeys", () => {
     await page.getByLabel("ComfyUI URL").fill("http://fake-comfyui-test:8188");
     await page.getByRole("button", { name: "Add render node" }).click();
     await expect(page.getByText("Render node saved.")).toBeVisible();
-    await page.getByRole("button", { name: "Test connection" }).click();
+    await page.locator(".render-node-card").filter({ hasText: nodeName }).getByRole("button", { name: "Test connection" }).click();
     await expect(page.getByText("ComfyUI is connected.")).toBeVisible();
 
     await page.getByRole("link", { name: "Create topic" }).click();
@@ -244,12 +244,12 @@ test.describe("workspace customer journeys", () => {
     await firstJob.getByRole("tab", { name: "Render ComfyUI" }).click();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toHaveValue(workflowTemplateId);
     await expect(firstJob.getByRole("link", { name: "Open workflow details" })).toHaveAttribute("href", `/workflows#workflow-${workflowTemplateId}`);
-    await expect(firstJob.locator(".job-render-audio").getByText(`${mediaBase}_content1_0001.wav`)).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText(`${mediaBase}_0001.wav`)).toBeVisible();
     await expect(firstJob.getByRole("link", { name: "Download render audio" })).toHaveCount(0);
     const audioUploadResponse = page.waitForResponse((response) => response.url().includes(`/api/v1/jobs/`) && response.url().endsWith("/audio") && response.request().method() === "POST");
     await firstJob.getByLabel("Upload different audio").setInputFiles({ name: "replacement.wav", mimeType: "audio/wav", buffer: wavBuffer() });
     expect((await audioUploadResponse).status()).toBe(200);
-    await expect(firstJob.locator(".job-render-audio").getByText(`${mediaBase}_content1_0002.wav`)).toBeVisible();
+    await expect(firstJob.locator(".job-render-audio").getByText(`${mediaBase}_0002.wav`)).toBeVisible();
     await firstJob.getByRole("button", { name: "Render with ComfyUI" }).click();
     await expect.poll(async () => (await firstJob.innerText()).toLowerCase(), {
       timeout: 20_000,
@@ -259,9 +259,9 @@ test.describe("workspace customer journeys", () => {
       timeout: 30_000,
       intervals: [1000, 2000],
     }).toContain("completed");
-    await expect(firstJob.getByRole("button", { name: `Preview ${mediaBase}_content1_0001.mp4` })).toBeVisible();
-    await expect(firstJob.getByRole("link", { name: `Download ${mediaBase}_content1_0001.mp4` })).toBeVisible();
-    await expect(firstJob.getByRole("button", { name: `Delete ${mediaBase}_content1_0001.mp4` })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: `Preview ${mediaBase}_0001.mp4` })).toBeVisible();
+    await expect(firstJob.getByRole("link", { name: `Download ${mediaBase}_0001.mp4` })).toBeVisible();
+    await expect(firstJob.getByRole("button", { name: `Delete ${mediaBase}_0001.mp4` })).toBeVisible();
     await expect(firstJob.getByRole("combobox", { name: "Render profile", exact: true })).toBeEnabled();
     await expect(firstJob.getByRole("combobox", { name: "Workflow", exact: true })).toBeEnabled();
     await firstJob.getByRole("tab", { name: "Generate speech" }).click();
@@ -273,11 +273,11 @@ test.describe("workspace customer journeys", () => {
     const rerenderResponse = page.waitForResponse((response) => response.url().includes("/render?node_id=") && response.request().method() === "POST");
     await firstJob.getByRole("button", { name: "Generate new video" }).click();
     expect((await rerenderResponse).status()).toBe(202);
-    await expect(firstJob.getByRole("link", { name: `Download ${mediaBase}_content1_0002.mp4` })).toBeVisible({ timeout: 30_000 });
+    await expect(firstJob.getByRole("link", { name: `Download ${mediaBase}_0002.mp4` })).toBeVisible({ timeout: 30_000 });
 
     await page.getByRole("tab", { name: "Library" }).click();
-    await expect(page.getByLabel("Output library").getByText(`${mediaBase}_content1_0001.mp4`, { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Output library").getByText(`${mediaBase}_content1_0002.mp4`, { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText(`${mediaBase}_0001.mp4`, { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Output library").getByText(`${mediaBase}_0002.mp4`, { exact: true })).toBeVisible();
     const videoDownload = page.getByRole("link", { name: "Download video" }).first();
     const videoResponse = await page.request.get(await videoDownload.getAttribute("href") ?? "");
     expect(videoResponse.status()).toBe(200);

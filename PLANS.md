@@ -1811,6 +1811,17 @@ Append decisions here as implementation clarifies unknowns.
   saved; enqueue/provider failures leave it available for rendering.
 - Topic history uses API pagination so older Topics remain browsable and deletable.
 
+## 40.8 On-demand Created Video workspace
+
+- Dashboard Create Video is a separate on-demand workspace for one saved video
+  draft plus its generated audio/video history.
+- Created Videos are stored with a distinct `creation_mode` and are listed through
+  dedicated API/UI paths so they do not appear in normal Topic/Content history.
+- The first implementation reuses the existing TopicJob/RenderAttempt pipeline to
+  avoid a parallel generation system, but normal Topic lists filter them out.
+- Per-video LTX controls are stored as render overrides on the content job and are
+  applied only to the copied render payload during execution.
+
 Format:
 
 ```text
@@ -1822,6 +1833,20 @@ Consequences:
 ```
 
 Initial decisions:
+
+### 2026-08-10 — Created Videos are separate from Topic history
+**Status: accepted**
+
+**Decision:** On-demand Create Video records use a dedicated `created_video`
+creation mode and dedicated API/UI lists. They do not appear in normal Topic or
+Content history.
+
+**Reason:** Users need a simple saved-video workspace that is not mixed with the
+repeatable Topic/Content production flow.
+
+**Consequences:** The implementation can reuse TopicJob and RenderAttempt for the
+generation pipeline, but repositories and dashboard lists must filter by creation
+mode so Create Video and Topic/Content remain separate user concepts.
 
 ### 2026-08-06 — Provider-neutral renderer abstraction
 **Status: accepted**

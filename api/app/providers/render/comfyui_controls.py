@@ -40,6 +40,88 @@ def rendered_ltx_controls(workflow: dict[str, object]) -> list[dict[str, object]
     ]
 
 
+def apply_explicit_media_loader_overrides(
+    workflow: dict[str, object], values: dict[str, object]
+) -> None:
+    """Apply explicit render media to every matching ComfyUI loader node.
+
+    Semantic bindings remain the primary mapping mechanism. This guard handles
+    ComfyUI workflows with multiple LoadImage/LoadAudio nodes where the visible
+    or imported binding points at one loader but the actual downstream graph
+    reads from another. It only touches the per-render workflow copy.
+    """
+
+    media_inputs = {
+        "loadimage": ("source_image", "image"),
+        "loadaudio": ("audio", "audio"),
+    }
+    for raw_node in workflow.values():
+        if not isinstance(raw_node, dict):
+            continue
+        class_type = raw_node.get("class_type")
+        inputs = raw_node.get("inputs")
+        if not isinstance(class_type, str) or not isinstance(inputs, dict):
+            continue
+        for class_pattern, (semantic_key, input_name) in media_inputs.items():
+            value = values.get(semantic_key)
+            if not isinstance(value, str) or not value:
+                continue
+            if re.search(class_pattern, class_type, re.IGNORECASE) and isinstance(
+                inputs.get(input_name), str
+            ):
+                inputs[input_name] = value
+
+
+def inferred_ltx_bindings(
+    workflow: dict[str, object],
+    existing_bindings: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Return bindings for visible LTX controls that are not already bound.
+
+    These bindings are inferred from the workflow structure at render-attempt
+    snapshot time. The stored template JSON is not mutated, and existing user
+    bindings always win.
+    """
+
+    existing_keys = {
+        binding.get("semantic_key")
+        for binding in existing_bindings
+        if isinstance(binding.get("semantic_key"), str)
+    }
+    fields = _scalar_fields(workflow)
+    controls: list[tuple[str, str, str, WorkflowField | None]] = [
+        ("video_prompt", "template", "Prompt", _prompt_field(fields)),
+        ("fps", "integer", "FPS", _numeric_field(fields, r"^frame rate$", "fps")),
+        (
+            "duration",
+            "integer",
+            "Duration",
+            _numeric_field(fields, "duration", "duration"),
+        ),
+        ("seed", "integer", "Seed", _primary_seed_field(workflow, fields)),
+    ]
+    inferred: list[dict[str, object]] = []
+    for semantic_key, value_type, _label, field in controls:
+        if field is None or semantic_key in existing_keys:
+            continue
+        if value_type == "integer" and (
+            not isinstance(field.value, int) or isinstance(field.value, bool)
+        ):
+            continue
+        inferred.append(
+            {
+                "semantic_key": semantic_key,
+                "node_id": field.node_id,
+                "input_name": field.input_name,
+                "value_type": value_type,
+                "transform": {},
+                "required": False,
+            }
+        )
+        existing_keys.add(semantic_key)
+    return inferred
+
+
 def _scalar_fields(workflow: dict[str, object]) -> list[WorkflowField]:
     fields: list[WorkflowField] = []
     for node_id, raw_node in workflow.items():

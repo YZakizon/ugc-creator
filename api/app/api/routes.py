@@ -51,10 +51,15 @@ from app.schemas import (
     ContentPromptSettingsUpdate,
     DashboardSummary,
     JobAudioUpload,
+    JobElevenLabsVoiceAttach,
+    JobImageUpload,
     JobRead,
+    JobRenderOverridesUpdate,
     JobRenderProfileUpdate,
+    JobScriptUpdate,
     JobVoiceProfileUpdate,
     JobWorkflowTemplateUpdate,
+    OnDemandVideoSave,
     RenderAttemptList,
     RenderAttemptRead,
     RenderNodeCreate,
@@ -87,6 +92,7 @@ from app.schemas import (
     WorkflowTemplateList,
     WorkflowTemplateRead,
 )
+from app.services.media_service import MediaProcessingError, probe_audio_duration
 from app.services.workflow_service import (
     WorkflowValidationError,
     validate_bindings,
@@ -274,6 +280,8 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
             "output_filename",
             "output_deleted_at",
             "effective_values",
+            "submitted_at",
+            "completed_at",
             "created_at",
             "updated_at",
         )
@@ -375,6 +383,37 @@ def queue_render(
     return render_attempt_read(loaded or attempt)
 
 
+@router.post(
+    "/render-attempts/{attempt_id}/cancel",
+    response_model=RenderAttemptRead,
+)
+async def cancel_render_attempt(
+    attempt_id: UUID,
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> RenderAttemptRead:
+    try:
+        attempt, _job, _profile, node, _template = repo.execution_context(attempt_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if attempt.status in {"completed", "failed", "cancelled"}:
+        return render_attempt_read(attempt)
+    if attempt.external_job_id:
+        try:
+            await ComfyUIRenderer(
+                base_url=node.base_url,
+                client_id=attempt.client_id,
+            ).cancel(attempt.external_job_id)
+        except ComfyUIProviderError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="ComfyUI render cancellation failed. Try again.",
+            ) from exc
+    cancelled = repo.cancel_attempt(attempt_id)
+    if cancelled is None:
+        raise HTTPException(status_code=404, detail="Render attempt not found")
+    return render_attempt_read(cancelled)
+
+
 @router.get("/render-attempts", response_model=RenderAttemptList)
 def list_render_attempts(
     job_id: UUID | None = None,
@@ -413,16 +452,53 @@ def download_asset(
 
 
 @router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_video_asset(
-    asset_id: UUID, repo: RenderExecutionRepository = Depends(render_repository)
+def delete_media_asset(
+    asset_id: UUID,
+    request: Request,
+    batch_repo: BatchRepository = Depends(repository),
 ) -> None:
-    asset = repo.get_asset(asset_id)
+    repo = getattr(request.app.state, "render_repository", None)
+    asset = (
+        repo.get_asset(asset_id)
+        if isinstance(repo, RenderExecutionRepository)
+        else None
+    )
     if asset is None:
-        raise HTTPException(status_code=404, detail="Media asset not found")
+        try:
+            deleted_audio = batch_repo.delete_job_audio_asset(asset_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if deleted_audio is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        object_key, _job = deleted_audio
+        try:
+            LocalStorageProvider().delete(object_key)
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503, detail="Media storage cleanup is incomplete"
+            ) from exc
+        return
+    if asset.kind in {"audio", "audio_archive"} and asset.render_attempt_id is None:
+        try:
+            deleted_audio = batch_repo.delete_job_audio_asset(asset_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if deleted_audio is None:
+            raise HTTPException(status_code=404, detail="Media asset not found")
+        object_key, _job = deleted_audio
+        try:
+            LocalStorageProvider().delete(object_key)
+        except StorageError as exc:
+            raise HTTPException(
+                status_code=503, detail="Media storage cleanup is incomplete"
+            ) from exc
+        return
     if asset.kind != "video" or asset.render_attempt_id is None:
         raise HTTPException(
-            status_code=422, detail="Only generated videos can be deleted"
+            status_code=422, detail="Only generated audio or video can be deleted"
         )
+    if not isinstance(repo, RenderExecutionRepository):
+        raise HTTPException(status_code=503, detail="Render persistence is unavailable")
     attempt = repo.get_attempt(asset.render_attempt_id)
     if attempt is None or attempt.status != "completed":
         raise HTTPException(
@@ -561,6 +637,135 @@ def list_topics(
     )
 
 
+def _validate_on_demand_profile(
+    render_profile_id: UUID, config_repo: ConfigurationRepository
+) -> object:
+    profile = config_repo.get_render_profile(render_profile_id)
+    if profile is None or not profile.is_active:
+        raise HTTPException(status_code=422, detail="Active render profile not found")
+    return profile
+
+
+def _workflow_for_on_demand_payload(
+    payload: OnDemandVideoSave,
+    profile: object,
+    config_repo: ConfigurationRepository,
+) -> object | None:
+    workflow_template_id = payload.workflow_template_id or getattr(
+        profile, "workflow_template_id"
+    )
+    if workflow_template_id is None:
+        return None
+    workflow = config_repo.get_workflow_template(workflow_template_id)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Workflow template not found")
+    if workflow.renderer_provider != getattr(profile, "renderer_provider"):
+        raise HTTPException(
+            status_code=422,
+            detail="Workflow provider does not match the render profile provider",
+        )
+    return workflow
+
+
+@router.get("/on-demand-videos", response_model=TopicList)
+def list_on_demand_videos(
+    repo: BatchRepository = Depends(repository),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> TopicList:
+    videos, total = repo.list_on_demand_videos(limit, offset)
+    return TopicList(
+        items=[
+            TopicSummaryRead.model_validate(topic_summary_to_dict(video))
+            for video in videos
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/on-demand-videos",
+    response_model=TopicRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_on_demand_video(
+    payload: OnDemandVideoSave,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> TopicRead:
+    profile = _validate_on_demand_profile(payload.render_profile_id, config_repo)
+    workflow = _workflow_for_on_demand_payload(payload, profile, config_repo)
+    topic = repo.create_on_demand_video(
+        title=payload.title,
+        render_profile_id=payload.render_profile_id,
+        voice_profile_id=getattr(profile, "voice_profile_id"),
+        workflow_template_id=getattr(workflow, "id", None),
+        target_duration_seconds=payload.target_duration_seconds,
+        speech_script=payload.speech_script,
+        render_overrides=payload.render_overrides.compact(),
+    )
+    return TopicRead.model_validate(topic_to_dict(topic))
+
+
+@router.put("/on-demand-videos/{topic_id}", response_model=TopicRead)
+def update_on_demand_video(
+    topic_id: UUID,
+    payload: OnDemandVideoSave,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> TopicRead:
+    profile = _validate_on_demand_profile(payload.render_profile_id, config_repo)
+    workflow = _workflow_for_on_demand_payload(payload, profile, config_repo)
+    existing = repo.get_batch(topic_id)
+    existing_job = (
+        min(existing.jobs, key=lambda item: item.content_number)
+        if existing is not None and existing.jobs
+        else None
+    )
+    current_profile_id = (
+        existing_job.render_profile_id if existing_job is not None else None
+    )
+    voice_profile_id = (
+        existing_job.voice_profile_id
+        if existing_job is not None
+        and existing_job.voice_profile_id is not None
+        and current_profile_id == payload.render_profile_id
+        else getattr(profile, "voice_profile_id")
+    )
+    try:
+        topic = repo.update_on_demand_video(
+            topic_id,
+            title=payload.title,
+            render_profile_id=payload.render_profile_id,
+            voice_profile_id=voice_profile_id,
+            workflow_template_id=getattr(workflow, "id", None),
+            target_duration_seconds=payload.target_duration_seconds,
+            speech_script=payload.speech_script,
+            render_overrides=payload.render_overrides.compact(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Created video not found")
+    return TopicRead.model_validate(topic_to_dict(topic))
+
+
+@router.post(
+    "/on-demand-videos/{topic_id}/clone",
+    response_model=TopicRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def clone_on_demand_video(
+    topic_id: UUID, repo: BatchRepository = Depends(repository)
+) -> TopicRead:
+    topic = repo.clone_on_demand_video(topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="Created video not found")
+    return TopicRead.model_validate(topic_to_dict(topic))
+
+
 @router.get("/topics/{topic_id}", response_model=TopicRead)
 def get_topic(topic_id: UUID, repo: BatchRepository = Depends(repository)) -> TopicRead:
     topic = repo.get_batch(topic_id)
@@ -662,6 +867,109 @@ def delete_content(
 @router.get("/jobs/{job_id}", response_model=JobRead)
 def get_job(job_id: UUID, repo: BatchRepository = Depends(repository)) -> JobRead:
     job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(job))
+
+
+@router.patch("/jobs/{job_id}/script", response_model=JobRead)
+def update_job_script(
+    job_id: UUID,
+    payload: JobScriptUpdate,
+    repo: BatchRepository = Depends(repository),
+) -> JobRead:
+    try:
+        job = repo.update_job_script(job_id, payload.speech_script)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(job))
+
+
+@router.patch("/jobs/{job_id}/render-overrides", response_model=JobRead)
+def update_job_render_overrides(
+    job_id: UUID,
+    payload: JobRenderOverridesUpdate,
+    repo: BatchRepository = Depends(repository),
+) -> JobRead:
+    try:
+        job = repo.update_job_render_overrides(job_id, payload.compact())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(job))
+
+
+@router.post("/jobs/{job_id}/elevenlabs-voice", response_model=JobRead)
+def attach_elevenlabs_voice(
+    job_id: UUID,
+    payload: JobElevenLabsVoiceAttach,
+    repo: BatchRepository = Depends(repository),
+    config_repo: ConfigurationRepository = Depends(configuration_repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    existing_profiles, _total = config_repo.list_voice_profiles()
+    desired_extra_settings = {
+        "voice_name": payload.name,
+        "output_format": payload.output_format,
+        "use_speaker_boost": payload.speaker_boost,
+        "internal_create_video": True,
+    }
+    profile = next(
+        (
+            item
+            for item in existing_profiles
+            if item.provider == "elevenlabs"
+            and item.provider_voice_id == payload.voice_id
+            and item.provider_model == payload.model
+            and item.speed == payload.speed
+            and item.stability == payload.stability
+            and item.similarity == payload.similarity
+            and item.style_exaggeration == payload.style_exaggeration
+            and item.extra_settings.get("output_format") == payload.output_format
+            and item.extra_settings.get("use_speaker_boost") == payload.speaker_boost
+        ),
+        None,
+    )
+    if profile is None:
+        profile = config_repo.create_voice_profile(
+            VoiceProfileCreate(
+                name=f"{payload.name} · Create Video",
+                provider="elevenlabs",
+                provider_voice_id=payload.voice_id,
+                provider_model=payload.model,
+                speed=payload.speed,
+                stability=payload.stability,
+                similarity=payload.similarity,
+                style_exaggeration=payload.style_exaggeration,
+                extra_settings=desired_extra_settings,
+            )
+        )
+    try:
+        updated = repo.update_job_voice_profile(job_id, profile.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(updated))
+
+
+@router.patch("/jobs/{job_id}/audio/{asset_id}/active", response_model=JobRead)
+def select_job_audio(
+    job_id: UUID,
+    asset_id: UUID,
+    repo: BatchRepository = Depends(repository),
+) -> JobRead:
+    try:
+        job = repo.select_job_audio(job_id, asset_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobRead.model_validate(job_to_dict(job))
@@ -826,6 +1134,10 @@ def upload_job_audio(
         raise HTTPException(
             status_code=413, detail="Audio file must be 25 MB or smaller"
         )
+    try:
+        duration_seconds = probe_audio_duration(content, source_filename)
+    except MediaProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     extension = PurePath(source_filename).suffix.lstrip(".") or "mp3"
     assets = job.__dict__.get("media_assets", [])
     audio_number = sum(asset.kind in {"audio", "audio_archive"} for asset in assets) + 1
@@ -846,6 +1158,73 @@ def upload_job_audio(
         filename=filename,
         content_type=payload.content_type,
         size_bytes=len(content),
+        generation_metadata={
+            "source": "upload",
+            "duration_seconds": duration_seconds,
+            "original_filename": source_filename,
+        },
+    )
+    if updated is None:
+        storage.delete(object_key)
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobRead.model_validate(job_to_dict(updated))
+
+
+@router.post("/jobs/{job_id}/source-image", response_model=JobRead)
+def upload_job_source_image(
+    job_id: UUID,
+    payload: JobImageUpload,
+    repo: BatchRepository = Depends(repository),
+) -> JobRead:
+    job = repo.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in {
+        JobStatus.QUEUED.value,
+        JobStatus.SUBMITTING_RENDER.value,
+        JobStatus.RENDERING.value,
+        JobStatus.DOWNLOADING_OUTPUT.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Source image cannot change while video is active",
+        )
+    source_filename = PurePath(payload.filename).name
+    if not source_filename or source_filename in {".", ".."}:
+        raise HTTPException(status_code=422, detail="A safe image filename is required")
+    if not payload.content_type.lower().startswith("image/"):
+        raise HTTPException(status_code=422, detail="Select a supported image file")
+    try:
+        content = base64.b64decode(payload.content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=422, detail="Image content is not valid base64"
+        ) from exc
+    if not content:
+        raise HTTPException(status_code=422, detail="Image file cannot be empty")
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413, detail="Image file must be 25 MB or smaller"
+        )
+    extension = PurePath(source_filename).suffix.lstrip(".") or "png"
+    filename = generated_media_filename(job.topic, job.content_number, 1, extension)
+    object_key = (
+        f"topics/{job.batch_id}/contents/{job.id}/source-image/{uuid4()}/{filename}"
+    )
+    storage = LocalStorageProvider()
+    try:
+        storage.put(object_key, content)
+    except StorageError as exc:
+        raise HTTPException(
+            status_code=503, detail="Media storage is unavailable"
+        ) from exc
+    updated = repo.replace_job_source_image(
+        job_id,
+        object_key=object_key,
+        filename=filename,
+        content_type=payload.content_type,
+        size_bytes=len(content),
+        generation_metadata={"source": "upload", "original_filename": source_filename},
     )
     if updated is None:
         storage.delete(object_key)
@@ -998,12 +1377,18 @@ def list_voice_profiles(
     repo: ConfigurationRepository = Depends(configuration_repository),
 ) -> VoiceProfileList:
     items, total = repo.list_voice_profiles()
+    visible_items = [
+        item
+        for item in items
+        if item.extra_settings.get("internal_create_video") is not True
+        and not item.name.endswith(" · Create Video")
+    ]
     return VoiceProfileList(
         items=[
             VoiceProfileRead.model_validate(voice_profile_to_dict(item))
-            for item in items
+            for item in visible_items
         ],
-        total=total,
+        total=len(visible_items),
     )
 
 

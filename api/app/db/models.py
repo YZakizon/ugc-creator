@@ -29,6 +29,9 @@ class Batch(TimestampMixin, Base):
     target_duration_seconds: Mapped[int] = mapped_column(Integer, default=30)
     auto_fit_duration: Mapped[bool] = mapped_column(default=True, nullable=False)
     next_content_number: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    creation_mode: Mapped[str] = mapped_column(
+        String(32), default="topic", nullable=False
+    )
 
     jobs: Mapped[list["TopicJob"]] = relationship(
         back_populates="batch",
@@ -83,6 +86,9 @@ class TopicJob(TimestampMixin, Base):
     tts_claim_token: Mapped[UUID | None] = mapped_column(nullable=True)
     tts_claim_expires_at: Mapped[datetime | None] = mapped_column(nullable=True)
     tts_generated_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    render_overrides: Mapped[dict[str, object]] = mapped_column(
+        JSON, default=dict, nullable=False
+    )
 
     batch: Mapped[Batch] = relationship(back_populates="jobs")
     render_attempts: Mapped[list["RenderAttempt"]] = relationship(

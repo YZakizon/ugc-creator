@@ -16,6 +16,7 @@ from app.db.models import (
     TopicJob,
     WorkflowTemplate,
 )
+from app.providers.render.comfyui_controls import inferred_ltx_bindings
 from app.schemas import RenderNodeCreate
 
 
@@ -24,6 +25,12 @@ def now() -> datetime:
 
 
 SUBMISSION_CLAIM_DURATION = timedelta(minutes=5)
+ACTIVE_RENDER_JOB_STATUSES = {
+    JobStatus.QUEUED.value,
+    JobStatus.SUBMITTING_RENDER.value,
+    JobStatus.RENDERING.value,
+    JobStatus.DOWNLOADING_OUTPUT.value,
+}
 
 
 class RenderExecutionRepository:
@@ -133,6 +140,22 @@ class RenderExecutionRepository:
             if existing is not None:
                 return existing
             attempt_id = uuid4()
+            binding_snapshot = [
+                {
+                    "semantic_key": binding.semantic_key,
+                    "node_id": binding.node_id,
+                    "input_name": binding.input_name,
+                    "value_type": binding.value_type,
+                    "transform": deepcopy(binding.transform),
+                    "required": binding.required,
+                }
+                for binding in workflow.bindings
+            ]
+            workflow_snapshot = deepcopy(workflow.workflow_json)
+            if node.provider == "comfyui":
+                binding_snapshot.extend(
+                    inferred_ltx_bindings(workflow_snapshot, binding_snapshot)
+                )
             attempt = RenderAttempt(
                 id=attempt_id,
                 job_id=job.id,
@@ -143,18 +166,8 @@ class RenderExecutionRepository:
                 client_id=f"ugc-creator-{attempt_id}",
                 status="queued",
                 progress=0,
-                workflow_snapshot=deepcopy(workflow.workflow_json),
-                binding_snapshot=[
-                    {
-                        "semantic_key": binding.semantic_key,
-                        "node_id": binding.node_id,
-                        "input_name": binding.input_name,
-                        "value_type": binding.value_type,
-                        "transform": deepcopy(binding.transform),
-                        "required": binding.required,
-                    }
-                    for binding in workflow.bindings
-                ],
+                workflow_snapshot=workflow_snapshot,
+                binding_snapshot=binding_snapshot,
                 effective_values={},
             )
             job.status = JobStatus.QUEUED.value
@@ -375,6 +388,51 @@ class RenderExecutionRepository:
             session.commit()
             return True
 
+    def cancel_attempt(self, attempt_id: UUID) -> RenderAttempt | None:
+        cancelled_at = now()
+        with self.factory() as session:
+            attempt = session.get(RenderAttempt, attempt_id)
+            if attempt is None:
+                return None
+            if attempt.status in {"completed", "failed", "cancelled"}:
+                return attempt
+            changed = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RenderAttempt)
+                    .where(
+                        RenderAttempt.id == attempt_id,
+                        RenderAttempt.status.in_(
+                            {
+                                "queued",
+                                "submitting_render",
+                                "rendering",
+                                "downloading_output",
+                            }
+                        ),
+                    )
+                    .values(
+                        status="cancelled",
+                        error_message="Render cancelled.",
+                        submission_claim_expires_at=None,
+                        finalization_claim_expires_at=None,
+                        updated_at=cancelled_at,
+                        completed_at=cancelled_at,
+                    )
+                ),
+            )
+            if changed.rowcount != 1:
+                session.rollback()
+                return session.get(RenderAttempt, attempt_id)
+            attempt.job.status = JobStatus.READY_TO_RENDER.value
+            attempt.job.error_message = None
+            session.commit()
+            return session.scalar(
+                select(RenderAttempt)
+                .options(selectinload(RenderAttempt.assets))
+                .where(RenderAttempt.id == attempt_id)
+            )
+
     def claim_finalization(self, attempt_id: UUID) -> tuple[bool, int]:
         claimed_at = now()
         expires_at = claimed_at + SUBMISSION_CLAIM_DURATION
@@ -497,23 +555,6 @@ class RenderExecutionRepository:
             job = session.scalar(
                 select(TopicJob).where(TopicJob.id == asset.job_id).with_for_update()
             )
-            active_attempt = session.scalar(
-                select(RenderAttempt.id)
-                .where(
-                    RenderAttempt.job_id == asset.job_id,
-                    RenderAttempt.status.in_(
-                        [
-                            "queued",
-                            "submitting_render",
-                            "rendering",
-                            "downloading_output",
-                        ]
-                    ),
-                )
-                .limit(1)
-            )
-            if active_attempt is not None:
-                raise ValueError("Video cannot be deleted while a rerender is active")
             asset.render_attempt.output_filename = asset.filename
             asset.render_attempt.output_deleted_at = now()
             session.delete(asset)
@@ -523,7 +564,11 @@ class RenderExecutionRepository:
                 .where(MediaAsset.job_id == asset.job_id, MediaAsset.kind == "video")
                 .limit(1)
             )
-            if job is not None and remaining is None:
+            if (
+                job is not None
+                and remaining is None
+                and job.status not in ACTIVE_RENDER_JOB_STATUSES
+            ):
                 job.status = JobStatus.READY_TO_RENDER.value
                 job.error_message = None
             session.commit()

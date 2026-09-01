@@ -31,6 +31,26 @@ from app.schemas import (
 )
 
 
+def create_test_render_profile(
+    configuration: InMemoryConfigurationRepository,
+):
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="Hope voice",
+            provider="elevenlabs",
+            provider_voice_id="voice-hope",
+        )
+    )
+    return configuration.create_render_profile_setup(
+        RenderProfileSetupCreate(
+            profile_name="Elena LTX",
+            character_name="Elena",
+            voice_profile_id=voice.id,
+            renderer_provider="comfyui",
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_batch_creates_draft_jobs_and_summary() -> None:
     app.state.batch_repository = InMemoryBatchRepository()
@@ -76,6 +96,264 @@ async def test_legacy_batch_creation_rejects_multiple_topic_histories() -> None:
 
     assert response.status_code == 422
     assert "/api/v1/topics/bulk" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_on_demand_videos_are_saved_separately_from_topic_content() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    profile = create_test_render_profile(configuration)
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        topic = await client.post(
+            "/api/v1/topics",
+            json={
+                "topic": "Normal topic",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "auto_fit_duration": True,
+            },
+        )
+        created = await client.post(
+            "/api/v1/on-demand-videos",
+            json={
+                "title": "Created video",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "speech_script": "Manual script.",
+                "render_overrides": {
+                    "video_prompt": "A creator speaks to camera",
+                    "fps": 24,
+                    "duration": 30,
+                    "seed": 123,
+                },
+            },
+        )
+        topics = await client.get("/api/v1/topics")
+        created_videos = await client.get("/api/v1/on-demand-videos")
+        summary = await client.get("/api/v1/dashboard/summary")
+
+    assert topic.status_code == 201
+    assert created.status_code == 201
+    assert [item["name"] for item in topics.json()["items"]] == ["Normal topic"]
+    assert [item["name"] for item in created_videos.json()["items"]] == [
+        "Created video"
+    ]
+    assert [job["topic"] for job in summary.json()["recent_jobs"]] == ["Normal topic"]
+    content = created.json()["contents"][0]
+    assert content["speech_script"] == "Manual script."
+    assert content["render_overrides"]["video_prompt"] == "A creator speaks to camera"
+
+
+@pytest.mark.asyncio
+async def test_on_demand_video_update_clone_script_voice_and_audio_selection() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    profile = create_test_render_profile(configuration)
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/api/v1/on-demand-videos",
+            json={
+                "title": "Draft video",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "speech_script": "First script.",
+                "render_overrides": {"fps": 24, "duration": 30},
+            },
+        )
+        topic_id = created.json()["id"]
+        job_id = created.json()["contents"][0]["id"]
+        updated = await client.put(
+            f"/api/v1/on-demand-videos/{topic_id}",
+            json={
+                "title": "Updated draft video",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 45,
+                "speech_script": "Updated script.",
+                "render_overrides": {
+                    "video_prompt": "Updated prompt",
+                    "fps": 30,
+                    "duration": 45,
+                },
+            },
+        )
+        script = await client.patch(
+            f"/api/v1/jobs/{job_id}/script",
+            json={"speech_script": "Final script."},
+        )
+        voice = await client.post(
+            f"/api/v1/jobs/{job_id}/elevenlabs-voice",
+            json={"voice_id": "voice-catalog", "name": "Catalog Voice"},
+        )
+        overrides = await client.patch(
+            f"/api/v1/jobs/{job_id}/render-overrides",
+            json={"video_prompt": "Final prompt", "fps": 24, "duration": 30},
+        )
+        clone = await client.post(f"/api/v1/on-demand-videos/{topic_id}/clone")
+
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Updated draft video"
+    assert script.status_code == 200
+    assert script.json()["speech_script"] == "Final script."
+    assert voice.status_code == 200
+    assert voice.json()["voice_profile_id"] is not None
+    assert overrides.status_code == 200
+    assert overrides.json()["render_overrides"]["video_prompt"] == "Final prompt"
+    assert clone.status_code == 201
+    assert clone.json()["name"] == "Updated draft video copy"
+
+
+@pytest.mark.asyncio
+async def test_on_demand_audio_selection_changes_active_audio() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    profile = create_test_render_profile(configuration)
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    topic = batches.create_on_demand_video(
+        title="Audio choices",
+        render_profile_id=profile.id,
+        voice_profile_id=profile.voice_profile_id,
+        workflow_template_id=profile.workflow_template_id,
+        target_duration_seconds=30,
+        speech_script="Script.",
+        render_overrides={},
+    )
+    job = topic.jobs[0]
+    first = models.MediaAsset(
+        id=uuid4(),
+        job_id=job.id,
+        kind="audio",
+        object_key="first.mp3",
+        filename="first.mp3",
+        content_type="audio/mpeg",
+        size_bytes=1,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    second = models.MediaAsset(
+        id=uuid4(),
+        job_id=job.id,
+        kind="audio_archive",
+        object_key="second.mp3",
+        filename="second.mp3",
+        content_type="audio/mpeg",
+        size_bytes=1,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    job.media_assets = [first, second]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(f"/api/v1/jobs/{job.id}/audio/{second.id}/active")
+
+    assert response.status_code == 200
+    assert response.json()["audio_asset"]["filename"] == "second.mp3"
+    assert [asset["filename"] for asset in response.json()["audio_assets"]] == [
+        "second.mp3",
+        "first.mp3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_on_demand_generated_audio_can_be_deleted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    profile = create_test_render_profile(configuration)
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    topic = batches.create_on_demand_video(
+        title="Audio delete",
+        render_profile_id=profile.id,
+        voice_profile_id=profile.voice_profile_id,
+        workflow_template_id=profile.workflow_template_id,
+        target_duration_seconds=30,
+        speech_script="Script.",
+        render_overrides={},
+    )
+    job = topic.jobs[0]
+    LocalStorageProvider().put("audio/first.mp3", b"audio")
+    asset = models.MediaAsset(
+        id=uuid4(),
+        job_id=job.id,
+        kind="audio",
+        object_key="audio/first.mp3",
+        filename="first.mp3",
+        content_type="audio/mpeg",
+        size_bytes=5,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    job.media_assets = [asset]
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.delete(f"/api/v1/assets/{asset.id}")
+        loaded = await client.get(f"/api/v1/jobs/{job.id}")
+
+    assert response.status_code == 204
+    assert loaded.json()["audio_assets"] == []
+    assert loaded.json()["status"] == "content_ready"
+    assert not (tmp_path / "audio" / "first.mp3").exists()
+
+
+@pytest.mark.asyncio
+async def test_on_demand_source_image_upload_sets_active_image(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    profile = create_test_render_profile(configuration)
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/api/v1/on-demand-videos",
+            json={
+                "title": "Image source",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "speech_script": "Script.",
+                "render_overrides": {},
+            },
+        )
+        job_id = created.json()["contents"][0]["id"]
+        uploaded = await client.post(
+            f"/api/v1/jobs/{job_id}/source-image",
+            json={
+                "filename": "source.png",
+                "content_base64": base64.b64encode(b"image-bytes").decode(),
+                "content_type": "image/png",
+            },
+        )
+
+    assert uploaded.status_code == 200
+    assert uploaded.json()["source_image_asset"]["filename"].endswith(".png")
+    assert (
+        uploaded.json()["source_image_asset"]["generation_metadata"][
+            "original_filename"
+        ]
+        == "source.png"
+    )
 
 
 @pytest.mark.asyncio
@@ -541,6 +819,7 @@ async def test_job_audio_upload_becomes_render_input(
     job = batch.jobs[0]
     job.status = "completed"
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr("app.api.routes.probe_audio_duration", lambda *_args: 9.0)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
@@ -556,8 +835,8 @@ async def test_job_audio_upload_becomes_render_input(
 
     assert response.status_code == 200
     assert response.json()["status"] == "ready_to_render"
-    assert response.json()["audio_asset"]["filename"] == "one-topic_content1_0001.mp3"
-    assert list(tmp_path.rglob("*one-topic_content1_0001.mp3"))
+    assert response.json()["audio_asset"]["filename"] == "one-topic_0001.mp3"
+    assert list(tmp_path.rglob("*one-topic_0001.mp3"))
 
 
 @pytest.mark.asyncio
@@ -571,6 +850,7 @@ async def test_job_audio_upload_object_keys_are_unique_for_same_filename(
     job = batch.jobs[0]
     job.status = "completed"
     monkeypatch.setenv("MEDIA_STORAGE_ROOT", str(tmp_path))
+    monkeypatch.setattr("app.api.routes.probe_audio_duration", lambda *_args: 9.0)
     monkeypatch.setattr(
         "app.api.routes.generated_media_filename",
         lambda *_args: "one-topic_content1_1-audio.mp3",
@@ -1149,6 +1429,45 @@ async def test_render_profile_setup_reuses_character_and_voice() -> None:
     assert profiles.json()["total"] == 2
     assert voices.json()["total"] == 1
     assert characters.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_create_video_internal_voice_hidden_from_list() -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    profile = create_test_render_profile(configuration)
+    app.state.batch_repository = batches
+    app.state.configuration_repository = configuration
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        created = await client.post(
+            "/api/v1/on-demand-videos",
+            json={
+                "title": "Draft video",
+                "render_profile_id": str(profile.id),
+                "target_duration_seconds": 30,
+                "speech_script": "Hello.",
+                "render_overrides": {},
+            },
+        )
+        job_id = created.json()["contents"][0]["id"]
+        attached = await client.post(
+            f"/api/v1/jobs/{job_id}/elevenlabs-voice",
+            json={"voice_id": "voice-catalog", "name": "Catalog Voice"},
+        )
+        voices = await client.get("/api/v1/voice-profiles")
+
+    assert attached.status_code == 200
+    assert attached.json()["voice_profile_id"] is not None
+    assert voices.status_code == 200
+    assert voices.json()["total"] == 1
+    assert [item["provider_voice_id"] for item in voices.json()["items"]] == [
+        "voice-hope"
+    ]
 
 
 @pytest.mark.asyncio
