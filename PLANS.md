@@ -1822,6 +1822,19 @@ Append decisions here as implementation clarifies unknowns.
 - Per-video LTX controls are stored as render overrides on the content job and are
   applied only to the copied render payload during execution.
 
+## 40.9 ElevenLabs model controls and voice samples
+
+- Voice Profiles and Create Video expose Multilingual v2, Turbo v2.5, v3, v4,
+  and v4 Turbo. Create Video persists its model with the other voice settings.
+- Controls follow the selected model: v3 uses Creative/Natural/Robust stability;
+  v4 uses stability and similarity; v2 retains speed, style, and speaker boost.
+  The ElevenLabs adapter excludes unsupported settings from outgoing requests.
+- Public voice catalog samples are cached by sample URL in the browser (up to
+  30 samples), with an in-session fallback when persistent storage is unavailable.
+  Playing a sample never calls paid synthesis. Generated voice previews continue
+  to use persisted media and the existing text/model/settings deduplication.
+- Model behavior reference: https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech
+
 Format:
 
 ```text

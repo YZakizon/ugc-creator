@@ -91,11 +91,13 @@ describe("CreateVideoPanel", () => {
 
     fireEvent.change(await panel.findByLabelText("Video title"), { target: { value: "Created video" } });
     fireEvent.change(await panel.findByLabelText("ElevenLabs voice"), { target: { value: "voice-rachel" } });
+    fireEvent.change(panel.getByLabelText("ElevenLabs model"), { target: { value: "eleven_v4" } });
     fireEvent.change(panel.getByLabelText("Audio Script"), { target: { value: "Manual script" } });
     fireEvent.change(panel.getByLabelText("Video prompt"), { target: { value: "A modern creator speaks" } });
 
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/api/v1/on-demand-videos") && request.body?.includes("A modern creator speaks"))).toBe(true), { timeout: 2000 });
     expect(requests.some((request) => request.url.endsWith("/api/v1/on-demand-videos") && request.body?.includes('"voice_id":"voice-rachel"'))).toBe(true);
+    expect(requests.some((request) => request.body?.includes('"voice_model":"eleven_v4"'))).toBe(true);
     expect(await panel.findByText("Draft saved")).toBeInTheDocument();
     expect(requests.some((request) => request.url.includes("/api/v1/topics") && request.body)).toBe(false);
   });
@@ -111,6 +113,7 @@ describe("CreateVideoPanel", () => {
       seed: "777",
       audio_controls_open: true,
       voice_speed: "1.08",
+      voice_model: "eleven_v4",
       voice_stability: "33",
       voice_similarity: "66",
       voice_style: "44",
@@ -139,12 +142,15 @@ describe("CreateVideoPanel", () => {
     expect(screen.getByLabelText("Duration")).toHaveValue("45");
     expect(screen.getByLabelText("Seed")).toHaveValue("777");
     expect(screen.getByLabelText(/Output format/)).toHaveValue("mp3_44100_192");
-    expect(screen.getByLabelText(/Speed/)).toHaveValue("1.08");
+    expect(screen.getByLabelText("ElevenLabs model")).toHaveValue("eleven_v4");
+    expect(screen.queryByLabelText(/Speed/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Stability/)).toHaveValue("33");
     expect(screen.getByLabelText(/Similarity/)).toHaveValue("66");
+    expect(screen.queryByLabelText(/Style exaggeration/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Speaker boost/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ElevenLabs model"), { target: { value: "eleven_multilingual_v2" } });
+    expect(screen.getByLabelText(/Speed/)).toHaveValue("1.08");
     expect(screen.getByLabelText(/Style exaggeration/)).toHaveValue("44");
-    expect(screen.getByTitle("Controls speaking speed. Lower is slower; higher is faster.")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /Speaker boost/ })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText("Workflow overrides")).toBeInTheDocument();
     expect(screen.getByText("Override the base workflow JSON, source image, or audio for this video only.")).toBeInTheDocument();
     expect(screen.queryByText("Pick source image")).not.toBeInTheDocument();
@@ -250,6 +256,7 @@ describe("CreateVideoPanel", () => {
   it("shows a notification when generated audio is available", async () => {
     const audioAsset = mediaAsset("audio-1", "audio", "created-video_content1_0001-audio.mp3");
     let speechRequested = false;
+    let attachedModel: string | undefined;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.includes("/topics/topic-1")) return json({ ...topic(), contents: [{ ...job(), audio_asset: speechRequested ? audioAsset : null, audio_assets: speechRequested ? [audioAsset] : [] }] });
@@ -259,7 +266,11 @@ describe("CreateVideoPanel", () => {
       if (url.includes("/tts-providers/elevenlabs/usage")) return json({ provider: "elevenlabs", configured: true, used_units: 10, limit_units: 100, remaining_units: 90, resets_at_unix: null, unit: "characters" });
       if (url.includes("/render-nodes")) return json({ items: [], total: 0 });
       if (url.includes("/render-attempts")) return json({ items: [], total: 0 });
-      if (url.includes("/elevenlabs-voice") || url.includes("/script")) return json(job());
+      if (url.includes("/elevenlabs-voice")) {
+        attachedModel = JSON.parse(String(init?.body)).model;
+        return json(job());
+      }
+      if (url.includes("/script")) return json(job());
       if (url.includes("/generate-tts") && init?.method === "POST") {
         speechRequested = true;
         return json({ ...job(), status: "generating_tts" });
@@ -271,9 +282,11 @@ describe("CreateVideoPanel", () => {
 
     const generateAudioButton = await screen.findByRole("button", { name: "Generate Audio" });
     await waitFor(() => expect(generateAudioButton).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("ElevenLabs model"), { target: { value: "eleven_v3" } });
     fireEvent.click(generateAudioButton);
 
     expect(await screen.findByText("Audio generated.")).toBeInTheDocument();
+    expect(attachedModel).toBe("eleven_v3");
   });
 
   it("shows delete icons for generated audio and completed videos", async () => {

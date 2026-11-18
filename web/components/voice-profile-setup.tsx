@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
+import { ELEVENLABS_MODELS, elevenLabsCapabilities } from "@/lib/elevenlabs-models";
+import { VoiceCatalogPreview } from "@/components/voice-catalog-preview";
 import { ConfirmDialog, Toast } from "@/components/feedback";
 import { ApiRequestError, createVoicePreview, createVoiceProfile, deleteVoicePreview, deleteVoiceProfile, getElevenLabsUsage, getElevenLabsVoices, getVoicePreview, getVoicePreviews, getVoiceProfiles, updateVoiceProfile } from "@/lib/api";
 import type { ElevenLabsVoice, ResourceReference, TTSAccountUsage, VoicePreview, VoiceProfile, VoiceProfileInUseDetail } from "@/lib/api";
@@ -287,6 +289,7 @@ function voiceProfileConflictDetail(error: Error): VoiceProfileInUseDetail | nul
 }
 
 function VoiceFields({ values, onChange, voices, voicesLoading }: { values: VoiceForm; onChange: (field: keyof VoiceForm, value: string | boolean) => void; voices: ElevenLabsVoice[]; voicesLoading: boolean }) {
+  const capabilities = elevenLabsCapabilities(values.model);
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const voiceNameId = useId();
   const selectedVoice = voices.find((voice) => voice.voice_id === values.voiceId);
@@ -298,39 +301,26 @@ function VoiceFields({ values, onChange, voices, voicesLoading }: { values: Voic
         <label>Provider / renderer<div className="eleven-setting-select disabled"><span className="eleven-provider-mark">E</span><strong>ElevenLabs</strong></div></label>
         <div className="voice-name-field"><span className="voice-name-heading"><label htmlFor={voiceNameId}>Voice name</label><button className="voice-catalog-button" type="button" aria-label="Choose from ElevenLabs My Voices" title="Choose from ElevenLabs My Voices" onClick={() => setVoicePickerOpen(true)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h2m2-5v10m4-13v16m4-13v10m2-5h2" /></svg></button></span><div className="eleven-setting-input"><span className="eleven-voice-orb" /><input id={voiceNameId} required value={values.voiceName} onChange={(event) => onChange("voiceName", event.target.value)} placeholder="Hope — upbeat and clear" />{selectedVoice?.preview_url && <VoiceCatalogPreview voice={selectedVoice} />}</div></div>
         <label>Voice ID<input required value={values.voiceId} onChange={(event) => onChange("voiceId", event.target.value)} placeholder="ElevenLabs voice ID" /></label>
-        <label className="profile-field-wide">Model<select value={values.model} onChange={(event) => onChange("model", event.target.value)}><option value="eleven_multilingual_v2">Eleven Multilingual v2</option><option value="eleven_turbo_v2_5">Eleven Turbo v2.5</option><option value="eleven_v3">Eleven v3</option></select></label>
+        <label className="profile-field-wide">Model<select value={values.model} onChange={(event) => { onChange("model", event.target.value); if (event.target.value === "eleven_v3") onChange("stability", "50"); }}>{!ELEVENLABS_MODELS.some((model) => model.id === values.model) && <option value={values.model}>{values.model || "Default model"}</option>}{ELEVENLABS_MODELS.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
       </div>
       {voicePickerOpen && <div className="voice-catalog-backdrop" role="presentation" onMouseDown={() => setVoicePickerOpen(false)}><section className="voice-catalog-dialog" role="dialog" aria-modal="true" aria-labelledby="voice-catalog-title" onMouseDown={(event) => event.stopPropagation()}><div className="voice-catalog-heading"><div><h3 id="voice-catalog-title">ElevenLabs My Voices</h3><p>Select a voice to populate its name and ID.</p></div><button className="icon-button" type="button" aria-label="Close My Voices" onClick={() => setVoicePickerOpen(false)}>×</button></div>{voicesLoading ? <p>Loading voices…</p> : voices.length === 0 ? <p>No saved ElevenLabs voices are available.</p> : <div className="voice-catalog-list">{voices.map((voice) => <article key={voice.voice_id}><div><strong>{voice.name}</strong><small>{voice.category ?? "voice"} · {voice.voice_id}</small>{voice.description && <p>{voice.description}</p>}</div><div>{voice.preview_url && <VoiceCatalogPreview voice={voice} />}<button className="button button-primary button-small" type="button" onClick={() => { onChange("voiceName", voice.name); onChange("voiceId", voice.voice_id); setVoicePickerOpen(false); }}>Use voice</button></div></article>)}</div>}</section></div>}
     </section>
     <section className="profile-form-section">
       <div className="profile-form-section-heading"><h3>ElevenLabs parameters</h3><p>Values are normalized and validated before synthesis.</p></div>
       <div className="eleven-settings-stack">
-        <VoiceSlider label="Speed" low="Slower" high="Faster" min="0.7" max="1.2" step="0.01" value={values.speed} onChange={(value) => onChange("speed", value)} />
-        <VoiceSlider label="Stability" low="More variable" high="More stable" min="0" max="100" step="1" value={values.stability} suffix="%" onChange={(value) => onChange("stability", value)} />
-        <VoiceSlider label="Similarity" low="Low" high="High" min="0" max="100" step="1" value={values.similarity} suffix="%" onChange={(value) => onChange("similarity", value)} />
-        <VoiceSlider label="Style Exaggeration" low="None" high="Exaggerated" min="0" max="100" step="1" value={values.exaggeration} suffix="%" onChange={(value) => onChange("exaggeration", value)} />
+        {capabilities.speed && <VoiceSlider label="Speed" low="Slower" high="Faster" min="0.7" max="1.2" step="0.01" value={values.speed} onChange={(value) => onChange("speed", value)} />}
+        {capabilities.v3 ? <label className="eleven-select-field">Stability<select value={values.stability} onChange={(event) => onChange("stability", event.target.value)}><option value="0">Creative (0%)</option><option value="50">Natural (50%)</option><option value="100">Robust (100%)</option></select></label> : <VoiceSlider label="Stability" low="More variable" high="More stable" min="0" max="100" step="1" value={values.stability} suffix="%" onChange={(value) => onChange("stability", value)} />}
+        {capabilities.similarity && <VoiceSlider label="Similarity" low="Low" high="High" min="0" max="100" step="1" value={values.similarity} suffix="%" onChange={(value) => onChange("similarity", value)} />}
+        {capabilities.style && <VoiceSlider label="Style Exaggeration" low="None" high="Exaggerated" min="0" max="100" step="1" value={values.exaggeration} suffix="%" onChange={(value) => onChange("exaggeration", value)} />}
+        {(capabilities.v3 || capabilities.v4) && <p className="field-hint">Use audio tags such as [whispers] or [excited] in your script to direct delivery. SSML break tags are not supported.</p>}
         <div className="eleven-toggle-row"><span><strong>Language Override</strong><small>Force a specific language for this voice.</small></span><button className={`switch-control${values.languageOverride ? " active" : ""}`} type="button" role="switch" aria-checked={values.languageOverride} aria-label="Language Override" onClick={() => onChange("languageOverride", !values.languageOverride)}><span /></button></div>
         {values.languageOverride && <label className="eleven-select-field">Language<select value={values.languageCode} onChange={(event) => onChange("languageCode", event.target.value)}><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="it">Italian</option><option value="pt">Portuguese</option></select></label>}
         <label className="eleven-select-field">Output Format<select value={values.outputFormat} onChange={(event) => onChange("outputFormat", event.target.value)}><option value="mp3_44100_128">MP3 44.1 kHz (128kbps)</option><option value="mp3_44100_192">MP3 44.1 kHz (192kbps)</option><option value="pcm_44100">PCM 44.1 kHz</option><option value="wav_44100">WAV 44.1 kHz</option></select></label>
-        <div className="eleven-toggle-row speaker-boost-row"><span><strong>Speaker boost</strong><small>Increase similarity to the original speaker.</small></span><button className={`switch-control${values.speakerBoost ? " active" : ""}`} type="button" role="switch" aria-checked={values.speakerBoost} aria-label="Speaker boost" onClick={() => onChange("speakerBoost", !values.speakerBoost)}><span /></button></div>
+        {capabilities.speakerBoost && <div className="eleven-toggle-row speaker-boost-row"><span><strong>Speaker boost</strong><small>Increase similarity to the original speaker.</small></span><button className={`switch-control${values.speakerBoost ? " active" : ""}`} type="button" role="switch" aria-checked={values.speakerBoost} aria-label="Speaker boost" onClick={() => onChange("speakerBoost", !values.speakerBoost)}><span /></button></div>}
         <button className="eleven-reset" type="button" onClick={() => { onChange("speed", "1"); onChange("stability", "50"); onChange("similarity", "75"); onChange("exaggeration", "50"); onChange("languageOverride", false); onChange("outputFormat", "mp3_44100_128"); onChange("speakerBoost", true); }}>↶ Reset values</button>
       </div>
     </section>
   </>;
-}
-
-function VoiceCatalogPreview({ voice }: { voice: ElevenLabsVoice }) {
-  const audioRef = useRef<HTMLAudioElement>(null);
-  function playPreview() {
-    document.querySelectorAll<HTMLAudioElement>("audio[data-voice-catalog-preview]").forEach((audio) => {
-      if (audio !== audioRef.current) {
-        audio.pause();
-        audio.currentTime = 0;
-      }
-    });
-    void audioRef.current?.play();
-  }
-  return <><audio ref={audioRef} data-voice-catalog-preview src={voice.preview_url ?? undefined} preload="none" /><button className="voice-preview-icon" type="button" aria-label={`Preview ${voice.name}`} title={`Preview ${voice.name}`} onClick={playPreview}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z" /></svg></button></>;
 }
 
 function VoiceSlider({ label, low, high, min, max, step, value, suffix = "", onChange }: { label: string; low: string; high: string; min: string; max: string; step: string; value: string; suffix?: string; onChange: (value: string) => void }) {

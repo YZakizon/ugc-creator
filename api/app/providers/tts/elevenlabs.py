@@ -47,7 +47,9 @@ class ElevenLabsTTSProvider:
         payload: dict[str, object] = {
             "text": request.text,
             "model_id": request.model_id,
-            "voice_settings": request.voice_settings,
+            "voice_settings": model_voice_settings(
+                request.model_id, request.voice_settings
+            ),
         }
         if request.language_code:
             payload["language_code"] = request.language_code
@@ -238,6 +240,27 @@ class ElevenLabsTTSProvider:
                 category="provider_rejected",
                 retriable=False,
             ) from exc
+
+
+def model_voice_settings(model: str, settings: dict[str, object]) -> dict[str, object]:
+    """Exclude controls unsupported by the selected ElevenLabs model."""
+    if model == "eleven_v3":
+        stability = settings.get("stability", 0.5)
+        if not isinstance(stability, (int, float)) or stability not in (0, 0.5, 1):
+            raise TTSProviderError(
+                "Eleven v3 stability must be Creative (0%), "
+                "Natural (50%), or Robust (100%).",
+                category="validation_error",
+                retriable=False,
+            )
+        return {"stability": stability}
+    if model in {"eleven_v4", "eleven_v4_turbo"}:
+        return {
+            key: value
+            for key, value in settings.items()
+            if key in {"stability", "similarity_boost", "clone_strength"}
+        }
+    return dict(settings)
 
 
 def _usage_from_subscription(

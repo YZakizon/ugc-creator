@@ -4,6 +4,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
+import { VoiceCatalogPreview } from "@/components/voice-catalog-preview";
+import { ELEVENLABS_MODELS, elevenLabsCapabilities } from "@/lib/elevenlabs-models";
 import { Toast } from "@/components/feedback";
 import {
   attachJobElevenLabsVoice,
@@ -37,6 +39,7 @@ import type { ElevenLabsVoice, Job, MediaAsset, OnDemandRenderOverrides, RenderA
 const ACTIVE_STATUSES = new Set(["generating_content", "generating_tts", "queued", "submitting_render", "rendering", "downloading_output"]);
 const CANCELABLE_RENDER_STATUSES = new Set(["queued", "submitting_render", "rendering", "downloading_output"]);
 const TERMINAL_RENDER_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
 const CREATE_VIDEO_LAST_SETTINGS_KEY = "ugc-create-video-last-settings-v1";
 
 type CreateVideoLastSettings = {
@@ -49,6 +52,7 @@ type CreateVideoLastSettings = {
   seed?: string;
   audio_controls_open?: boolean;
   voice_speed?: string;
+  voice_model?: string;
   voice_stability?: string;
   voice_similarity?: string;
   voice_style?: string;
@@ -252,6 +256,8 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const [seed, setSeed] = useState("");
   const [audioControlsOpen, setAudioControlsOpen] = useState(true);
   const [voiceSpeed, setVoiceSpeed] = useState("1");
+  const [voiceModel, setVoiceModel] = useState("eleven_multilingual_v2");
+  const voiceCapabilities = elevenLabsCapabilities(voiceModel);
   const [voiceStability, setVoiceStability] = useState("50");
   const [voiceSimilarity, setVoiceSimilarity] = useState("75");
   const [voiceStyle, setVoiceStyle] = useState("50");
@@ -294,6 +300,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     if (typeof settings.seed === "string") setSeed(settings.seed);
     if (typeof settings.audio_controls_open === "boolean") setAudioControlsOpen(settings.audio_controls_open);
     if (typeof settings.voice_speed === "string") setVoiceSpeed(settings.voice_speed);
+    if (typeof settings.voice_model === "string") setVoiceModel(settings.voice_model);
     if (typeof settings.voice_stability === "string") setVoiceStability(settings.voice_stability);
     if (typeof settings.voice_similarity === "string") setVoiceSimilarity(settings.voice_similarity);
     if (typeof settings.voice_style === "string") setVoiceStyle(settings.voice_style);
@@ -361,6 +368,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     setFps(String(job?.render_overrides?.fps ?? 24));
     setSeed(job?.render_overrides?.seed === undefined ? "" : String(job.render_overrides.seed));
     if (typeof createVideoSettings.voice_speed === "number") setVoiceSpeed(String(createVideoSettings.voice_speed));
+    setVoiceModel(typeof createVideoSettings.voice_model === "string" ? createVideoSettings.voice_model : "eleven_multilingual_v2");
     if (typeof createVideoSettings.voice_stability === "number") setVoiceStability(String(Math.round(createVideoSettings.voice_stability * 100)));
     if (typeof createVideoSettings.voice_similarity === "number") setVoiceSimilarity(String(Math.round(createVideoSettings.voice_similarity * 100)));
     if (typeof createVideoSettings.voice_style_exaggeration === "number") setVoiceStyle(String(Math.round(createVideoSettings.voice_style_exaggeration * 100)));
@@ -421,6 +429,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         workflow_template_id: workflowTemplateId || null,
         voice_id: voiceId || null,
         voice_speed: Number(voiceSpeed),
+        voice_model: voiceModel,
         voice_stability: Number(voiceStability) / 100,
         voice_similarity: Number(voiceSimilarity) / 100,
         voice_style_exaggeration: Number(voiceStyle) / 100,
@@ -428,7 +437,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         voice_speaker_boost: voiceSpeakerBoost,
       },
     };
-  }, [duration, fps, seed, videoPrompt, voiceId, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId]);
+  }, [duration, fps, seed, videoPrompt, voiceId, voiceModel, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId]);
   const currentRenderedControls = useMemo(() => {
     if (!selectedWorkflow || !currentJob) return [];
     return previewLtxRenderControls(selectedWorkflow, {
@@ -477,6 +486,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       seed,
       audio_controls_open: audioControlsOpen,
       voice_speed: voiceSpeed,
+      voice_model: voiceModel,
       voice_stability: voiceStability,
       voice_similarity: voiceSimilarity,
       voice_style: voiceStyle,
@@ -492,6 +502,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     seed,
     videoPrompt,
     voiceId,
+    voiceModel,
     voiceOutputFormat,
     voiceSimilarity,
     voiceSpeakerBoost,
@@ -505,7 +516,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     return {
       voice_id: voice.voice_id,
       name: voice.name,
-      model: "eleven_multilingual_v2",
+      model: voiceModel,
       speed: Number(voiceSpeed),
       stability: Number(voiceStability) / 100,
       similarity: Number(voiceSimilarity) / 100,
@@ -886,14 +897,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
           <label className="field-label">Video title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="How high achievers handle micromanagement" /></label>
           {audioControlsOpen && <div className="create-video-collapsible"><label className="field-label">Render engine<select value={renderProfileId} onChange={(event) => setRenderProfileId(event.target.value)}><option value="" disabled>Select render engine</option>{renderProfiles.filter((profile) => profile.is_active).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
             <label className="field-label">ElevenLabs voice<select value={voiceId} onChange={(event) => setVoiceId(event.target.value)}><option value="" disabled>Select voice</option>{voices.map((voice) => <option key={voice.voice_id} value={voice.voice_id}>{voiceLabel(voice)}</option>)}</select></label>
-            {selectedVoice?.preview_url && <audio controls preload="none" src={selectedVoice.preview_url}>Your browser does not support audio playback.</audio>}
+            {selectedVoice?.preview_url && <VoiceCatalogPreview key={selectedVoice.preview_url} voice={selectedVoice} />}
             <div className="create-video-voice-controls" aria-label="ElevenLabs parameters">
-              <label className="voice-slider"><span className="control-label-with-tooltip">Speed <InfoTooltip label="Controls speaking speed. Lower is slower; higher is faster." /></span><span>{voiceSpeed}</span><input type="range" min="0.7" max="1.2" step="0.01" value={voiceSpeed} onChange={(event) => setVoiceSpeed(event.target.value)} /></label>
-              <label className="voice-slider"><span className="control-label-with-tooltip">Stability <InfoTooltip label="Controls voice consistency. Lower allows more variation; higher is steadier." /></span><span>{voiceStability}%</span><input type="range" min="0" max="100" step="1" value={voiceStability} onChange={(event) => setVoiceStability(event.target.value)} /></label>
-              <label className="voice-slider"><span className="control-label-with-tooltip">Similarity <InfoTooltip label="Controls how closely the output matches the selected voice." /></span><span>{voiceSimilarity}%</span><input type="range" min="0" max="100" step="1" value={voiceSimilarity} onChange={(event) => setVoiceSimilarity(event.target.value)} /></label>
-              <label className="voice-slider"><span className="control-label-with-tooltip">Style exaggeration <InfoTooltip label="Controls expressiveness. Higher values make delivery more dramatic." /></span><span>{voiceStyle}%</span><input type="range" min="0" max="100" step="1" value={voiceStyle} onChange={(event) => setVoiceStyle(event.target.value)} /></label>
+              <label className="field-label">ElevenLabs model<select value={voiceModel} onChange={(event) => { setVoiceModel(event.target.value); if (event.target.value === "eleven_v3") setVoiceStability("50"); }}>{ELEVENLABS_MODELS.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
+              {voiceCapabilities.speed && <label className="voice-slider"><span className="control-label-with-tooltip">Speed <InfoTooltip label="Controls speaking speed. Lower is slower; higher is faster." /></span><span>{voiceSpeed}</span><input type="range" min="0.7" max="1.2" step="0.01" value={voiceSpeed} onChange={(event) => setVoiceSpeed(event.target.value)} /></label>}
+              {voiceCapabilities.v3 ? <label className="field-label">Stability<select value={voiceStability} onChange={(event) => setVoiceStability(event.target.value)}><option value="0">Creative (0%)</option><option value="50">Natural (50%)</option><option value="100">Robust (100%)</option></select></label> : <label className="voice-slider"><span className="control-label-with-tooltip">Stability <InfoTooltip label="Controls voice consistency. Lower allows more variation; higher is steadier." /></span><span>{voiceStability}%</span><input type="range" min="0" max="100" step="1" value={voiceStability} onChange={(event) => setVoiceStability(event.target.value)} /></label>}
+              {voiceCapabilities.similarity && <label className="voice-slider"><span className="control-label-with-tooltip">Similarity <InfoTooltip label="Controls how closely the output matches the selected voice." /></span><span>{voiceSimilarity}%</span><input type="range" min="0" max="100" step="1" value={voiceSimilarity} onChange={(event) => setVoiceSimilarity(event.target.value)} /></label>}
+              {voiceCapabilities.style && <label className="voice-slider"><span className="control-label-with-tooltip">Style exaggeration <InfoTooltip label="Controls expressiveness. Higher values make delivery more dramatic." /></span><span>{voiceStyle}%</span><input type="range" min="0" max="100" step="1" value={voiceStyle} onChange={(event) => setVoiceStyle(event.target.value)} /></label>}
               <label className="field-label"><span className="control-label-with-tooltip">Output format <InfoTooltip label="Controls audio file type and bitrate for generated speech." /></span><select value={voiceOutputFormat} onChange={(event) => setVoiceOutputFormat(event.target.value)}><option value="mp3_44100_128">MP3 44.1 kHz (128kbps)</option><option value="mp3_44100_192">MP3 44.1 kHz (192kbps)</option><option value="wav_44100">WAV 44.1 kHz</option></select></label>
-              <label className="eleven-toggle-row"><span><strong className="control-label-with-tooltip">Speaker boost <InfoTooltip label="Boosts similarity to the original speaker, sometimes at the cost of variation." /></strong><small>Increase similarity to the original speaker.</small></span><button className={`switch-control${voiceSpeakerBoost ? " active" : ""}`} type="button" role="switch" aria-checked={voiceSpeakerBoost} onClick={() => setVoiceSpeakerBoost((enabled) => !enabled)}><span /></button></label>
+              {voiceCapabilities.speakerBoost && <label className="eleven-toggle-row"><span><strong className="control-label-with-tooltip">Speaker boost <InfoTooltip label="Boosts similarity to the original speaker, sometimes at the cost of variation." /></strong><small>Increase similarity to the original speaker.</small></span><button className={`switch-control${voiceSpeakerBoost ? " active" : ""}`} type="button" role="switch" aria-checked={voiceSpeakerBoost} onClick={() => setVoiceSpeakerBoost((enabled) => !enabled)}><span /></button></label>}
+              {(voiceCapabilities.v3 || voiceCapabilities.v4) && <p className="field-hint">Use audio tags such as [whispers] or [excited] in the Audio Script. SSML break tags are not supported.</p>}
             </div>
             <label className="field-label">Audio Script<textarea rows={10} value={script} onInput={(event) => { scriptDirtyRef.current = true; setScript(event.currentTarget.value); }} onChange={(event) => { scriptDirtyRef.current = true; setScript(event.target.value); }} placeholder="Paste the exact words the avatar should speak." /></label>
             <div className="create-video-actions">
