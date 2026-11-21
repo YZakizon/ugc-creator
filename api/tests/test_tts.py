@@ -53,6 +53,37 @@ def test_v3_rejects_invalid_stability_before_provider_call() -> None:
         model_voice_settings("eleven_v3", {"stability": 0.55})
 
 
+@pytest.mark.parametrize(
+    ("output_format", "requirement"),
+    [("wav_44100", "Pro tier"), ("mp3_44100_192", "Creator tier")],
+)
+@pytest.mark.asyncio
+async def test_forbidden_formats_have_safe_actionable_errors(
+    output_format: str, requirement: str
+) -> None:
+    provider = ElevenLabsTTSProvider(
+        api_key="test",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                403, json={"detail": "sensitive upstream text"}
+            )
+        ),
+    )
+    with pytest.raises(TTSProviderError) as caught:
+        await provider.synthesize(
+            TTSRequest(
+                text="Hello",
+                voice_id="test",
+                model_id="eleven_v4",
+                output_format=output_format,
+            )
+        )
+    assert requirement in str(caught.value)
+    assert "128kbps" in str(caught.value)
+    assert "sensitive upstream text" not in str(caught.value)
+    assert caught.value.retriable is False
+
+
 @pytest.mark.asyncio
 async def test_elevenlabs_adapter_maps_voice_settings_and_audio() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:

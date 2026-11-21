@@ -289,6 +289,39 @@ describe("CreateVideoPanel", () => {
     expect(attachedModel).toBe("eleven_v3");
   });
 
+  it.each([false, true])("notifies asynchronous audio failures and repeated retries (existing failure: %s)", async (initialFailure) => {
+    const message = "ElevenLabs speech generation failed (403). Try MP3 128kbps.";
+    const existingAudio = mediaAsset("old-audio", "audio", "previous.mp3");
+    let failed = initialFailure;
+    const current = () => ({ ...job(), status: failed ? "failed" : "content_ready", error_message: failed ? message : null, audio_asset: existingAudio, audio_assets: [existingAudio] });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/topics/topic-1") || url.includes("/on-demand-videos/topic-1")) return json({ ...topic(), contents: [current()] });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [{ voice_id: "hope", name: "Hope", category: "saved", description: null, preview_url: null }], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/usage")) return json({ configured: true, remaining_units: 100, unit: "characters" });
+      if (url.includes("/generate-tts") && init?.method === "POST") {
+        failed = true;
+        return json({ ...current(), status: "generating_tts", error_message: null });
+      }
+      if (url.includes("/elevenlabs-voice") || url.includes("/script")) return json(current());
+      return json({ items: [], total: 0 });
+    });
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    if (initialFailure) {
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    }
+    const generate = await screen.findByRole("button", { name: "Generate Audio" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    fireEvent.click(generate);
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByText("Audio generated.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
   it("shows delete icons for generated audio and completed videos", async () => {
     const audioAsset = mediaAsset("audio-1", "audio", "created-video_content1_0001-audio.mp3");
     const archivedAudioAsset = mediaAsset("audio-2", "audio_archive", "created-video_content1_0000-audio.mp3");

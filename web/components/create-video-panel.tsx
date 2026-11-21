@@ -277,6 +277,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const lastSettingsLoadedRef = useRef(false);
   const lastAutosaveKeyRef = useRef("");
   const awaitingAudioToastRef = useRef(false);
+  const lastFailureNotificationRef = useRef<string | null>(null);
   const audioCountBeforeGenerateRef = useRef(0);
   const audioIdBeforeGenerateRef = useRef<string | null>(null);
   const pendingAudioSelectionRef = useRef<string | null>(null);
@@ -599,9 +600,15 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       await updateJobScript(job.id, script);
       return generateJobSpeech(job.id);
     },
-    onSuccess: () => {
+    onSuccess: (job) => {
       awaitingAudioToastRef.current = true;
+      lastFailureNotificationRef.current = null;
+      cacheUpdatedJob(job);
       invalidate();
+    },
+    onError: (error) => {
+      awaitingAudioToastRef.current = false;
+      setToast({ message: error.message, variant: "danger" });
     },
   });
 
@@ -854,6 +861,20 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   }, [currentJob?.speech_script, generateAudio.isPending]);
 
   useEffect(() => {
+    if (!currentJob) return;
+    if (currentJob.status !== "failed") {
+      lastFailureNotificationRef.current = null;
+      return;
+    }
+    awaitingAudioToastRef.current = false;
+    const message = currentJob.error_message || "Generation failed. Please try again.";
+    const key = `${currentJob.id}:${message}`;
+    if (lastFailureNotificationRef.current === key) return;
+    lastFailureNotificationRef.current = key;
+    setToast({ message, variant: "danger" });
+  }, [currentJob]);
+
+  useEffect(() => {
     if (!awaitingAudioToastRef.current || !currentJob) return;
     if ((currentJob.audio_assets?.length ?? 0) > audioCountBeforeGenerateRef.current || (currentJob.audio_asset?.id && currentJob.audio_asset.id !== audioIdBeforeGenerateRef.current)) {
       awaitingAudioToastRef.current = false;
@@ -968,6 +989,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         </section>
       </div>
 
+      {currentJob?.status === "failed" && <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
       {error && <p className="form-error" role="alert">{error.message}</p>}
       {renderPreflightError && <p className="form-error" role="alert">{renderPreflightError}</p>}
       {active && <p className="field-hint">This created video is active. Editing is locked until the current generation step finishes.</p>}

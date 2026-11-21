@@ -111,8 +111,21 @@ class ElevenLabsTTSProvider:
                 if response.status_code < 500
                 else "provider_unavailable",
             )
+            message = f"ElevenLabs speech generation failed ({response.status_code})."
+            if response.status_code == 403:
+                message += " Access denied. Check your API key, voice access, and plan."
+                if request.output_format in {"wav_44100", "pcm_44100"}:
+                    message += (
+                        " WAV/PCM 44.1 kHz requires Pro tier or higher."
+                        " Try MP3 44.1 kHz (128kbps)."
+                    )
+                elif request.output_format == "mp3_44100_192":
+                    message += (
+                        " MP3 192kbps requires Creator tier or higher."
+                        " Try MP3 44.1 kHz (128kbps)."
+                    )
             raise TTSProviderError(
-                f"ElevenLabs speech generation failed ({response.status_code}).",
+                message,
                 category=category,
                 retriable=response.status_code in {408, 429}
                 or response.status_code >= 500,

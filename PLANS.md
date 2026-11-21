@@ -1834,6 +1834,11 @@ Append decisions here as implementation clarifies unknowns.
   Playing a sample never calls paid synthesis. Generated voice previews continue
   to use persisted media and the existing text/model/settings deduplication.
 - Model behavior reference: https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech
+- Create Video and saved Created Video editors surface asynchronous generation
+  failures as top-of-screen, five-second error notifications. A persistent inline
+  message remains after dismissal. Polling does not repeatedly reopen the same
+  failure, but an explicit retry can notify again. ElevenLabs format-access
+  failures include safe plan requirements and the MP3 128kbps alternative.
 
 Format:
 
