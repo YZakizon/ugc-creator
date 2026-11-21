@@ -28,6 +28,16 @@ def rendered_ltx_controls(workflow: dict[str, object]) -> list[dict[str, object]
         ("Width", _numeric_field(fields, r"^width$", "width")),
         ("Height", _numeric_field(fields, r"^height$", "height")),
     ]
+    for field in fields:
+        node = workflow.get(field.node_id)
+        metadata = node.get("_meta") if isinstance(node, dict) else None
+        if (
+            field.class_type == "LoadImage"
+            and field.input_name == "image"
+            and isinstance(metadata, dict)
+            and metadata.get("ugc_reference_asset")
+        ):
+            controls.append(("Second image reference", field))
     return [
         {
             "label": label,

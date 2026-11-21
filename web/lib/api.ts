@@ -342,6 +342,7 @@ export function getTopics(limit = 20, offset = 0): Promise<{ items: TopicSummary
 }
 
 export type OnDemandRenderOverrides = {
+  workflow_controls?: Record<string, boolean | number | string>;
   video_prompt?: string | null;
   fps?: number | null;
   duration?: number | null;

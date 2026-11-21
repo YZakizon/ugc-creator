@@ -65,6 +65,33 @@ function topic(overrides: Record<string, unknown> = {}) {
 }
 
 describe("CreateVideoPanel", () => {
+  it("saves an independently uploaded second image and its enabled state", async () => {
+    const requests: Array<{ url: string; body?: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, body: init?.body ? String(init.body) : undefined });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      if (url.includes("/workflow-templates")) return json({ items: [{ ...workflowTemplate(), name: "MiniMax H3", metadata_json: { optional_image_references: [{ key: "second_image", label: "Second image reference", enabled: false, asset_key: "workflow-media/original.png" }] } }], total: 1 });
+      if (url.includes("/workflow-media")) return json({ asset_key: "workflow-media/new-reference.png", filename: "new-reference.png", input_type: "image" }, 201);
+      if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [], total: 0 });
+      if (url.includes("/tts-providers/elevenlabs/usage")) return json({ configured: false });
+      if (url.includes("/render-nodes") || url.includes("/render-attempts")) return json({ items: [], total: 0 });
+      if (url.includes("/on-demand-videos")) return json({ items: [], total: 0 });
+      return json(topic());
+    });
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const toggle = await screen.findByRole("checkbox", { name: "Enable second image reference" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByRole("heading", { name: "Workflow: MiniMax H3" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Second source image"), { target: { files: [new File(["second image"], "new-reference.png", { type: "image/png" })] } });
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(screen.getByText(/new-reference.png · Enabled/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save LTX controls" }));
+    await waitFor(() => expect(requests.some((request) => request.body?.includes('"second_image_asset":"workflow-media/new-reference.png"') && request.body.includes('"second_image":true'))).toBe(true));
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.clear();

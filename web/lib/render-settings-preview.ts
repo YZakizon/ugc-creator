@@ -1,4 +1,5 @@
 import type { Job, RenderedWorkflowControl, WorkflowTemplate } from "@/lib/api";
+import { optionalImageReferences } from "@/lib/workflow-controls";
 
 type Scalar = string | number | boolean;
 type Field = RenderedWorkflowControl & { classType: string; title: string };
@@ -118,7 +119,7 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
     ["Width", first(items, (field) => numeric(field) && (/^width$/i.test(field.title.trim()) || /^width$/i.test(field.input_name)))],
     ["Height", first(items, (field) => numeric(field) && (/^height$/i.test(field.title.trim()) || /^height$/i.test(field.input_name)))],
   ];
-  return controls.flatMap(([label, field]) => {
+  const rendered = controls.flatMap(([label, field]) => {
     if (!field) return [];
     let value = field.value;
     if (label === "Image source" && sourceImage) value = sourceImage;
@@ -137,4 +138,11 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
     if (label === "Seed" && seed !== undefined) value = seed;
     return [{ label, node_id: field.node_id, input_name: field.input_name, value }];
   });
+  const overrides = isRecord(job.render_overrides?.workflow_controls) ? job.render_overrides.workflow_controls : {};
+  for (const reference of optionalImageReferences(workflow)) {
+    const enabled = typeof overrides[reference.key] === "boolean" ? overrides[reference.key] : reference.enabled;
+    const asset = overrides[reference.key + "_asset"] ?? reference.asset_key;
+    rendered.push({ label: reference.label, node_id: "", input_name: reference.key, value: enabled ? String(asset ?? "No image selected").split("/").at(-1) ?? "" : "Disabled" });
+  }
+  return rendered;
 }

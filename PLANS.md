@@ -1813,6 +1813,10 @@ Append decisions here as implementation clarifies unknowns.
 
 ## 40.8 On-demand Created Video workspace
 
+- Optional image references are configured by workflow metadata, default off,
+  toggled per Created Video and snapshotted when a render is queued. Secondary
+  images are stored independently and never replaced by the primary image.
+
 - Dashboard Create Video is a separate on-demand workspace for one saved video
   draft plus its generated audio/video history.
 - Created Videos are stored with a distinct `creation_mode` and are listed through
