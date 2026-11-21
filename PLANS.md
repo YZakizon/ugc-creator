@@ -1813,6 +1813,10 @@ Append decisions here as implementation clarifies unknowns.
 
 ## 40.8 On-demand Created Video workspace
 
+- MiniMax H3 workflows using a connected ResolutionSelector expose per-video
+  aspect ratio, megapixels and size multiple. These values are validated and
+  snapshotted on the render copy; no model-specific columns or node IDs are added.
+
 - Optional image references are configured by workflow metadata, default off,
   toggled per Created Video and snapshotted when a render is queued. Secondary
   images are stored independently and never replaced by the primary image.

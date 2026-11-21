@@ -29,6 +29,14 @@ def rendered_ltx_controls(workflow: dict[str, object]) -> list[dict[str, object]
         ("Height", _numeric_field(fields, r"^height$", "height")),
     ]
     for field in fields:
+        if field.class_type == "ResolutionSelector":
+            label = {
+                "aspect_ratio": "Aspect ratio",
+                "megapixels": "Image megapixels",
+                "multiple": "Size multiple",
+            }.get(field.input_name)
+            if label:
+                controls.append((label, field))
         node = workflow.get(field.node_id)
         metadata = node.get("_meta") if isinstance(node, dict) else None
         if (

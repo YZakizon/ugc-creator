@@ -71,7 +71,7 @@ describe("CreateVideoPanel", () => {
       const url = String(input);
       requests.push({ url, body: init?.body ? String(init.body) : undefined });
       if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
-      if (url.includes("/workflow-templates")) return json({ items: [{ ...workflowTemplate(), name: "MiniMax H3", metadata_json: { optional_image_references: [{ key: "second_image", label: "Second image reference", enabled: false, asset_key: "workflow-media/original.png" }] } }], total: 1 });
+      if (url.includes("/workflow-templates")) return json({ items: [{ ...workflowTemplate(), name: "MiniMax H3", workflow_json: { ...workflowTemplate().workflow_json, size: { class_type: "ResolutionSelector", inputs: { aspect_ratio: "9:16 (Portrait Widescreen)", megapixels: 0.5, multiple: 32 } }, generator: { class_type: "MiniMaxH3ReferenceToVideo", inputs: { width: ["size", 0], height: ["size", 1] } } }, metadata_json: { optional_image_references: [{ key: "second_image", label: "Second image reference", enabled: false, asset_key: "workflow-media/original.png" }] } }], total: 1 });
       if (url.includes("/workflow-media")) return json({ asset_key: "workflow-media/new-reference.png", filename: "new-reference.png", input_type: "image" }, 201);
       if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [], total: 0 });
       if (url.includes("/tts-providers/elevenlabs/usage")) return json({ configured: false });
@@ -83,11 +83,16 @@ describe("CreateVideoPanel", () => {
     const toggle = await screen.findByRole("checkbox", { name: "Enable second image reference" });
     expect(toggle).not.toBeChecked();
     expect(screen.getByRole("heading", { name: "Workflow: MiniMax H3" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Image megapixels")).toHaveValue(0.5);
+    expect(screen.getByLabelText("Size multiple")).toHaveValue(32);
+    fireEvent.change(screen.getByLabelText("Image megapixels"), { target: { value: "1.25" } });
+    fireEvent.change(screen.getByLabelText("Aspect ratio"), { target: { value: "16:9 (Widescreen)" } });
     fireEvent.change(screen.getByLabelText("Second source image"), { target: { files: [new File(["second image"], "new-reference.png", { type: "image/png" })] } });
     await waitFor(() => expect(toggle).toBeChecked());
     expect(screen.getByText(/new-reference.png · Enabled/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save LTX controls" }));
     await waitFor(() => expect(requests.some((request) => request.body?.includes('"second_image_asset":"workflow-media/new-reference.png"') && request.body.includes('"second_image":true'))).toBe(true));
+    expect(requests.some((request) => request.body?.includes('"image_megapixels":1.25') && request.body.includes('"image_aspect_ratio":"16:9 (Widescreen)"'))).toBe(true);
     fireEvent.click(toggle);
     expect(toggle).not.toBeChecked();
   });

@@ -34,7 +34,7 @@ import {
   uploadJobSourceImage,
   uploadWorkflowMedia,
 } from "@/lib/api";
-import { optionalImageReferences } from "@/lib/workflow-controls";
+import { IMAGE_ASPECT_RATIOS, minimaxImageSize, optionalImageReferences } from "@/lib/workflow-controls";
 import { previewLtxRenderControls } from "@/lib/render-settings-preview";
 import type { ElevenLabsVoice, Job, MediaAsset, OnDemandRenderOverrides, RenderAttempt, RenderedWorkflowControl, Topic, TopicSummary, WorkflowTemplate, WorkflowTemplateInput } from "@/lib/api";
 
@@ -342,6 +342,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const active = currentJob ? ACTIVE_STATUSES.has(currentJob.status) : false;
   const selectedWorkflow = workflowTemplates.find((workflow) => workflow.id === workflowTemplateId);
   const imageReferences = optionalImageReferences(selectedWorkflow);
+  const imageSize = minimaxImageSize(selectedWorkflow);
   const firstProfile = renderProfiles.find((profile) => profile.id === renderProfileId);
   const selectedAudioAsset = currentJob?.audio_assets?.find((asset) => asset.id === selectedAudioAssetId) ?? defaultRenderAudioAsset(currentJob);
   const sourceImageDisplayName = pendingSourceImageName || mediaDisplayName(currentJob?.source_image_asset);
@@ -972,7 +973,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         <section className="panel create-video-card create-video-ltx">
           <div className="panel-heading"><div><h3>Workflow: {selectedWorkflow?.name ?? "Select a workflow"}</h3><p>{firstProfile ? `Using ${firstProfile.name}` : "Choose a render profile"}</p></div></div>
           <div className="create-video-workflow-row">
-            <label className="field-label">Base workflow<select value={workflowTemplateId} onChange={(event) => { const id = event.target.value; setWorkflowTemplateId(id); const workflow = workflowTemplates.find((item) => item.id === id); if (workflow) applyWorkflowBase(workflow); }}><option value="">Use render engine default</option>{workflowTemplates.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
+            <label className="field-label">Base workflow<select value={workflowTemplateId} onChange={(event) => { const id = event.target.value; setWorkflowTemplateId(id); const workflow = workflowTemplates.find((item) => item.id === id); if (workflow) applyWorkflowBase(workflow, true); }}><option value="">Use render engine default</option>{workflowTemplates.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
           </div>
           <div className="create-video-override-group">
             <div className="create-video-override-heading"><div><strong>Workflow overrides</strong><small>Override the base workflow JSON, source image, or audio for this video only.</small></div></div>
@@ -996,7 +997,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
                 const enabled = typeof workflowControls[reference.key] === "boolean" ? workflowControls[reference.key] as boolean : reference.enabled;
                 const asset = workflowControls[reference.key + "_asset"] ?? reference.asset_key;
                 return <div className="create-video-override-item" key={reference.key}>
-                  <label><input type="checkbox" checked={enabled} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, [reference.key]: event.target.checked }))} /> Enable second image reference</label>
+                  <label className="create-video-reference-toggle"><input type="checkbox" checked={enabled} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, [reference.key]: event.target.checked }))} /> Enable second image reference</label>
                   <label className="create-video-file-control"><input aria-label="Second source image" type="file" accept="image/*" disabled={uploadReferenceImage.isPending || active} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadReferenceImage.mutate({ file, key: reference.key }); event.target.value = ""; }} /><span>{uploadReferenceImage.isPending ? "Uploading image…" : "Second source image"}</span></label>
                   <small className="field-hint">{typeof asset === "string" ? asset.split("/").at(-1) : "No second image selected."} · {enabled ? "Enabled" : "Disabled — not sent to ComfyUI"}</small>
                 </div>;
@@ -1007,6 +1008,11 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
           <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
           <div className="prompt-template-vars create-video-vars"><small>Supported variable</small><button className="prompt-var" type="button" onClick={() => insertVideoPromptVariable("{{SCRIPT}}")}>{"{{SCRIPT}}"}</button><small>Expands to Audio Script when rendering.</small></div>
           <div className="ltx-control-row">
+            {imageSize && <>
+              <label className="field-label">Aspect ratio<select value={String(workflowControls.image_aspect_ratio ?? imageSize.aspectRatio)} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_aspect_ratio: event.target.value }))}>{IMAGE_ASPECT_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</select></label>
+              <label className="field-label">Image megapixels<input type="number" min="0.1" max="16" step="0.01" value={String(workflowControls.image_megapixels ?? imageSize.megapixels)} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_megapixels: event.target.value === "" ? "" : Number(event.target.value) }))} /></label>
+              <label className="field-label">Size multiple<input type="number" min="8" max="128" step="4" value={String(workflowControls.image_multiple ?? imageSize.multiple)} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_multiple: event.target.value === "" ? "" : Number(event.target.value) }))} /></label>
+            </>}
             <label className="field-label">FPS<input inputMode="numeric" value={fps} onChange={(event) => setFps(event.target.value)} /></label>
             <label className="field-label">Duration<input inputMode="numeric" value={duration} onChange={(event) => setDuration(event.target.value)} /></label>
             <label className="field-label">Seed<input inputMode="numeric" value={seed} onChange={(event) => setSeed(event.target.value)} placeholder="Workflow default" /></label>

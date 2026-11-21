@@ -1,5 +1,5 @@
 import type { Job, RenderedWorkflowControl, WorkflowTemplate } from "@/lib/api";
-import { optionalImageReferences } from "@/lib/workflow-controls";
+import { minimaxImageSize, optionalImageReferences } from "@/lib/workflow-controls";
 
 type Scalar = string | number | boolean;
 type Field = RenderedWorkflowControl & { classType: string; title: string };
@@ -143,6 +143,14 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
     const enabled = typeof overrides[reference.key] === "boolean" ? overrides[reference.key] : reference.enabled;
     const asset = overrides[reference.key + "_asset"] ?? reference.asset_key;
     rendered.push({ label: reference.label, node_id: "", input_name: reference.key, value: enabled ? String(asset ?? "No image selected").split("/").at(-1) ?? "" : "Disabled" });
+  }
+  const size = minimaxImageSize(workflow);
+  if (size) {
+    for (const [label, key, input, fallback] of [
+      ["Aspect ratio", "image_aspect_ratio", "aspect_ratio", size.aspectRatio],
+      ["Image megapixels", "image_megapixels", "megapixels", size.megapixels],
+      ["Size multiple", "image_multiple", "multiple", size.multiple],
+    ] as const) rendered.push({ label, node_id: size.nodeId, input_name: input, value: overrides[key] ?? fallback });
   }
   return rendered;
 }

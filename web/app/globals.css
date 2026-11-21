@@ -614,6 +614,8 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .create-video-media-pickers { display: grid; grid-template-columns: 1fr; gap: 8px; }
 .create-video-override-item { display: grid; grid-template-columns: minmax(120px, 150px) minmax(0, 1fr); align-items: center; gap: 6px 12px; padding: 9px 10px; border: 1px solid #ebe8fa; border-radius: 12px; background: #fff; }
 .create-video-override-label { color: #303142; font-size: 12px; font-weight: 900; }
+.create-video-reference-toggle { display: flex; align-items: flex-start; gap: 6px; color: #303142; font-size: 12px; font-weight: 800; line-height: 1.5; }
+.create-video-reference-toggle input { flex: 0 0 auto; margin: 3px 0 0; accent-color: #7355ed; }
 .create-video-override-item .create-video-file-control { width: 100%; min-height: 40px; }
 .create-video-override-item .field-hint { grid-column: 2; margin: 0; }
 .create-video-media-row { display: grid; align-items: start; gap: 6px; }
