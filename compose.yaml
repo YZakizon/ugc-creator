@@ -30,7 +30,8 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    image: minio-local:latest
+    pull_policy: never
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:

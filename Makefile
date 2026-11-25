@@ -4,11 +4,12 @@ ENV_FILE ?= .env
 API_DEV_PORT ?= 8000
 API_RUNNER ?= uv run
 API_DEV_RELOAD ?= --reload
+MINIO_IMAGE := minio-local:latest
 
 .PHONY: setup env-merge lint typecheck test test-e2e check-compose check-env \
 	check-host-api dev \
 	compose-up compose-down docker-build-run docker-run docker-stop docker-logs \
-	capture-docker-ports ensure-traefik-network api-dev web-dev
+	capture-docker-ports ensure-traefik-network build-minio ensure-minio-image api-dev web-dev
 
 setup:
 >cd api && uv sync --dev
@@ -49,13 +50,19 @@ web-dev:
 
 dev: docker-build-run
 
-docker-build-run: ensure-traefik-network
+docker-build-run: ensure-traefik-network ensure-minio-image
 >docker compose up -d --build --wait --wait-timeout 180
 >$(MAKE) capture-docker-ports
 
-docker-run: ensure-traefik-network
+docker-run: ensure-traefik-network ensure-minio-image
 >docker compose up -d --wait --wait-timeout 180
 >$(MAKE) capture-docker-ports
+
+build-minio:
+>docker build -t $(MINIO_IMAGE) - < Dockerfile.minio
+
+ensure-minio-image:
+>docker image inspect $(MINIO_IMAGE) >/dev/null 2>&1 || $(MAKE) build-minio
 
 ensure-traefik-network:
 >docker network inspect traefik-proxy >/dev/null 2>&1 || docker network create traefik-proxy
