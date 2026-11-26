@@ -405,6 +405,18 @@ class InMemoryBatchRepository:
         job.updated_at = utc_now()
         return job
 
+    def discard_unstarted_content(self, job_id: UUID) -> bool:
+        job = self.jobs.get(job_id)
+        if job is None or job.status != JobStatus.QUEUED.value:
+            return False
+        batch = self.batches.get(job.batch_id)
+        if batch is None or len(batch.jobs) <= 1:
+            return False
+        self.jobs.pop(job_id)
+        batch.jobs = [content for content in batch.jobs if content.id != job_id]
+        batch.updated_at = utc_now()
+        return True
+
     def queue_job_for_tts(self, job_id: UUID) -> TopicJob | None:
         job = self.jobs.get(job_id)
         if job is None:
@@ -1145,6 +1157,30 @@ class SqlAlchemyBatchRepository:
             session.commit()
             session.refresh(job)
             return job
+
+    def discard_unstarted_content(self, job_id: UUID) -> bool:
+        with self.factory() as session:
+            job = session.scalar(
+                select(TopicJob).where(TopicJob.id == job_id).with_for_update()
+            )
+            if job is None or job.status != JobStatus.QUEUED.value:
+                return False
+            batch = session.scalar(
+                select(Batch).where(Batch.id == job.batch_id).with_for_update()
+            )
+            if batch is None:
+                return False
+            content_count = session.scalar(
+                select(func.count())
+                .select_from(TopicJob)
+                .where(TopicJob.batch_id == batch.id)
+            )
+            if content_count is None or content_count <= 1:
+                return False
+            session.delete(job)
+            batch.updated_at = utc_now()
+            session.commit()
+            return True
 
     def queue_job_for_tts(self, job_id: UUID) -> TopicJob | None:
         with self.factory() as session:
