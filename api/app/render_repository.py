@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
@@ -20,7 +20,7 @@ from app.db.models import (
 from app.providers.render.comfyui_controls import inferred_ltx_bindings
 from app.providers.render.minimax_controls import configure_minimax_image_size
 from app.providers.render.optional_inputs import configure_optional_images
-from app.schemas import RenderNodeCreate
+from app.schemas import CreatedVideoRenderRequest, RenderNodeCreate
 
 
 def now() -> datetime:
@@ -96,23 +96,43 @@ class RenderExecutionRepository:
             session.commit()
             return True
 
-    def queue_attempt(self, job_id: UUID, node_id: UUID) -> RenderAttempt:
+    def queue_attempt(
+        self,
+        job_id: UUID,
+        node_id: UUID,
+        requested: CreatedVideoRenderRequest | None = None,
+    ) -> RenderAttempt:
         with self.factory() as session:
             job = session.scalar(
                 select(TopicJob).where(TopicJob.id == job_id).with_for_update()
             )
             if job is None:
                 raise LookupError("Job not found")
-            if not any(asset.kind == "audio" for asset in job.media_assets):
+            if requested is not None and job.batch.creation_mode != "created_video":
+                raise ValueError("Only created videos support queued render snapshots")
+            if requested is not None and job.status in {
+                JobStatus.GENERATING_CONTENT.value,
+                JobStatus.GENERATING_TTS.value,
+                JobStatus.FITTING_DURATION.value,
+            }:
+                raise ValueError("Wait for audio or script generation to finish")
+            if requested is None and not any(
+                asset.kind == "audio" for asset in job.media_assets
+            ):
                 raise ValueError("Generate job speech before rendering")
-            if job.render_profile_id is None:
+            profile_id = (
+                requested.render_profile_id if requested else job.render_profile_id
+            )
+            if profile_id is None:
                 raise ValueError("Job has no render profile")
-            profile = session.get(RenderProfile, job.render_profile_id)
-            if profile is None:
+            profile = session.get(RenderProfile, profile_id)
+            if profile is None or (requested is not None and not profile.is_active):
                 raise ValueError("Render profile is unavailable")
             workflow_template_id = (
-                job.workflow_template_id or profile.workflow_template_id
-            )
+                requested.workflow_template_id
+                if requested
+                else job.workflow_template_id
+            ) or profile.workflow_template_id
             if workflow_template_id is None:
                 raise ValueError("Job has no workflow template")
             workflow = session.scalar(
@@ -125,23 +145,34 @@ class RenderExecutionRepository:
             node = session.get(RenderNode, node_id)
             if node is None or not node.is_active:
                 raise ValueError("Choose an active render node")
-            existing = session.scalar(
-                select(RenderAttempt)
-                .where(
-                    RenderAttempt.job_id == job_id,
-                    RenderAttempt.status.in_(
-                        [
-                            "queued",
-                            "submitting_render",
-                            "rendering",
-                            "downloading_output",
-                        ]
-                    ),
+            if requested is not None and (
+                profile.renderer_provider != node.provider
+                or workflow.renderer_provider != node.provider
+            ):
+                raise ValueError(
+                    "Choose a workflow and node that match the render engine"
                 )
-                .order_by(RenderAttempt.created_at.desc())
+            overrides = (
+                requested.render_overrides.compact()
+                if requested
+                else (job.render_overrides or {})
             )
-            if existing is not None:
-                return existing
+            snapshot: dict[str, object] = {}
+            if requested is not None:
+                snapshot = self._created_video_snapshot(
+                    job, profile, workflow, overrides, requested
+                )
+            else:
+                existing = session.scalar(
+                    select(RenderAttempt)
+                    .where(
+                        RenderAttempt.job_id == job_id,
+                        RenderAttempt.status.in_(ACTIVE_RENDER_JOB_STATUSES),
+                    )
+                    .order_by(RenderAttempt.created_at.desc())
+                )
+                if existing is not None:
+                    return existing
             attempt_id = uuid4()
             binding_snapshot = [
                 {
@@ -156,13 +187,11 @@ class RenderExecutionRepository:
             ]
             workflow_snapshot = deepcopy(workflow.workflow_json)
             if node.provider == "comfyui":
-                configure_minimax_image_size(
-                    workflow_snapshot, job.render_overrides or {}
-                )
+                configure_minimax_image_size(workflow_snapshot, overrides)
                 configure_optional_images(
                     workflow_snapshot,
                     workflow.metadata_json,
-                    job.render_overrides or {},
+                    overrides,
                 )
                 binding_snapshot.extend(
                     inferred_ltx_bindings(workflow_snapshot, binding_snapshot)
@@ -179,19 +208,114 @@ class RenderExecutionRepository:
                 progress=0,
                 workflow_snapshot=workflow_snapshot,
                 binding_snapshot=binding_snapshot,
-                effective_values={},
+                effective_values={"requested_inputs": snapshot}
+                if requested is not None
+                else {},
             )
-            job.status = JobStatus.QUEUED.value
-            job.error_message = None
+            if job.status not in ACTIVE_RENDER_JOB_STATUSES:
+                job.status = JobStatus.QUEUED.value
+                job.error_message = None
             session.add(attempt)
             session.commit()
             session.refresh(attempt)
             return attempt
 
+    @staticmethod
+    def _created_video_snapshot(
+        job: TopicJob,
+        profile: RenderProfile,
+        workflow: WorkflowTemplate,
+        overrides: dict[str, object],
+        requested: CreatedVideoRenderRequest,
+    ) -> dict[str, object]:
+        def media(kind: str, asset_id: UUID) -> dict[str, object]:
+            asset = next(
+                (
+                    item
+                    for item in job.media_assets
+                    if item.id == asset_id and item.kind in {kind, f"{kind}_archive"}
+                ),
+                None,
+            )
+            if asset is None:
+                raise ValueError(
+                    "Pick source image and audio file before generating video"
+                )
+            return {
+                "id": str(asset.id),
+                "filename": asset.filename,
+                "object_key": asset.object_key,
+                "generation_metadata": deepcopy(asset.generation_metadata),
+            }
+
+        topic = requested.title
+        script = requested.speech_script or topic
+        return {
+            "values": {
+                **deepcopy(profile.default_parameters),
+                "script": script,
+                "topic": topic,
+                "hook": job.hook or "",
+                "video_prompt": profile.prompt_template or script,
+                "duration": requested.target_duration_seconds,
+                "character_name": profile.character.name,
+                **deepcopy(overrides),
+            },
+            "audio": media("audio", requested.audio_asset_id),
+            "source_image": media("source_image", requested.source_image_asset_id),
+            "workflow_metadata": deepcopy(workflow.metadata_json),
+            "workflow_checksum": workflow.checksum,
+        }
+
+    @staticmethod
+    def _set_job_render_status(
+        session: Session,
+        attempt: RenderAttempt,
+        fallback: str,
+        error: str | None = None,
+    ) -> None:
+        job = session.scalar(
+            select(TopicJob).where(TopicJob.id == attempt.job_id).with_for_update()
+        )
+        if job is None:
+            return
+        remaining = session.scalar(
+            select(RenderAttempt.status)
+            .where(
+                RenderAttempt.job_id == job.id,
+                RenderAttempt.id != attempt.id,
+                RenderAttempt.status.in_(ACTIVE_RENDER_JOB_STATUSES),
+            )
+            .order_by(RenderAttempt.created_at, RenderAttempt.id)
+            .limit(1)
+        )
+        job.status = remaining or fallback
+        job.error_message = None if remaining else error
+
     def claim_submission(self, attempt_id: UUID) -> tuple[bool, int]:
         claimed_at = now()
         claim_expires_at = claimed_at + SUBMISSION_CLAIM_DURATION
         with self.factory() as session:
+            candidate = session.get(RenderAttempt, attempt_id)
+            if candidate is None or candidate.status in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
+                return False, 0
+            if "requested_inputs" in candidate.effective_values:
+                earlier = session.scalar(
+                    select(RenderAttempt.id)
+                    .where(
+                        RenderAttempt.job_id == candidate.job_id,
+                        RenderAttempt.status.in_(ACTIVE_RENDER_JOB_STATUSES),
+                        tuple_(RenderAttempt.created_at, RenderAttempt.id)
+                        < (candidate.created_at, candidate.id),
+                    )
+                    .limit(1)
+                )
+                if earlier is not None:
+                    return False, 5
             claimed = cast(
                 CursorResult[Any],
                 session.execute(
@@ -314,11 +438,22 @@ class RenderExecutionRepository:
         self, attempt_id: UUID, workflow: dict[str, object], values: dict[str, object]
     ) -> RenderAttempt:
         with self.factory() as session:
-            attempt = session.get(RenderAttempt, attempt_id)
+            attempt = session.scalar(
+                select(RenderAttempt)
+                .where(RenderAttempt.id == attempt_id)
+                .with_for_update()
+            )
             if attempt is None:
                 raise LookupError("Render attempt not found")
+            if attempt.status in {"completed", "failed", "cancelled"}:
+                return attempt
             attempt.workflow_snapshot = workflow
-            attempt.effective_values = values
+            snapshot = attempt.effective_values.get("requested_inputs")
+            attempt.effective_values = (
+                {**values, "requested_inputs": snapshot}
+                if snapshot is not None
+                else values
+            )
             attempt.status = "submitting_render"
             attempt.job.status = JobStatus.SUBMITTING_RENDER.value
             session.commit()
@@ -365,7 +500,13 @@ class RenderExecutionRepository:
             return True
 
     def update_progress(
-        self, attempt_id: UUID, status: str, progress: int, error: str | None = None
+        self,
+        attempt_id: UUID,
+        status: str,
+        progress: int,
+        error: str | None = None,
+        *,
+        queued_only: bool = False,
     ) -> bool:
         with self.factory() as session:
             attempt = session.get(RenderAttempt, attempt_id)
@@ -376,6 +517,8 @@ class RenderExecutionRepository:
                 if status == "rendering"
                 else {"queued", "submitting_render", "rendering", "downloading_output"}
             )
+            if queued_only:
+                allowed_statuses = {"queued"}
             changed = cast(
                 CursorResult[Any],
                 session.execute(
@@ -407,21 +550,29 @@ class RenderExecutionRepository:
                 return False
             if status in {"failed", "completed", "cancelled"}:
                 attempt.submission_claim_expires_at = None
-            attempt.job.status = (
+            job_status = (
                 status
                 if status in {item.value for item in JobStatus}
                 else JobStatus.RENDERING.value
             )
-            attempt.job.error_message = error
+            if status in {"failed", "completed", "cancelled"}:
+                self._set_job_render_status(session, attempt, job_status, error)
+            else:
+                attempt.job.status = job_status
+                attempt.job.error_message = error
             session.commit()
             return True
 
-    def cancel_attempt(self, attempt_id: UUID) -> RenderAttempt | None:
+    def cancel_attempt(
+        self, attempt_id: UUID, *, queued_only: bool = False
+    ) -> RenderAttempt | None:
         cancelled_at = now()
         with self.factory() as session:
             attempt = session.get(RenderAttempt, attempt_id)
             if attempt is None:
                 return None
+            if queued_only and attempt.status != "queued":
+                raise ValueError("This render has already left the queue")
             if attempt.status in {"completed", "failed", "cancelled"}:
                 return attempt
             changed = cast(
@@ -437,6 +588,8 @@ class RenderExecutionRepository:
                                 "rendering",
                                 "downloading_output",
                             }
+                            if not queued_only
+                            else {"queued"}
                         ),
                     )
                     .values(
@@ -451,9 +604,12 @@ class RenderExecutionRepository:
             )
             if changed.rowcount != 1:
                 session.rollback()
+                if queued_only:
+                    raise ValueError("This render has already left the queue")
                 return session.get(RenderAttempt, attempt_id)
-            attempt.job.status = JobStatus.READY_TO_RENDER.value
-            attempt.job.error_message = None
+            self._set_job_render_status(
+                session, attempt, JobStatus.READY_TO_RENDER.value
+            )
             session.commit()
             return session.scalar(
                 select(RenderAttempt)
@@ -559,7 +715,7 @@ class RenderExecutionRepository:
                 size_bytes=size,
             )
             session.add(asset)
-            attempt.job.status = JobStatus.COMPLETED.value
+            self._set_job_render_status(session, attempt, JobStatus.COMPLETED.value)
             session.commit()
             return True
 

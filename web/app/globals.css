@@ -626,9 +626,10 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .create-video-file-control:has(input:disabled) { color: #7b61ff; background: #faf8ff; opacity: 1; cursor: not-allowed; }
 .create-video-audio-list, .create-video-video-list { display: grid; gap: 5px; }
 .create-video-audio, .create-video-render { display: grid; gap: 7px; padding: 9px 10px; border: 1px solid #e8e7f1; border-radius: 14px; background: #fbfbfe; }
-.create-video-audio { grid-template-columns: minmax(150px, .8fr) minmax(180px, 1.1fr) auto auto; align-items: center; gap: 6px; min-height: 42px; padding: 5px 7px; border-radius: 11px; }
+.create-video-audio { grid-template-columns: minmax(150px, .8fr) minmax(150px, 1.1fr) auto auto auto; align-items: center; gap: 6px; min-height: 42px; padding: 5px 7px; border-radius: 11px; }
 .create-video-audio.active { border-color: #7b61ff; background: #f4f1ff; }
 .create-video-render { grid-template-columns: minmax(0, 1fr); }
+.create-video-render > div:first-child { flex-wrap: wrap; align-items: center; }
 .create-video-audio > div, .create-video-render > div:first-child { display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
 .create-video-media-title { align-items: flex-start; }
 .create-video-audio small, .create-video-render small { color: #777887; font-weight: 700; }

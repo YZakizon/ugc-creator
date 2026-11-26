@@ -718,12 +718,17 @@ export function deleteRenderNode(nodeId: string): Promise<void> {
   return request<void>(`/api/v1/render-nodes/${nodeId}`, { method: "DELETE" });
 }
 
-export function queueJobRender(jobId: string, nodeId: string): Promise<RenderAttempt> {
-  return request<RenderAttempt>(`/api/v1/jobs/${jobId}/render?node_id=${encodeURIComponent(nodeId)}`, { method: "POST", body: JSON.stringify({}) });
+export type CreatedVideoRenderRequest = OnDemandVideoSaveInput & {
+  audio_asset_id: string;
+  source_image_asset_id: string;
+};
+
+export function queueJobRender(jobId: string, nodeId: string, inputs?: CreatedVideoRenderRequest): Promise<RenderAttempt> {
+  return request<RenderAttempt>(`/api/v1/jobs/${jobId}/render${inputs ? "/queued" : ""}?node_id=${encodeURIComponent(nodeId)}`, { method: "POST", body: JSON.stringify(inputs ?? {}) });
 }
 
-export function cancelRenderAttempt(attemptId: string): Promise<RenderAttempt> {
-  return request<RenderAttempt>(`/api/v1/render-attempts/${attemptId}/cancel`, { method: "POST", body: JSON.stringify({}) });
+export function cancelRenderAttempt(attemptId: string, queuedOnly = false): Promise<RenderAttempt> {
+  return request<RenderAttempt>(`/api/v1/render-attempts/${attemptId}/cancel${queuedOnly ? "?queued_only=true" : ""}`, { method: "POST", body: JSON.stringify({}) });
 }
 
 export function deleteFailedRenderAttempts({ jobId, attemptId }: { jobId: string; attemptId?: string }): Promise<void> {

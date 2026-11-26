@@ -3,6 +3,7 @@ import os
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import PurePath
+from typing import cast
 from uuid import UUID
 
 from app.core.media_naming import generated_media_filename
@@ -182,45 +183,63 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
     if attempt.external_job_id:
         monitor_render.apply_async(args=[str(attempt_id)], countdown=1)
         return
-    values = dict(profile.default_parameters)
     needs_audio_duration = workflow_uses_audio_duration(attempt.workflow_snapshot)
-    values.update(
-        {
+    snapshot = attempt.effective_values.get("requested_inputs")
+    if isinstance(snapshot, dict):
+        values = dict(cast(dict[str, object], snapshot["values"]))
+        audio = cast(dict[str, str], snapshot["audio"])
+        source_image = cast(dict[str, str], snapshot["source_image"])
+        metadata = cast(dict[str, object], snapshot["workflow_metadata"])
+    else:
+        values = {
+            **profile.default_parameters,
             "script": job.speech_script or job.topic,
             "topic": job.topic,
             "hook": job.hook or "",
             "video_prompt": profile.prompt_template or job.speech_script or job.topic,
             "duration": job.target_duration_seconds,
             "character_name": profile.character.name,
+            **(job.render_overrides or {}),
         }
-    )
-    values.update(job.render_overrides or {})
-    audio_asset = newest_media_asset(job.media_assets, "audio")
-    source_image_asset = newest_media_asset(job.media_assets, "source_image")
+        audio_asset = newest_media_asset(job.media_assets, "audio")
+        source_image_asset = newest_media_asset(job.media_assets, "source_image")
+        audio = (
+            {"object_key": audio_asset.object_key, "filename": audio_asset.filename}
+            if audio_asset
+            else {}
+        )
+        source_image = (
+            {
+                "object_key": source_image_asset.object_key,
+                "filename": source_image_asset.filename,
+            }
+            if source_image_asset
+            else {}
+        )
+        metadata = template.metadata_json
     storage = LocalStorageProvider()
-    if source_image_asset is not None:
-        image_content = storage.get(source_image_asset.object_key)
+    if source_image:
         values["source_image"] = await renderer.upload(
-            render_input_filename(source_image_asset.filename, attempt_id),
-            image_content,
+            render_input_filename(source_image["filename"], attempt_id),
+            storage.get(source_image["object_key"]),
             "image",
         )
-    if audio_asset is not None:
-        audio_content = storage.get(audio_asset.object_key)
+    if audio:
+        audio_content = storage.get(audio["object_key"])
         if needs_audio_duration:
             values["audio_duration"] = probe_audio_duration(
-                audio_content, audio_asset.filename
+                audio_content, audio["filename"]
             )
         values["audio"] = await renderer.upload(
-            render_input_filename(audio_asset.filename, attempt_id),
+            render_input_filename(audio["filename"], attempt_id),
             audio_content,
             "audio",
         )
     await apply_default_workflow_media(
         values,
-        template.metadata_json,
+        metadata,
         renderer,
-        LocalStorageProvider(),
+        storage,
         measure_audio_duration=needs_audio_duration,
         upload_namespace=str(attempt_id),
     )

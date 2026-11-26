@@ -28,7 +28,11 @@ from app.providers.render.comfyui import (
 )
 from app.providers.render.contracts import RenderOutput, RenderStatus
 from app.render_repository import RenderExecutionRepository
-from app.schemas import RenderNodeCreate
+from app.schemas import (
+    CreatedVideoRenderRequest,
+    OnDemandRenderOverrides,
+    RenderNodeCreate,
+)
 from app.services.media_service import MediaProcessingError
 from app.workers.render_tasks import (
     _monitor,
@@ -161,6 +165,7 @@ async def test_claim_expiring_during_preparation_schedules_reconciliation(
         external_job_id=None,
         status="queued",
         client_id="durable-client",
+        effective_values={},
         workflow_snapshot={"1": {"class_type": "Text", "inputs": {}}},
         binding_snapshot=[],
     )
@@ -353,13 +358,24 @@ async def test_render_uses_selected_create_video_audio_override(
         created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
         updated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
     )
+    attempt.effective_values = {
+        "requested_inputs": {
+            "values": {"script": "Captured script", "duration": 12},
+            "audio": {
+                "object_key": selected_audio.object_key,
+                "filename": selected_audio.filename,
+            },
+            "source_image": {},
+            "workflow_metadata": {},
+        }
+    }
     job = SimpleNamespace(
         speech_script="Selected script",
         topic="Selected topic",
         hook=None,
         target_duration_seconds=30,
         render_overrides={},
-        media_assets=[old_audio, selected_audio],
+        media_assets=[old_audio],
     )
     profile = SimpleNamespace(
         default_parameters={"audio": "profile-default.mp3"},
@@ -430,6 +446,8 @@ async def test_render_uses_selected_create_video_audio_override(
     )
 
     await _prepare_and_submit(attempt_id)
+    assert saved_values["script"] == "Captured script"
+    assert saved_values["duration"] == 12
 
     assert uploaded == [
         (
@@ -646,6 +664,105 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None
         assert reset_job.status == "failed"
+
+
+def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders() -> (
+    None
+):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    repo = RenderExecutionRepository(factory)
+    node = repo.create_node(
+        RenderNodeCreate(name="Local", base_url="http://comfyui:8188")
+    )
+    with factory() as session:
+        workflow = WorkflowTemplate(
+            name="LTX",
+            renderer_provider="comfyui",
+            workflow_json={},
+            checksum="original",
+            metadata_json={"revision": 1},
+        )
+        profile = RenderProfile(
+            name="LTX",
+            character=Character(name="Elena", slug="elena"),
+            voice_profile=VoiceProfile(
+                name="Voice", provider="elevenlabs", provider_voice_id="voice"
+            ),
+            renderer_provider="comfyui",
+            default_parameters={"fps": 24},
+        )
+        job = TopicJob(
+            batch=Batch(name="Created video", creation_mode="created_video"),
+            topic="Saved draft",
+            media_assets=[
+                MediaAsset(
+                    kind=kind, object_key=filename, filename=filename, size_bytes=1
+                )
+                for kind, filename in [
+                    ("source_image", "image.png"),
+                    ("audio", "first.mp3"),
+                    ("audio_archive", "second.mp3"),
+                ]
+            ],
+        )
+        session.add_all([job, profile, workflow])
+        session.commit()
+        image, first_audio, second_audio = job.media_assets
+        request = CreatedVideoRenderRequest(
+            title="First title",
+            render_profile_id=profile.id,
+            workflow_template_id=workflow.id,
+            speech_script="First script",
+            audio_asset_id=first_audio.id,
+            source_image_asset_id=image.id,
+            render_overrides=OnDemandRenderOverrides(
+                video_prompt="First prompt", seed=1
+            ),
+        )
+
+    first = repo.queue_attempt(job.id, node.id, request)
+    request.audio_asset_id = second_audio.id
+    request.render_overrides.seed = 2
+    request.render_overrides.video_prompt = "Second prompt"
+    second = repo.queue_attempt(job.id, node.id, request)
+    third = repo.queue_attempt(job.id, node.id, request)
+    assert len({first.id, second.id, third.id}) == 3
+    assert repo.claim_submission(second.id) == (False, 5)
+    assert repo.claim_submission(first.id) == (True, 0)
+    with pytest.raises(ValueError, match="already left the queue"):
+        repo.cancel_attempt(first.id, queued_only=True)
+    removed = repo.cancel_attempt(second.id, queued_only=True)
+    assert removed is not None and removed.status == "cancelled"
+    assert repo.claim_submission(second.id) == (False, 0)
+    assert repo.claim_submission(third.id) == (False, 5)
+
+    prepared = repo.save_prepared(first.id, {}, {"rendered": True})
+    first_inputs = prepared.effective_values["requested_inputs"]
+    assert isinstance(first_inputs, dict)
+    assert first_inputs["values"]["script"] == "First script"
+    assert first_inputs["values"]["video_prompt"] == "First prompt"
+    assert first_inputs["values"]["seed"] == 1
+    assert first_inputs["audio"]["filename"] == "first.mp3"
+    assert first_inputs["workflow_metadata"] == {"revision": 1}
+    assert first_inputs["workflow_checksum"] == "original"
+    loaded = repo.get_attempt(first.id)
+    assert loaded is not None
+    public_inputs = render_attempt_read(loaded).effective_values["requested_inputs"]
+    assert isinstance(public_inputs, dict)
+    assert "object_key" not in public_inputs["audio"]
+    assert "object_key" in first_inputs["audio"]
+
+    second_inputs = removed.effective_values["requested_inputs"]
+    assert isinstance(second_inputs, dict)
+    assert second_inputs["values"]["seed"] == 2
+    assert second_inputs["audio"]["filename"] == "second.mp3"
+    assert repo.update_progress(first.id, "failed", 0, "Failed")
+    with factory() as session:
+        current = session.get(TopicJob, job.id)
+        assert current is not None and current.status == "queued"
+    assert repo.claim_submission(third.id) == (True, 0)
 
 
 def test_failed_attempt_deletion_is_scoped_to_the_selected_created_video() -> None:
