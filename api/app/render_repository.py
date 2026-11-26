@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, tuple_, update
+from sqlalchemy import and_, or_, select, tuple_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
@@ -292,7 +292,8 @@ class RenderExecutionRepository:
         job.status = remaining or fallback
         job.error_message = None if remaining else error
 
-    def queued_created_video_heads(self) -> list[UUID]:
+    def recoverable_created_video_heads(self) -> list[tuple[UUID, bool]]:
+        stale_before = now() - timedelta(seconds=30)
         earlier = aliased(RenderAttempt)
         predecessor = select(earlier.id).where(
             earlier.job_id == RenderAttempt.job_id,
@@ -300,21 +301,36 @@ class RenderExecutionRepository:
             tuple_(earlier.created_at, earlier.id)
             < tuple_(RenderAttempt.created_at, RenderAttempt.id),
         )
+        needs_monitor = RenderAttempt.external_job_id.is_not(None)
         with self.factory() as session:
-            return list(
-                session.scalars(
-                    select(RenderAttempt.id)
-                    .join(TopicJob, RenderAttempt.job_id == TopicJob.id)
-                    .join(Batch, TopicJob.batch_id == Batch.id)
-                    .where(
-                        Batch.creation_mode == "created_video",
-                        RenderAttempt.status == "queued",
-                        RenderAttempt.external_job_id.is_(None),
-                        ~predecessor.exists(),
-                    )
-                    .order_by(RenderAttempt.created_at, RenderAttempt.id)
+            rows = session.execute(
+                select(RenderAttempt.id, needs_monitor)
+                .join(TopicJob, RenderAttempt.job_id == TopicJob.id)
+                .join(Batch, TopicJob.batch_id == Batch.id)
+                .where(
+                    Batch.creation_mode == "created_video",
+                    or_(
+                        and_(
+                            RenderAttempt.status == "queued",
+                            RenderAttempt.external_job_id.is_(None),
+                        ),
+                        and_(
+                            RenderAttempt.status.in_(
+                                {"rendering", "downloading_output"}
+                            ),
+                            needs_monitor,
+                            RenderAttempt.updated_at <= stale_before,
+                            or_(
+                                RenderAttempt.finalization_claim_expires_at.is_(None),
+                                RenderAttempt.finalization_claim_expires_at <= now(),
+                            ),
+                        ),
+                    ),
+                    ~predecessor.exists(),
                 )
-            )
+                .order_by(RenderAttempt.created_at, RenderAttempt.id)
+            ).tuples()
+            return [(attempt_id, monitor) for attempt_id, monitor in rows]
 
     def claim_submission(self, attempt_id: UUID) -> tuple[bool, int]:
         claimed_at = now()

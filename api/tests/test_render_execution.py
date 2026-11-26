@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
+from kombu.exceptions import OperationalError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -38,7 +39,7 @@ from app.workers.render_tasks import (
     _monitor,
     _prepare_and_submit,
     apply_default_workflow_media,
-    dispatch_queued_created_video_heads,
+    dispatch_recoverable_created_video_heads,
     render_has_timed_out,
     render_input_filename,
     select_video_output,
@@ -667,7 +668,8 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         assert reset_job.status == "failed"
 
 
-def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders(
+@pytest.mark.asyncio
+async def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -681,7 +683,7 @@ def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders
         workflow = WorkflowTemplate(
             name="LTX",
             renderer_provider="comfyui",
-            workflow_json={},
+            workflow_json={"1": {"class_type": "Text", "inputs": {}}},
             checksum="original",
             metadata_json={"revision": 1},
         )
@@ -740,12 +742,12 @@ def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders
         "app.workers.render_tasks.submit_render.apply_async",
         lambda *, args, retry: deliveries.extend(args),
     )
-    dispatch_queued_created_video_heads(restarted_repo)
-    dispatch_queued_created_video_heads(restarted_repo)
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    dispatch_recoverable_created_video_heads(restarted_repo)
     assert deliveries == [str(first.id), str(first.id)]
     assert restarted_repo.claim_submission(first.id) == (True, 0)
     assert not restarted_repo.claim_submission(first.id)[0]
-    dispatch_queued_created_video_heads(restarted_repo)
+    dispatch_recoverable_created_video_heads(restarted_repo)
     assert deliveries == [str(first.id), str(first.id)]
     with pytest.raises(ValueError, match="already left the queue"):
         repo.cancel_attempt(first.id, queued_only=True)
@@ -778,9 +780,59 @@ def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders
     with factory() as session:
         current = session.get(TopicJob, job.id)
         assert current is not None and current.status == "queued"
-    dispatch_queued_created_video_heads(restarted_repo)
+    dispatch_recoverable_created_video_heads(restarted_repo)
     assert deliveries == [str(first.id), str(first.id), str(third.id)]
-    assert repo.claim_submission(third.id) == (True, 0)
+    fourth = repo.queue_attempt(job.id, node.id, request)
+    provider_submit = AsyncMock(
+        return_value=SimpleNamespace(external_job_id="saved-prompt", client_id=None)
+    )
+    provider_status = AsyncMock(
+        return_value=RenderStatus(
+            external_job_id="saved-prompt",
+            state="failed",
+            message="Provider reported failure",
+        )
+    )
+    renderer = SimpleNamespace(
+        upload=AsyncMock(return_value="uploaded"),
+        submit=provider_submit,
+        get_status=provider_status,
+    )
+    monkeypatch.setattr("app.workers.render_tasks.repository", lambda: restarted_repo)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.ComfyUIRenderer", lambda **_: renderer
+    )
+    monkeypatch.setattr(
+        "app.workers.render_tasks.LocalStorageProvider",
+        lambda: SimpleNamespace(get=lambda _: b"media"),
+    )
+    publish_monitor = Mock(side_effect=OperationalError("Redis unavailable"))
+    monkeypatch.setattr(
+        "app.workers.render_tasks.monitor_render.apply_async", publish_monitor
+    )
+
+    with pytest.raises(OperationalError, match="Redis unavailable"):
+        await _prepare_and_submit(third.id)
+    saved = repo.get_attempt(third.id)
+    assert saved is not None and saved.external_job_id == "saved-prompt"
+    assert repo.claim_submission(fourth.id) == (False, 5)
+
+    publish_monitor.reset_mock(side_effect=True)
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_monitor.assert_not_called()
+    with factory() as session:
+        stale = session.get(RenderAttempt, third.id)
+        assert stale is not None
+        stale.updated_at = datetime.now(UTC) - timedelta(seconds=31)
+        session.commit()
+
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_monitor.assert_called_once_with(args=[str(third.id)], retry=False)
+    assert deliveries == [str(first.id), str(first.id), str(third.id)]
+    assert await _monitor(third.id) == "failed"
+    provider_status.assert_awaited_once_with("saved-prompt")
+    provider_submit.assert_awaited_once()
+    assert repo.claim_submission(fourth.id) == (True, 0)
 
 
 def test_failed_attempt_deletion_is_scoped_to_the_selected_created_video() -> None:

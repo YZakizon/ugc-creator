@@ -15,7 +15,7 @@ from app.repositories import (
     SqlAlchemyBatchRepository,
     SqlAlchemyConfigurationRepository,
 )
-from app.workers.render_tasks import dispatch_queued_created_video_heads
+from app.workers.render_tasks import dispatch_recoverable_created_video_heads
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 async def recover_queued_renders(repo: RenderExecutionRepository) -> None:
     while True:
         try:
-            await asyncio.to_thread(dispatch_queued_created_video_heads, repo)
+            await asyncio.to_thread(dispatch_recoverable_created_video_heads, repo)
         except Exception:
             logger.exception("Could not recover queued created video renders")
         await asyncio.sleep(30)

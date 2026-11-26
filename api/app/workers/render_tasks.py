@@ -261,10 +261,11 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         monitor_render.apply_async(args=[str(attempt_id)], countdown=3)
 
 
-def dispatch_queued_created_video_heads(repo: RenderExecutionRepository) -> None:
-    # A task may already be in the broker; submission claims deduplicate delivery.
-    for attempt_id in repo.queued_created_video_heads():
-        submit_render.apply_async(args=[str(attempt_id)], retry=False)
+def dispatch_recoverable_created_video_heads(repo: RenderExecutionRepository) -> None:
+    # An existing task can race recovery. Claims protect submission and finalization.
+    for attempt_id, needs_monitor in repo.recoverable_created_video_heads():
+        task = monitor_render if needs_monitor else submit_render
+        task.apply_async(args=[str(attempt_id)], retry=False)
 
 
 @celery_app.task(name="ugc_creator.submit_render")  # type: ignore[untyped-decorator]
