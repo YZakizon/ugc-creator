@@ -245,6 +245,11 @@ class OnDemandVideoSave(BaseModel):
         return cleaned or None
 
 
+class CreatedVideoRenderRequest(OnDemandVideoSave):
+    audio_asset_id: UUID
+    source_image_asset_id: UUID
+
+
 class BatchRead(BaseModel):
     id: UUID
     name: str

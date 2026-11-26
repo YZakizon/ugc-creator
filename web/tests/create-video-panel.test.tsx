@@ -650,6 +650,66 @@ describe("CreateVideoPanel", () => {
     expect(renderIndex).toBeGreaterThan(lastActivateIndex);
   });
 
+  it("queues each click with its own inputs and shows saved history metadata", async () => {
+    const audio = { ...mediaAsset("audio-1", "audio", "recording.mp3"), generation_metadata: { voice_name: "Captured voice" } };
+    const image = mediaAsset("image-1", "source_image", "source.png");
+    const video = mediaAsset("video-1", "video", "done.mp4");
+    const completed = renderAttempt(video, { effective_values: { seed: 42 } });
+    const waiting = renderAttempt(video, { id: "waiting", status: "queued", assets: [], output_filename: null });
+    const submissions: unknown[] = [];
+    let removed = false;
+    let acceptFirst = () => {};
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/topics/topic-1")) return json({ ...topic(), contents: [{
+        ...job(), source_image_asset: image, audio_asset: audio, audio_assets: [audio], status: "rendering",
+      }] });
+      if (url.includes("/jobs/job-1/render/queued") && init?.method === "POST") {
+        submissions.push(JSON.parse(String(init.body)));
+        if (submissions.length === 1) {
+          return new Promise<Response>((resolve) => { acceptFirst = () => resolve(json(waiting)); });
+        }
+        return json(waiting);
+      }
+      if (url.includes("/render-attempts/waiting/cancel?queued_only=true") && init?.method === "POST") {
+        removed = true;
+        return json({ ...waiting, status: "cancelled" });
+      }
+      if (url.includes("/render-attempts")) return json({ items: removed ? [completed] : [waiting, completed] });
+      if (url.includes("/render-nodes")) return json({ items: [{ id: "node-1", is_active: true, health_status: "healthy" }] });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile] });
+      return json({ items: [] });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const audioMetadata = await screen.findByRole("button", { name: "Show metadata for recording.mp3" });
+    fireEvent.click(audioMetadata);
+    expect(screen.getByRole("dialog", { name: "Audio metadata" })).toHaveTextContent("Captured voice");
+    fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show metadata for done.mp4" }));
+    expect(screen.getByRole("dialog", { name: "Video metadata" })).toHaveTextContent('"seed": 42');
+    fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
+
+    const generate = screen.getByRole("button", { name: "Generate Video" });
+    const prompt = screen.getByLabelText("Video prompt");
+    fireEvent.change(prompt, { target: { value: "First prompt" } });
+    fireEvent.click(generate);
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    expect(generate).toBeEnabled();
+    fireEvent.change(prompt, { target: { value: "Second prompt" } });
+    fireEvent.click(generate);
+    acceptFirst();
+    await waitFor(() => expect(submissions).toHaveLength(2));
+    expect(submissions[0]).toMatchObject({
+      source_image_asset_id: "image-1", audio_asset_id: "audio-1",
+      render_overrides: { video_prompt: "First prompt" },
+    });
+    expect(submissions[1]).toMatchObject({ render_overrides: { video_prompt: "Second prompt" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove from queue" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Remove from queue" })).not.toBeInTheDocument());
+  });
+
   it("shows a cancel icon beside active render progress", async () => {
     const audioAsset = mediaAsset("audio-1", "audio", "active-audio.mp3");
     const sourceImage = mediaAsset("image-1", "source_image", "source.png");

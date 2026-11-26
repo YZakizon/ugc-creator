@@ -1,6 +1,7 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -14,8 +15,18 @@ from app.repositories import (
     SqlAlchemyBatchRepository,
     SqlAlchemyConfigurationRepository,
 )
+from app.workers.render_tasks import dispatch_recoverable_created_video_heads
 
 logger = logging.getLogger(__name__)
+
+
+async def recover_queued_renders(repo: RenderExecutionRepository) -> None:
+    while True:
+        try:
+            await asyncio.to_thread(dispatch_recoverable_created_video_heads, repo)
+        except Exception:
+            logger.exception("Could not recover queued created video renders")
+        await asyncio.sleep(30)
 
 
 @asynccontextmanager
@@ -29,13 +40,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.batch_repository = InMemoryBatchRepository()
         app.state.configuration_repository = InMemoryConfigurationRepository()
         app.state.render_repository = None
+        yield
     else:
         app.state.batch_repository = SqlAlchemyBatchRepository(session_factory(engine))
         app.state.configuration_repository = SqlAlchemyConfigurationRepository(
             session_factory(engine)
         )
-        app.state.render_repository = RenderExecutionRepository(session_factory(engine))
-    yield
+        render_repo = RenderExecutionRepository(session_factory(engine))
+        app.state.render_repository = render_repo
+        recovery = asyncio.create_task(recover_queued_renders(render_repo))
+        try:
+            yield
+        finally:
+            recovery.cancel()
+            with suppress(asyncio.CancelledError):
+                await recovery
 
 
 app = FastAPI(

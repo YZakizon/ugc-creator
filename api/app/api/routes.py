@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import os
 from pathlib import PurePath
 from typing import cast
@@ -9,6 +10,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
+from kombu.exceptions import OperationalError
 
 from app.core.content_prompts import (
     DEFAULT_CONTENT_PROMPT_TEMPLATE,
@@ -49,6 +51,7 @@ from app.schemas import (
     ContentList,
     ContentPromptSettingsRead,
     ContentPromptSettingsUpdate,
+    CreatedVideoRenderRequest,
     DashboardSummary,
     JobAudioUpload,
     JobElevenLabsVoiceAttach,
@@ -101,6 +104,8 @@ from app.services.workflow_service import (
 from app.workers.content_tasks import generate_job_content
 from app.workers.render_tasks import submit_render
 from app.workers.tts_tasks import generate_job_tts, generate_voice_preview
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -286,6 +291,17 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
             "updated_at",
         )
     }
+    values = data["effective_values"]
+    snapshot = values.get("requested_inputs", {})
+    if snapshot:
+        public_snapshot = dict(snapshot)
+        for kind in ("audio", "source_image"):
+            public_snapshot[kind] = {
+                key: value
+                for key, value in snapshot[kind].items()
+                if key != "object_key"
+            }
+        data["effective_values"] = {**values, "requested_inputs": public_snapshot}
     data["assets"] = [
         {
             "id": asset.id,
@@ -372,13 +388,47 @@ def queue_render(
     node_id: UUID,
     repo: RenderExecutionRepository = Depends(render_repository),
 ) -> RenderAttemptRead:
+    return _queue_render(repo, job_id, node_id)
+
+
+@router.post(
+    "/jobs/{job_id}/render/queued",
+    response_model=RenderAttemptRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_created_video_render(
+    job_id: UUID,
+    node_id: UUID,
+    payload: CreatedVideoRenderRequest,
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> RenderAttemptRead:
+    return _queue_render(repo, job_id, node_id, payload)
+
+
+def _queue_render(
+    repo: RenderExecutionRepository,
+    job_id: UUID,
+    node_id: UUID,
+    payload: CreatedVideoRenderRequest | None = None,
+) -> RenderAttemptRead:
     try:
-        attempt = repo.queue_attempt(job_id, node_id)
+        attempt = (
+            repo.queue_attempt(job_id, node_id, payload)
+            if payload is not None
+            else repo.queue_attempt(job_id, node_id)
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    submit_render.delay(str(attempt.id))
+    try:
+        submit_render.delay(str(attempt.id))
+    except OperationalError:
+        if payload is None:
+            raise
+        logger.warning(
+            "Render %s saved for queue recovery after broker failure", attempt.id
+        )
     loaded = repo.get_attempt(attempt.id)
     return render_attempt_read(loaded or attempt)
 
@@ -389,8 +439,17 @@ def queue_render(
 )
 async def cancel_render_attempt(
     attempt_id: UUID,
+    queued_only: bool = False,
     repo: RenderExecutionRepository = Depends(render_repository),
 ) -> RenderAttemptRead:
+    if queued_only:
+        try:
+            removed = repo.cancel_attempt(attempt_id, queued_only=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if removed is None:
+            raise HTTPException(status_code=404, detail="Render attempt not found")
+        return render_attempt_read(removed)
     try:
         attempt, _job, _profile, node, _template = repo.execution_context(attempt_id)
     except LookupError as exc:

@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
@@ -6,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
+from kombu.exceptions import OperationalError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -28,12 +30,17 @@ from app.providers.render.comfyui import (
 )
 from app.providers.render.contracts import RenderOutput, RenderStatus
 from app.render_repository import RenderExecutionRepository
-from app.schemas import RenderNodeCreate
+from app.schemas import (
+    CreatedVideoRenderRequest,
+    OnDemandRenderOverrides,
+    RenderNodeCreate,
+)
 from app.services.media_service import MediaProcessingError
 from app.workers.render_tasks import (
     _monitor,
     _prepare_and_submit,
     apply_default_workflow_media,
+    dispatch_recoverable_created_video_heads,
     render_has_timed_out,
     render_input_filename,
     select_video_output,
@@ -161,6 +168,7 @@ async def test_claim_expiring_during_preparation_schedules_reconciliation(
         external_job_id=None,
         status="queued",
         client_id="durable-client",
+        effective_values={},
         workflow_snapshot={"1": {"class_type": "Text", "inputs": {}}},
         binding_snapshot=[],
     )
@@ -353,13 +361,24 @@ async def test_render_uses_selected_create_video_audio_override(
         created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
         updated_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
     )
+    attempt.effective_values = {
+        "requested_inputs": {
+            "values": {"script": "Captured script", "duration": 12},
+            "audio": {
+                "object_key": selected_audio.object_key,
+                "filename": selected_audio.filename,
+            },
+            "source_image": {},
+            "workflow_metadata": {},
+        }
+    }
     job = SimpleNamespace(
         speech_script="Selected script",
         topic="Selected topic",
         hook=None,
         target_duration_seconds=30,
         render_overrides={},
-        media_assets=[old_audio, selected_audio],
+        media_assets=[old_audio],
     )
     profile = SimpleNamespace(
         default_parameters={"audio": "profile-default.mp3"},
@@ -430,6 +449,8 @@ async def test_render_uses_selected_create_video_audio_override(
     )
 
     await _prepare_and_submit(attempt_id)
+    assert saved_values["script"] == "Captured script"
+    assert saved_values["duration"] == 12
 
     assert uploaded == [
         (
@@ -646,6 +667,206 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None
         assert reset_job.status == "failed"
+
+
+def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    repo = RenderExecutionRepository(factory)
+    node = repo.create_node(
+        RenderNodeCreate(name="Local", base_url="http://comfyui:8188")
+    )
+    with factory() as session:
+        workflow = WorkflowTemplate(
+            name="LTX",
+            renderer_provider="comfyui",
+            workflow_json={"1": {"class_type": "Text", "inputs": {}}},
+            checksum="original",
+            metadata_json={"revision": 1},
+        )
+        profile = RenderProfile(
+            name="LTX",
+            character=Character(name="Elena", slug="elena"),
+            voice_profile=VoiceProfile(
+                name="Voice", provider="elevenlabs", provider_voice_id="voice"
+            ),
+            renderer_provider="comfyui",
+            default_parameters={"fps": 24},
+        )
+        job = TopicJob(
+            batch=Batch(name="Created video", creation_mode="created_video"),
+            topic="Saved draft",
+            media_assets=[
+                MediaAsset(
+                    kind=kind, object_key=filename, filename=filename, size_bytes=1
+                )
+                for kind, filename in [
+                    ("source_image", "image.png"),
+                    ("audio", "first.mp3"),
+                    ("audio_archive", "second.mp3"),
+                ]
+            ],
+        )
+        session.add_all([job, profile, workflow])
+        session.commit()
+        image, first_audio, second_audio = job.media_assets
+        request = CreatedVideoRenderRequest(
+            title="First title",
+            render_profile_id=profile.id,
+            workflow_template_id=workflow.id,
+            speech_script="First script",
+            audio_asset_id=first_audio.id,
+            source_image_asset_id=image.id,
+            render_overrides=OnDemandRenderOverrides(
+                video_prompt="First prompt", seed=1
+            ),
+        )
+
+    first = repo.queue_attempt(job.id, node.id, request)
+    request.audio_asset_id = second_audio.id
+    request.render_overrides.seed = 2
+    request.render_overrides.video_prompt = "Second prompt"
+    second = repo.queue_attempt(job.id, node.id, request)
+    third = repo.queue_attempt(job.id, node.id, request)
+    assert len({first.id, second.id, third.id}) == 3
+    assert repo.claim_submission(second.id) == (False, 5)
+
+    # The first request committed without publishing. A fresh process can
+    # rediscover the head from the database, even if no later request arrives.
+    restarted_repo = RenderExecutionRepository(factory)
+    deliveries: list[str] = []
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async",
+        lambda *, args, retry: deliveries.extend(args),
+    )
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    assert deliveries == [str(first.id), str(first.id)]
+    assert restarted_repo.claim_submission(first.id) == (True, 0)
+    assert not restarted_repo.claim_submission(first.id)[0]
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    assert deliveries == [str(first.id), str(first.id)]
+    with pytest.raises(ValueError, match="already left the queue"):
+        repo.cancel_attempt(first.id, queued_only=True)
+    removed = repo.cancel_attempt(second.id, queued_only=True)
+    assert removed is not None and removed.status == "cancelled"
+    assert repo.claim_submission(second.id) == (False, 0)
+    assert repo.claim_submission(third.id) == (False, 5)
+
+    prepared = repo.save_prepared(first.id, {}, {"rendered": True})
+    first_inputs = prepared.effective_values["requested_inputs"]
+    assert isinstance(first_inputs, dict)
+    assert first_inputs["values"]["script"] == "First script"
+    assert first_inputs["values"]["video_prompt"] == "First prompt"
+    assert first_inputs["values"]["seed"] == 1
+    assert first_inputs["audio"]["filename"] == "first.mp3"
+    assert first_inputs["workflow_metadata"] == {"revision": 1}
+    assert first_inputs["workflow_checksum"] == "original"
+    loaded = repo.get_attempt(first.id)
+    assert loaded is not None
+    public_inputs = render_attempt_read(loaded).effective_values["requested_inputs"]
+    assert isinstance(public_inputs, dict)
+    assert "object_key" not in public_inputs["audio"]
+    assert "object_key" in first_inputs["audio"]
+
+    second_inputs = removed.effective_values["requested_inputs"]
+    assert isinstance(second_inputs, dict)
+    assert second_inputs["values"]["seed"] == 2
+    assert second_inputs["audio"]["filename"] == "second.mp3"
+    assert repo.update_progress(first.id, "failed", 0, "Failed")
+    with factory() as session:
+        current = session.get(TopicJob, job.id)
+        assert current is not None and current.status == "queued"
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    assert deliveries == [str(first.id), str(first.id), str(third.id)]
+    fourth = repo.queue_attempt(job.id, node.id, request)
+    provider_submit = AsyncMock(
+        return_value=SimpleNamespace(external_job_id="saved-prompt", client_id=None)
+    )
+    provider_status = AsyncMock(
+        return_value=RenderStatus(
+            external_job_id="saved-prompt",
+            state="failed",
+            message="Provider reported failure",
+        )
+    )
+    renderer = SimpleNamespace(
+        upload=AsyncMock(return_value="uploaded"),
+        submit=provider_submit,
+        get_status=provider_status,
+    )
+    monkeypatch.setattr("app.workers.render_tasks.repository", lambda: restarted_repo)
+    monkeypatch.setattr(
+        "app.workers.render_tasks.ComfyUIRenderer", lambda **_: renderer
+    )
+    monkeypatch.setattr(
+        "app.workers.render_tasks.LocalStorageProvider",
+        lambda: SimpleNamespace(get=lambda _: b"media"),
+    )
+    publish_monitor = Mock(side_effect=OperationalError("Redis unavailable"))
+    monkeypatch.setattr(
+        "app.workers.render_tasks.monitor_render.apply_async", publish_monitor
+    )
+
+    with pytest.raises(OperationalError, match="Redis unavailable"):
+        asyncio.run(_prepare_and_submit(third.id))
+    saved = repo.get_attempt(third.id)
+    assert saved is not None and saved.external_job_id == "saved-prompt"
+    assert repo.claim_submission(fourth.id) == (False, 5)
+
+    publish_monitor.reset_mock(side_effect=True)
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_monitor.assert_not_called()
+    with factory() as session:
+        stale = session.get(RenderAttempt, third.id)
+        assert stale is not None
+        stale.updated_at = datetime.now(UTC) - timedelta(seconds=31)
+        session.commit()
+
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_monitor.assert_called_once_with(args=[str(third.id)], retry=False)
+    assert deliveries == [str(first.id), str(first.id), str(third.id)]
+    assert asyncio.run(_monitor(third.id)) == "failed"
+    provider_status.assert_awaited_once_with("saved-prompt")
+    provider_submit.assert_awaited_once()
+    fifth = repo.queue_attempt(job.id, node.id, request)
+    provider_submit.reset_mock()
+    provider_submit.side_effect = ComfyUISubmissionOutcomeUnknown("Response lost")
+    find_submission = AsyncMock(return_value="saved-prompt")
+    renderer.find_submission = find_submission
+    publish_submission = Mock(side_effect=OperationalError("Redis unavailable"))
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async", publish_submission
+    )
+
+    with pytest.raises(OperationalError, match="Redis unavailable"):
+        submit_render.run(str(fourth.id))
+    publish_submission.assert_called_once_with(args=[str(fourth.id)], countdown=5)
+    unresolved = repo.get_attempt(fourth.id)
+    assert unresolved is not None and unresolved.external_job_id is None
+    assert unresolved.status == "submitting_render"
+    assert unresolved.submission_started_at is not None
+    assert repo.claim_submission(fifth.id) == (False, 5)
+    publish_submission.reset_mock(side_effect=True)
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_submission.assert_not_called()
+
+    with factory() as session:
+        expired = session.get(RenderAttempt, fourth.id)
+        assert expired is not None
+        expired.submission_claim_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_submission.assert_called_once_with(args=[str(fourth.id)], retry=False)
+    assert submit_render.run(str(fourth.id))["status"] == "submitted"
+    find_submission.assert_awaited_once_with(unresolved.client_id)
+    assert asyncio.run(_monitor(fourth.id)) == "failed"
+    provider_submit.assert_awaited_once()
+    assert repo.claim_submission(fifth.id) == (True, 0)
 
 
 def test_failed_attempt_deletion_is_scoped_to_the_selected_created_video() -> None:
