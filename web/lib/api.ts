@@ -215,6 +215,7 @@ export type MediaAsset = {
     provider?: string;
     voice_profile_id?: string;
     voice_id?: string;
+    voice_name?: string;
     model?: string;
     settings?: Record<string, unknown>;
     provider_request_id?: string | null;

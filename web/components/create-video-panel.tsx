@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
+import { audioGenerationDetails } from "@/lib/audio-generation-details";
 import { VoiceCatalogPreview } from "@/components/voice-catalog-preview";
 import { ELEVENLABS_MODELS, elevenLabsCapabilities } from "@/lib/elevenlabs-models";
 import { Toast } from "@/components/feedback";
@@ -243,6 +244,11 @@ function controlValue(workflow: WorkflowTemplate, label: string, job: Job | null
     updated_at: new Date(0).toISOString(),
   } satisfies Job;
   return previewLtxRenderControls(workflow, fallbackJob).find((control) => control.label === label)?.value;
+}
+
+function AudioGenerationCaption({ asset, voices }: { asset: MediaAsset; voices: ElevenLabsVoice[] }) {
+  const details = audioGenerationDetails(asset, voices);
+  return <small className="create-video-audio-caption" title={details.subtitle}><span className="create-video-audio-voice">{details.voice}</span>{details.api && <span className="create-video-audio-api">{details.api}</span>}</small>;
 }
 
 export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null; onSaved?: (topicId: string) => void }) {
@@ -967,7 +973,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Generated audio</h3><p>Select the audio used for the next render.</p></div></div>
-          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><small>{asset.kind === "audio" ? "Active render audio" : "Saved audio"}</small></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><button className="job-media-icon" type="button" aria-label={asset.kind === "audio" ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.kind === "audio" ? "Using audio" : "Use audio"} disabled={asset.kind === "audio" || selectAudio.isPending || active} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
+          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><button className="job-media-icon" type="button" aria-label={asset.kind === "audio" ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.kind === "audio" ? "Using audio" : "Use audio"} disabled={asset.kind === "audio" || selectAudio.isPending || active} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
         </section>
 
         <section className="panel create-video-card create-video-ltx">

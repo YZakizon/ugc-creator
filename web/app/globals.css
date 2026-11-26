@@ -638,6 +638,9 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .create-video-audio .create-video-media-title > div { min-width: 0; }
 .create-video-audio strong, .create-video-audio small, .create-video-render strong, .create-video-render small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .create-video-audio strong { font-size: 12px; line-height: 1.15; }
+.create-video-audio small.create-video-audio-caption { display: flex; gap: 5px; min-width: 0; }
+.create-video-audio-voice { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.create-video-audio-api { flex: 0 0 auto; color: #6751b7; }
 .create-video-audio small { font-size: 10px; line-height: 1.1; }
 .create-video-audio .button-small { min-height: 28px; padding: 0 9px; font-size: 11px; }
 .create-video-audio .job-media-icon { width: 28px; height: 28px; }

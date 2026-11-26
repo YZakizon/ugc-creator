@@ -170,6 +170,8 @@ class JobTTSRepository:
                         "provider": voice.provider,
                         "voice_profile_id": str(voice.id),
                         "voice_id": voice.provider_voice_id,
+                        "voice_name": voice.extra_settings.get("voice_name")
+                        or voice.name,
                         "model": model_id,
                         "settings": settings,
                         "provider_request_id": provider_request_id,

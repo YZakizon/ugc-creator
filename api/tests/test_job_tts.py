@@ -212,6 +212,7 @@ def test_job_tts_uses_profile_voice_and_persists_render_audio(
         assert asset.generation_metadata is not None
         assert asset.generation_metadata["provider"] == "elevenlabs"
         assert asset.generation_metadata["voice_id"] == "voice-hope"
+        assert asset.generation_metadata["voice_name"] == "Hope"
         assert asset.generation_metadata["model"] == "eleven_multilingual_v2"
         assert asset.generation_metadata["settings"] == saved.tts_settings
         assert isinstance(asset.generation_metadata["duration_seconds"], float)

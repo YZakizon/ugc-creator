@@ -1813,6 +1813,10 @@ Append decisions here as implementation clarifies unknowns.
 
 ## 40.8 On-demand Created Video workspace
 
+- Generated audio history shows its voice name, API provider and model beneath
+  each filename. Voice names are snapshotted on new audio assets, so changing the
+  selected voice does not relabel earlier generations.
+
 - MiniMax H3 workflows using a connected ResolutionSelector expose per-video
   aspect ratio, megapixels and size multiple. These values are validated and
   snapshotted on the render copy; no model-specific columns or node IDs are added.
