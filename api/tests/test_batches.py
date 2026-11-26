@@ -418,6 +418,7 @@ async def test_generate_more_content_recovers_when_broker_enqueue_fails(
     app.state.batch_repository = batches
     app.state.configuration_repository = InMemoryConfigurationRepository()
     monkeypatch.setenv("UGC_FAKE_PROVIDERS", "1")
+    original_content_ids = set(batches.jobs)
     monkeypatch.setattr(
         "app.api.routes.generate_job_content.delay",
         lambda _job_id: (_ for _ in ()).throw(RuntimeError("Redis unavailable")),
@@ -429,14 +430,20 @@ async def test_generate_more_content_recovers_when_broker_enqueue_fails(
         response = await client.post(f"/api/v1/topics/{topic.id}/contents")
         recovered = batches.get_batch(topic.id)
         assert recovered is not None
-        new_content = max(recovered.jobs, key=lambda item: item.content_number)
-        deleted = await client.delete(f"/api/v1/contents/{new_content.id}")
+        monkeypatch.setattr(
+            "app.api.routes.generate_job_content.delay", lambda _job_id: None
+        )
+        retried = await client.post(f"/api/v1/topics/{topic.id}/contents")
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "provider_unavailable"
-    assert new_content.status == "draft"
-    assert new_content.error_message == "Content could not be queued. Try again."
-    assert deleted.status_code == 204
+    assert len(recovered.jobs) == 2
+    created_content_ids = set(batches.jobs) - original_content_ids
+    assert {str(content_id) for content_id in created_content_ids} == {
+        retried.json()["id"]
+    }
+    assert retried.status_code == 202
+    assert retried.json()["content_number"] == 3
 
 
 @pytest.mark.asyncio

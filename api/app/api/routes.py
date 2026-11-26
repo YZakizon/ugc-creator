@@ -825,7 +825,7 @@ def generate_more_content(
     try:
         generate_job_content.delay(str(content.id))
     except Exception as exc:
-        repo.recover_job_content_enqueue(content.id)
+        repo.discard_unstarted_content(content.id)
         raise HTTPException(
             status_code=503,
             detail={
