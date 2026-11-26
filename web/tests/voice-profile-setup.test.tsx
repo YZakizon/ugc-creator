@@ -9,6 +9,7 @@ describe("voice profile setup", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("creates a reusable ElevenLabs voice with normalized settings", async () => {
@@ -93,6 +94,10 @@ describe("voice profile setup", () => {
   });
 
   it("queues speech generation and exposes playback and download", async () => {
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = vi.fn(() => "blob:voice-sample");
+      static revokeObjectURL = vi.fn();
+    });
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.includes("tts-providers/elevenlabs/usage")) {
@@ -132,8 +137,9 @@ describe("voice profile setup", () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
     const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     fireEvent.click(screen.getByRole("button", { name: "Preview Catalog Hope" }));
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Preview Catalog Joy" }));
-    expect(play).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
     expect(pause).toHaveBeenCalled();
     fireEvent.click(screen.getAllByRole("button", { name: "Use voice" })[0]);
     expect(screen.getAllByLabelText("Voice name")[1]).toHaveValue("Catalog Hope");
@@ -155,5 +161,23 @@ describe("voice profile setup", () => {
     expect(screen.getByRole("heading", { name: "Generated speech history" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Preview to generate speech" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete generated speech" })).toBeDisabled();
+  });
+
+  it("adapts controls when switching between v2, v3, and v4", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [], total: 0 })));
+    render(<Providers><VoiceProfileSetup /></Providers>);
+    fireEvent.click(screen.getByRole("tab", { name: "Create voice profile" }));
+    expect(screen.getByRole("slider", { name: "Speed" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "eleven_v3" } });
+    expect(screen.queryByRole("slider", { name: "Speed" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Similarity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Style Exaggeration" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Stability" })).toHaveValue("50");
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "eleven_v4" } });
+    expect(screen.getByRole("slider", { name: "Stability" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Similarity" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Speaker boost" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "eleven_multilingual_v2" } });
+    expect(screen.getByRole("slider", { name: "Speed" })).toBeInTheDocument();
   });
 });

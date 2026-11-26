@@ -24,7 +24,10 @@ from app.repositories import (
     SqlAlchemyConfigurationRepository,
 )
 from app.schemas import BatchCreate
-from app.services.content_service import run_content_generation
+from app.services.content_service import (
+    format_speech_script_for_reading,
+    run_content_generation,
+)
 from app.workers.content_tasks import content_provider
 
 
@@ -43,6 +46,12 @@ def structured_content() -> dict[str, object]:
             "hashtags": ["#tiktok"],
         },
     }
+
+
+def test_generated_speech_script_is_formatted_for_reading() -> None:
+    assert format_speech_script_for_reading(
+        "Elena speaks to camera. This is the first point! Then she smiles."
+    ) == ("Elena speaks to camera.\n\nThis is the first point!\n\nThen she smiles.")
 
 
 @pytest.mark.asyncio
@@ -96,7 +105,10 @@ async def test_openai_provider_uses_saved_prompt_text_and_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_provider_requires_server_key() -> None:
+async def test_openai_provider_requires_server_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     provider = OpenAIResponsesProvider(api_key=None)
     with pytest.raises(LLMProviderError, match="not configured"):
         await provider.generate_ugc_content(

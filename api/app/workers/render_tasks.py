@@ -1,16 +1,19 @@
 import asyncio
 import os
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import PurePath
 from uuid import UUID
 
 from app.core.media_naming import generated_media_filename
+from app.db.models import MediaAsset
 from app.db.session import create_database_engine, session_factory
 from app.providers.render.comfyui import (
     ComfyUIProviderError,
     ComfyUIRenderer,
     ComfyUISubmissionOutcomeUnknown,
 )
+from app.providers.render.comfyui_controls import apply_explicit_media_loader_overrides
 from app.providers.render.contracts import RenderOutput, RenderRequest
 from app.providers.storage.local import LocalStorageProvider, StorageError
 from app.render_repository import RenderExecutionRepository
@@ -42,6 +45,26 @@ def repository() -> RenderExecutionRepository:
     return RenderExecutionRepository(session_factory(engine))
 
 
+def render_input_filename(filename: str, attempt_id: UUID | str) -> str:
+    """Give each render fresh ComfyUI input names to bypass stale node caches."""
+    return f"{attempt_id}-{PurePath(filename).name}"
+
+
+def newest_media_asset(assets: Iterable[MediaAsset], kind: str) -> MediaAsset | None:
+    matching = [asset for asset in assets if asset.kind == kind]
+    if not matching:
+        return None
+    return sorted(
+        matching,
+        key=lambda asset: (
+            asset.created_at or datetime.min.replace(tzinfo=UTC),
+            asset.updated_at or datetime.min.replace(tzinfo=UTC),
+            str(asset.id),
+        ),
+        reverse=True,
+    )[0]
+
+
 async def apply_default_workflow_media(
     values: dict[str, object],
     metadata: dict[str, object],
@@ -49,6 +72,7 @@ async def apply_default_workflow_media(
     storage: LocalStorageProvider,
     *,
     measure_audio_duration: bool = False,
+    upload_namespace: str | None = None,
 ) -> None:
     media = metadata.get("default_workflow_media", metadata.get("workflow_media", {}))
     if not isinstance(media, dict):
@@ -67,8 +91,35 @@ async def apply_default_workflow_media(
                 values["audio_duration"] = probe_audio_duration(
                     content, PurePath(asset_key).name
                 )
-            values[key] = await renderer.upload(
-                PurePath(asset_key).name, content, input_type
+            source_name = PurePath(asset_key).name
+            upload_name = (
+                render_input_filename(source_name, upload_namespace)
+                if upload_namespace
+                else source_name
+            )
+            values[key] = await renderer.upload(upload_name, content, input_type)
+
+
+async def apply_reference_image_media(
+    workflow: dict[str, object],
+    renderer: ComfyUIRenderer,
+    storage: LocalStorageProvider,
+    attempt_id: UUID,
+) -> None:
+    """Restore each optional image from its own durable asset after overrides."""
+    for raw_node in workflow.values():
+        if not isinstance(raw_node, dict) or raw_node.get("class_type") != "LoadImage":
+            continue
+        metadata = raw_node.get("_meta")
+        inputs = raw_node.get("inputs")
+        asset_key = (
+            metadata.get("ugc_reference_asset") if isinstance(metadata, dict) else None
+        )
+        if isinstance(asset_key, str) and isinstance(inputs, dict):
+            inputs["image"] = await renderer.upload(
+                render_input_filename(PurePath(asset_key).name, attempt_id),
+                storage.get(asset_key),
+                "image",
             )
 
 
@@ -143,18 +194,25 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
             "character_name": profile.character.name,
         }
     )
-    audio_asset = next(
-        (asset for asset in job.media_assets if asset.kind == "audio"), None
-    )
+    values.update(job.render_overrides or {})
+    audio_asset = newest_media_asset(job.media_assets, "audio")
+    source_image_asset = newest_media_asset(job.media_assets, "source_image")
+    storage = LocalStorageProvider()
+    if source_image_asset is not None:
+        image_content = storage.get(source_image_asset.object_key)
+        values["source_image"] = await renderer.upload(
+            render_input_filename(source_image_asset.filename, attempt_id),
+            image_content,
+            "image",
+        )
     if audio_asset is not None:
-        storage = LocalStorageProvider()
         audio_content = storage.get(audio_asset.object_key)
         if needs_audio_duration:
             values["audio_duration"] = probe_audio_duration(
                 audio_content, audio_asset.filename
             )
         values["audio"] = await renderer.upload(
-            audio_asset.filename,
+            render_input_filename(audio_asset.filename, attempt_id),
             audio_content,
             "audio",
         )
@@ -164,10 +222,13 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         renderer,
         LocalStorageProvider(),
         measure_audio_duration=needs_audio_duration,
+        upload_namespace=str(attempt_id),
     )
     workflow = prepare_workflow(
         attempt.workflow_snapshot, attempt.binding_snapshot, values
     )
+    apply_explicit_media_loader_overrides(workflow, values)
+    await apply_reference_image_media(workflow, renderer, storage, attempt_id)
     repo.save_prepared(attempt_id, workflow, values)
     if not repo.mark_submission_started(attempt_id):
         submit_render.apply_async(args=[str(attempt_id)], countdown=1)
@@ -226,10 +287,16 @@ async def _monitor(attempt_id: UUID) -> str:
     renderer = ComfyUIRenderer(base_url=node.base_url, client_id=attempt.client_id)
     status = await renderer.get_status(attempt.external_job_id)
     if status.state in {"queued", "running"}:
+        live_progress = await renderer.get_live_progress(attempt.external_job_id)
         progress = (
             max(attempt.progress, 1)
-            if status.progress is None
-            else max(attempt.progress, 1, int(status.progress))
+            if status.progress is None and live_progress is None
+            else max(
+                attempt.progress,
+                1,
+                int(status.progress or 0),
+                int(live_progress or 0),
+            )
         )
         repo.update_progress(
             attempt_id,
@@ -264,7 +331,6 @@ async def _monitor(attempt_id: UUID) -> str:
         _job.topic,
         _job.content_number,
         video_number,
-        "video",
         extension,
     )
     object_key = (

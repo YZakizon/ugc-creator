@@ -56,7 +56,8 @@ jobs:
       - run: pnpm build
 
   e2e:
-    runs-on: ubuntu-latest
+    # Keep the runner compatible with the Playwright version in pnpm-lock.yaml.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
