@@ -141,6 +141,9 @@ redis
 minio          # when S3-compatible local storage is enabled
 ```
 
+The Make startup targets build the pinned `minio-local:latest` image
+from source when it is missing. Compose uses the local image.
+
 The web service may join the shared `traefik-proxy` network and expose the
 application through Traefik. The API remains internal behind the Next.js
 same-origin proxy; direct random host ports remain available for diagnostics.

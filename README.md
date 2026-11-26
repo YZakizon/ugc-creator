@@ -50,6 +50,10 @@ Kling.
    make docker-build-run
    ```
 
+   The Make startup targets build `minio-local:latest` from source if the
+   image is missing. To build the image on its own, run `make build-minio`.
+   Run that target before starting MinIO directly with Docker Compose.
+
    Docker assigns random host ports for PostgreSQL, Redis, MinIO, and the API.
    The assigned values are captured in `.docker/ports.env`:
 
