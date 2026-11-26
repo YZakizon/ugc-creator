@@ -414,6 +414,17 @@ async def cancel_render_attempt(
     return render_attempt_read(cancelled)
 
 
+@router.delete(
+    "/jobs/{job_id}/failed-render-attempts", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_failed_render_attempts(
+    job_id: UUID,
+    attempt_id: UUID | None = None,
+    repo: RenderExecutionRepository = Depends(render_repository),
+) -> None:
+    repo.delete_failed_attempts(job_id, attempt_id)
+
+
 @router.get("/render-attempts", response_model=RenderAttemptList)
 def list_render_attempts(
     job_id: UUID | None = None,

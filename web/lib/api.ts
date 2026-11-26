@@ -726,6 +726,11 @@ export function cancelRenderAttempt(attemptId: string): Promise<RenderAttempt> {
   return request<RenderAttempt>(`/api/v1/render-attempts/${attemptId}/cancel`, { method: "POST", body: JSON.stringify({}) });
 }
 
+export function deleteFailedRenderAttempts({ jobId, attemptId }: { jobId: string; attemptId?: string }): Promise<void> {
+  const query = attemptId ? `?attempt_id=${encodeURIComponent(attemptId)}` : "";
+  return request<void>(`/api/v1/jobs/${jobId}/failed-render-attempts${query}`, { method: "DELETE" });
+}
+
 export function getRenderAttempts(): Promise<{ items: RenderAttempt[]; total: number }> {
   return request<{ items: RenderAttempt[]; total: number }>("/api/v1/render-attempts");
 }
