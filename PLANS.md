@@ -1839,7 +1839,8 @@ Append decisions here as implementation clarifies unknowns.
 - Generate Video queues each click as its own attempt, capturing the selected
   media, workflow revision, prompt, script and effective parameters. Attempts for
   the same Created Video submit in order. Waiting attempts can be removed from
-  the queue. Audio and video history expose the metadata stored for each entry.
+  the queue. The API recovers saved queue heads after restart and retries dispatch
+  periodically. Audio and video history expose the metadata stored for each entry.
 
 ## 40.9 ElevenLabs model controls and voice samples
 

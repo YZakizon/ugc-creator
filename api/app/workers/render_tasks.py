@@ -261,6 +261,12 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         monitor_render.apply_async(args=[str(attempt_id)], countdown=3)
 
 
+def dispatch_queued_created_video_heads(repo: RenderExecutionRepository) -> None:
+    # A task may already be in the broker; submission claims deduplicate delivery.
+    for attempt_id in repo.queued_created_video_heads():
+        submit_render.apply_async(args=[str(attempt_id)], retry=False)
+
+
 @celery_app.task(name="ugc_creator.submit_render")  # type: ignore[untyped-decorator]
 def submit_render(attempt_id: str) -> dict[str, str]:
     attempt_uuid = UUID(attempt_id)

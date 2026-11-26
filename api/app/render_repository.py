@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select, tuple_, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session, selectinload, sessionmaker
+from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
 from app.core.statuses import JobStatus
 from app.db.models import (
@@ -292,6 +292,30 @@ class RenderExecutionRepository:
         job.status = remaining or fallback
         job.error_message = None if remaining else error
 
+    def queued_created_video_heads(self) -> list[UUID]:
+        earlier = aliased(RenderAttempt)
+        predecessor = select(earlier.id).where(
+            earlier.job_id == RenderAttempt.job_id,
+            earlier.status.in_(ACTIVE_RENDER_JOB_STATUSES),
+            tuple_(earlier.created_at, earlier.id)
+            < tuple_(RenderAttempt.created_at, RenderAttempt.id),
+        )
+        with self.factory() as session:
+            return list(
+                session.scalars(
+                    select(RenderAttempt.id)
+                    .join(TopicJob, RenderAttempt.job_id == TopicJob.id)
+                    .join(Batch, TopicJob.batch_id == Batch.id)
+                    .where(
+                        Batch.creation_mode == "created_video",
+                        RenderAttempt.status == "queued",
+                        RenderAttempt.external_job_id.is_(None),
+                        ~predecessor.exists(),
+                    )
+                    .order_by(RenderAttempt.created_at, RenderAttempt.id)
+                )
+            )
+
     def claim_submission(self, attempt_id: UUID) -> tuple[bool, int]:
         claimed_at = now()
         claim_expires_at = claimed_at + SUBMISSION_CLAIM_DURATION
@@ -505,8 +529,6 @@ class RenderExecutionRepository:
         status: str,
         progress: int,
         error: str | None = None,
-        *,
-        queued_only: bool = False,
     ) -> bool:
         with self.factory() as session:
             attempt = session.get(RenderAttempt, attempt_id)
@@ -517,8 +539,6 @@ class RenderExecutionRepository:
                 if status == "rendering"
                 else {"queued", "submitting_render", "rendering", "downloading_output"}
             )
-            if queued_only:
-                allowed_statuses = {"queued"}
             changed = cast(
                 CursorResult[Any],
                 session.execute(

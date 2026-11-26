@@ -2,6 +2,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import os
 from pathlib import PurePath
 from typing import cast
@@ -103,6 +104,8 @@ from app.services.workflow_service import (
 from app.workers.content_tasks import generate_job_content
 from app.workers.render_tasks import submit_render
 from app.workers.tts_tasks import generate_job_tts, generate_voice_preview
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1")
 
@@ -420,12 +423,12 @@ def _queue_render(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         submit_render.delay(str(attempt.id))
-    except OperationalError as exc:
+    except OperationalError:
         if payload is None:
             raise
-        message = "Render queue is unavailable. Try again."
-        if repo.update_progress(attempt.id, "failed", 0, message, queued_only=True):
-            raise HTTPException(status_code=503, detail=message) from exc
+        logger.warning(
+            "Render %s saved for queue recovery after broker failure", attempt.id
+        )
     loaded = repo.get_attempt(attempt.id)
     return render_attempt_read(loaded or attempt)
 

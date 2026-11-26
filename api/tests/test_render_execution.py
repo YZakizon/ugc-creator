@@ -38,6 +38,7 @@ from app.workers.render_tasks import (
     _monitor,
     _prepare_and_submit,
     apply_default_workflow_media,
+    dispatch_queued_created_video_heads,
     render_has_timed_out,
     render_input_filename,
     select_video_output,
@@ -666,9 +667,9 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         assert reset_job.status == "failed"
 
 
-def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders() -> (
-    None
-):
+def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -730,7 +731,22 @@ def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders
     third = repo.queue_attempt(job.id, node.id, request)
     assert len({first.id, second.id, third.id}) == 3
     assert repo.claim_submission(second.id) == (False, 5)
-    assert repo.claim_submission(first.id) == (True, 0)
+
+    # The first request committed without publishing. A fresh process can
+    # rediscover the head from the database, even if no later request arrives.
+    restarted_repo = RenderExecutionRepository(factory)
+    deliveries: list[str] = []
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async",
+        lambda *, args, retry: deliveries.extend(args),
+    )
+    dispatch_queued_created_video_heads(restarted_repo)
+    dispatch_queued_created_video_heads(restarted_repo)
+    assert deliveries == [str(first.id), str(first.id)]
+    assert restarted_repo.claim_submission(first.id) == (True, 0)
+    assert not restarted_repo.claim_submission(first.id)[0]
+    dispatch_queued_created_video_heads(restarted_repo)
+    assert deliveries == [str(first.id), str(first.id)]
     with pytest.raises(ValueError, match="already left the queue"):
         repo.cancel_attempt(first.id, queued_only=True)
     removed = repo.cancel_attempt(second.id, queued_only=True)
@@ -762,6 +778,8 @@ def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders
     with factory() as session:
         current = session.get(TopicJob, job.id)
         assert current is not None and current.status == "queued"
+    dispatch_queued_created_video_heads(restarted_repo)
+    assert deliveries == [str(first.id), str(first.id), str(third.id)]
     assert repo.claim_submission(third.id) == (True, 0)
 
 
