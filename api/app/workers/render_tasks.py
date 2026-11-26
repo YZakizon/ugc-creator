@@ -140,10 +140,10 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         if expires_at is not None:
             if expires_at.tzinfo is None:
                 checked_at = checked_at.replace(tzinfo=None)
-            remaining = int((expires_at - checked_at).total_seconds())
+            remaining = (expires_at - checked_at).total_seconds()
             if remaining > 0:
                 submit_render.apply_async(
-                    args=[str(attempt_id)], countdown=max(1, remaining)
+                    args=[str(attempt_id)], countdown=max(1, int(remaining))
                 )
                 return
         renderer = ComfyUIRenderer(

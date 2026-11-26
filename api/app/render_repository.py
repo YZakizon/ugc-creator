@@ -293,7 +293,8 @@ class RenderExecutionRepository:
         job.error_message = None if remaining else error
 
     def recoverable_created_video_heads(self) -> list[tuple[UUID, bool]]:
-        stale_before = now() - timedelta(seconds=30)
+        checked_at = now()
+        stale_before = checked_at - timedelta(seconds=30)
         earlier = aliased(RenderAttempt)
         predecessor = select(earlier.id).where(
             earlier.job_id == RenderAttempt.job_id,
@@ -315,6 +316,14 @@ class RenderExecutionRepository:
                             RenderAttempt.external_job_id.is_(None),
                         ),
                         and_(
+                            RenderAttempt.status == "submitting_render",
+                            RenderAttempt.external_job_id.is_(None),
+                            or_(
+                                RenderAttempt.submission_claim_expires_at.is_(None),
+                                RenderAttempt.submission_claim_expires_at <= checked_at,
+                            ),
+                        ),
+                        and_(
                             RenderAttempt.status.in_(
                                 {"rendering", "downloading_output"}
                             ),
@@ -322,7 +331,8 @@ class RenderExecutionRepository:
                             RenderAttempt.updated_at <= stale_before,
                             or_(
                                 RenderAttempt.finalization_claim_expires_at.is_(None),
-                                RenderAttempt.finalization_claim_expires_at <= now(),
+                                RenderAttempt.finalization_claim_expires_at
+                                <= checked_at,
                             ),
                         ),
                     ),

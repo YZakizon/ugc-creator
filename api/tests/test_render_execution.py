@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Barrier
@@ -668,8 +669,7 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         assert reset_job.status == "failed"
 
 
-@pytest.mark.asyncio
-async def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders(
+def test_created_video_queue_captures_inputs_and_allows_removing_waiting_renders(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
@@ -812,7 +812,7 @@ async def test_created_video_queue_captures_inputs_and_allows_removing_waiting_r
     )
 
     with pytest.raises(OperationalError, match="Redis unavailable"):
-        await _prepare_and_submit(third.id)
+        asyncio.run(_prepare_and_submit(third.id))
     saved = repo.get_attempt(third.id)
     assert saved is not None and saved.external_job_id == "saved-prompt"
     assert repo.claim_submission(fourth.id) == (False, 5)
@@ -829,10 +829,44 @@ async def test_created_video_queue_captures_inputs_and_allows_removing_waiting_r
     dispatch_recoverable_created_video_heads(restarted_repo)
     publish_monitor.assert_called_once_with(args=[str(third.id)], retry=False)
     assert deliveries == [str(first.id), str(first.id), str(third.id)]
-    assert await _monitor(third.id) == "failed"
+    assert asyncio.run(_monitor(third.id)) == "failed"
     provider_status.assert_awaited_once_with("saved-prompt")
     provider_submit.assert_awaited_once()
-    assert repo.claim_submission(fourth.id) == (True, 0)
+    fifth = repo.queue_attempt(job.id, node.id, request)
+    provider_submit.reset_mock()
+    provider_submit.side_effect = ComfyUISubmissionOutcomeUnknown("Response lost")
+    find_submission = AsyncMock(return_value="saved-prompt")
+    renderer.find_submission = find_submission
+    publish_submission = Mock(side_effect=OperationalError("Redis unavailable"))
+    monkeypatch.setattr(
+        "app.workers.render_tasks.submit_render.apply_async", publish_submission
+    )
+
+    with pytest.raises(OperationalError, match="Redis unavailable"):
+        submit_render.run(str(fourth.id))
+    publish_submission.assert_called_once_with(args=[str(fourth.id)], countdown=5)
+    unresolved = repo.get_attempt(fourth.id)
+    assert unresolved is not None and unresolved.external_job_id is None
+    assert unresolved.status == "submitting_render"
+    assert unresolved.submission_started_at is not None
+    assert repo.claim_submission(fifth.id) == (False, 5)
+    publish_submission.reset_mock(side_effect=True)
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_submission.assert_not_called()
+
+    with factory() as session:
+        expired = session.get(RenderAttempt, fourth.id)
+        assert expired is not None
+        expired.submission_claim_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.commit()
+
+    dispatch_recoverable_created_video_heads(restarted_repo)
+    publish_submission.assert_called_once_with(args=[str(fourth.id)], retry=False)
+    assert submit_render.run(str(fourth.id))["status"] == "submitted"
+    find_submission.assert_awaited_once_with(unresolved.client_id)
+    assert asyncio.run(_monitor(fourth.id)) == "failed"
+    provider_submit.assert_awaited_once()
+    assert repo.claim_submission(fifth.id) == (True, 0)
 
 
 def test_failed_attempt_deletion_is_scoped_to_the_selected_created_video() -> None:
