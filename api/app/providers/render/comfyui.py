@@ -1,8 +1,13 @@
+import asyncio
+import json
 import os
 from collections.abc import Mapping
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
+from websockets.asyncio.client import connect
+from websockets.exceptions import WebSocketException
 
 from app.core.urls import validate_render_node_url
 from app.providers.render.contracts import (
@@ -72,7 +77,17 @@ class ComfyUIRenderer(VideoRenderer):
         payload = _json_object(response)
         history = payload.get(external_job_id)
         if not isinstance(history, dict):
-            return RenderStatus(external_job_id=external_job_id, state="queued")
+            queue = _json_object(await self._request("GET", "/queue"))
+            if _prompt_id_in_queue(queue, external_job_id):
+                return RenderStatus(external_job_id=external_job_id, state="queued")
+            return RenderStatus(
+                external_job_id=external_job_id,
+                state="failed",
+                message=(
+                    "ComfyUI no longer has this prompt in history or queue. "
+                    "It may have been lost after a ComfyUI or machine restart."
+                ),
+            )
 
         status = history.get("status")
         if isinstance(status, dict):
@@ -93,6 +108,31 @@ class ComfyUIRenderer(VideoRenderer):
             external_job_id=external_job_id,
             state="running",
         )
+
+    async def get_live_progress(
+        self,
+        external_job_id: str,
+        *,
+        timeout_seconds: float = 4.0,
+    ) -> float | None:
+        """Read one prompt-scoped progress update from ComfyUI's WebSocket."""
+        validate_render_node_url(self.base_url)
+        try:
+            async with connect(
+                _websocket_url(self.base_url, self.client_id),
+                open_timeout=min(timeout_seconds, 5.0),
+                close_timeout=1,
+            ) as websocket:
+                async with asyncio.timeout(timeout_seconds):
+                    async for message in websocket:
+                        progress = _progress_from_message(message, external_job_id)
+                        if progress is not None:
+                            return progress
+        except (TimeoutError, OSError, WebSocketException):
+            # HTTP history polling remains authoritative and keeps rendering
+            # recoverable when a proxy or render node does not expose WebSockets.
+            return None
+        return None
 
     async def find_submission(self, client_id: str) -> str | None:
         queue = _json_object(await self._request("GET", "/queue"))
@@ -210,6 +250,43 @@ def _json_object(response: httpx.Response) -> dict[str, object]:
     return payload
 
 
+def _websocket_url(base_url: str, client_id: str) -> str:
+    parsed = urlsplit(base_url)
+    scheme = "wss" if parsed.scheme == "https" else "ws"
+    path = f"{parsed.path.rstrip('/')}/ws"
+    return urlunsplit(
+        (scheme, parsed.netloc, path, urlencode({"clientId": client_id}), "")
+    )
+
+
+def _progress_from_message(message: object, external_job_id: str) -> float | None:
+    if not isinstance(message, str):
+        return None
+    try:
+        payload = json.loads(message)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "progress":
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    prompt_id = data.get("prompt_id")
+    if prompt_id is not None and prompt_id != external_job_id:
+        return None
+    value = data.get("value")
+    maximum = data.get("max")
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not isinstance(maximum, (int, float))
+        or isinstance(maximum, bool)
+        or maximum <= 0
+    ):
+        return None
+    return min(99.0, max(0.0, value / maximum * 100))
+
+
 def _extract_outputs(outputs: Mapping[str, object]) -> list[RenderOutput]:
     discovered: list[RenderOutput] = []
     for output in outputs.values():
@@ -252,6 +329,17 @@ def _find_client_prompt_in_queue(
             if prompt_id is not None:
                 return prompt_id
     return None
+
+
+def _prompt_id_in_queue(payload: Mapping[str, object], prompt_id: str) -> bool:
+    for queue_name in ("queue_running", "queue_pending"):
+        entries = payload.get(queue_name)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, list) and len(entry) >= 2 and entry[1] == prompt_id:
+                return True
+    return False
 
 
 def _find_client_prompt_in_history(

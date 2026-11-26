@@ -4,6 +4,8 @@ import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { CreatedVideosSidebar } from "@/components/create-video-panel";
+
 export function WorkspaceSidebar() {
   const pathname = usePathname();
   const navClass = (active: boolean) => `nav-item${active ? " active" : ""}`;
@@ -23,6 +25,8 @@ export function WorkspaceSidebar() {
         <div>
           <p className="nav-label">Workspace</p>
           <Link className={navClass(pathname === "/")} href="/"><span className="nav-icon">▦</span> Dashboard</Link>
+          <Link className="nav-item" href="/#create-video"><span className="nav-icon">▶</span> Create video</Link>
+          <Link className={navClass(pathname === "/created-videos")} href="/created-videos"><span className="nav-icon">▣</span> Created videos</Link>
           <Link className="nav-item" href="/#create"><span className="nav-icon">＋</span> Create topic</Link>
           <Link className="nav-item" href="/#content"><span className="nav-icon">◷</span> Content</Link>
           <Link className="nav-item" href="/#library"><span className="nav-icon">▤</span> Library</Link>
@@ -35,6 +39,7 @@ export function WorkspaceSidebar() {
           <Link className={navClass(pathname === "/workflows")} href="/workflows"><span className="nav-icon">⌘</span> Workflows</Link>
         </div>
       </nav>
+      <CreatedVideosSidebar />
       <div className="sidebar-bottom">
         <Link className={navClass(pathname === "/settings")} href="/settings"><span className="nav-icon">⚙</span> Settings</Link>
         <div className="user-card">

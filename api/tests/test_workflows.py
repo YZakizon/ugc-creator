@@ -60,6 +60,36 @@ def test_prepare_workflow_deep_copies_and_applies_bindings() -> None:
     assert original == workflow_fixture()
 
 
+def test_template_binding_expands_variable_without_replacing_wrapper() -> None:
+    workflow = {
+        "prompt": {
+            "class_type": "PrimitiveStringMultiline",
+            "inputs": {
+                "value": 'Elena speaks directly to the camera:\n\n"{{SCRIPT}}"\n\n'
+                "Elena closes her mouth after the final word."
+            },
+        }
+    }
+    bindings = [
+        {
+            "semantic_key": "script",
+            "node_id": "prompt",
+            "input_name": "value",
+            "value_type": "template",
+            "required": True,
+        }
+    ]
+
+    prepared = prepare_workflow(
+        workflow, bindings, {"script": "This is the generated speech."}
+    )
+
+    assert prepared["prompt"]["inputs"]["value"] == (  # type: ignore[index]
+        'Elena speaks directly to the camera:\n\n"This is the generated speech."\n\n'
+        "Elena closes her mouth after the final word."
+    )
+
+
 def test_prepare_workflow_rejects_missing_binding_value() -> None:
     with pytest.raises(WorkflowValidationError, match="Missing required"):
         prepare_workflow(workflow_fixture(), binding_fixture(), {"seed": 42})

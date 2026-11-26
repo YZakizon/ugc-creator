@@ -2,7 +2,15 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    field_validator,
+)
 
 from app.core.content_prompts import validate_content_prompt_template
 from app.core.statuses import BatchStatus, JobStatus
@@ -94,6 +102,32 @@ class MediaAssetRead(BaseModel):
     created_at: datetime
 
 
+class OnDemandRenderOverrides(BaseModel):
+    workflow_controls: dict[str, StrictBool | StrictFloat | StrictInt | StrictStr] = (
+        Field(default_factory=dict, max_length=64)
+    )
+    video_prompt: str | None = Field(default=None, max_length=20_000)
+    fps: int | None = Field(default=None, ge=1, le=120)
+    duration: int | None = Field(default=None, ge=1, le=180)
+    seed: int | None = Field(default=None, ge=0)
+    create_video: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("video_prompt")
+    @classmethod
+    def clean_video_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    def compact(self) -> dict[str, object]:
+        return {
+            key: value
+            for key, value in self.model_dump().items()
+            if value is not None and value != {}
+        }
+
+
 class JobRead(BaseModel):
     id: UUID
     batch_id: UUID
@@ -116,6 +150,8 @@ class JobRead(BaseModel):
     tts_voice_id: str | None
     tts_model: str | None
     tts_provider_request_id: str | None
+    render_overrides: dict[str, object] = Field(default_factory=dict)
+    source_image_asset: MediaAssetRead | None = None
     audio_asset: MediaAssetRead | None = None
     audio_assets: list[MediaAssetRead] = Field(default_factory=list)
     created_at: datetime
@@ -140,6 +176,75 @@ class JobAudioUpload(BaseModel):
     content_type: str = Field(default="audio/mpeg", min_length=1, max_length=100)
 
 
+class JobImageUpload(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=35_000_000)
+    content_type: str = Field(default="image/png", min_length=1, max_length=100)
+
+
+class JobScriptUpdate(BaseModel):
+    speech_script: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("speech_script")
+    @classmethod
+    def clean_script(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Audio script cannot be empty")
+        return cleaned
+
+
+class JobRenderOverridesUpdate(OnDemandRenderOverrides):
+    pass
+
+
+class JobElevenLabsVoiceAttach(BaseModel):
+    voice_id: str = Field(min_length=1, max_length=160)
+    name: str = Field(min_length=1, max_length=160)
+    model: str | None = Field(default=None, max_length=160)
+    speed: float = Field(default=1.0, gt=0, le=2)
+    stability: float | None = Field(default=0.5, ge=0, le=1)
+    similarity: float | None = Field(default=0.75, ge=0, le=1)
+    style_exaggeration: float | None = Field(default=0.5, ge=0, le=1)
+    output_format: str = Field(default="mp3_44100_128", max_length=80)
+    speaker_boost: bool = True
+
+    @field_validator("voice_id", "name")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value cannot be empty")
+        return cleaned
+
+
+class OnDemandVideoSave(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    render_profile_id: UUID
+    workflow_template_id: UUID | None = None
+    target_duration_seconds: int = Field(default=30, ge=5, le=180)
+    speech_script: str | None = Field(default=None, max_length=20_000)
+    render_overrides: OnDemandRenderOverrides = Field(
+        default_factory=OnDemandRenderOverrides
+    )
+
+    @field_validator("title")
+    @classmethod
+    def clean_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Title cannot be empty")
+        return cleaned
+
+    @field_validator("speech_script")
+    @classmethod
+    def clean_optional_script(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class BatchRead(BaseModel):
     id: UUID
     name: str
@@ -148,6 +253,7 @@ class BatchRead(BaseModel):
     target_duration_seconds: int
     auto_fit_duration: bool
     job_count: int
+    creation_mode: str = "topic"
     created_at: datetime
     updated_at: datetime
     jobs: list[JobRead] = Field(default_factory=list)
@@ -167,6 +273,7 @@ class TopicRead(BaseModel):
     default_render_profile_id: UUID | None
     target_duration_seconds: int
     auto_fit_duration: bool
+    creation_mode: str = "topic"
     content_count: int
     created_at: datetime
     updated_at: datetime
@@ -180,6 +287,7 @@ class TopicSummaryRead(BaseModel):
     default_render_profile_id: UUID | None
     target_duration_seconds: int
     auto_fit_duration: bool
+    creation_mode: str = "topic"
     content_count: int
     created_at: datetime
     updated_at: datetime
@@ -473,6 +581,13 @@ class RenderNodeList(BaseModel):
     total: int
 
 
+class RenderedWorkflowControlRead(BaseModel):
+    label: str
+    node_id: str
+    input_name: str
+    value: object
+
+
 class RenderAttemptRead(BaseModel):
     id: UUID
     job_id: UUID
@@ -484,6 +599,12 @@ class RenderAttemptRead(BaseModel):
     progress: int
     external_job_id: str | None
     error_message: str | None
+    output_filename: str | None
+    output_deleted_at: datetime | None
+    effective_values: dict[str, object] = Field(default_factory=dict)
+    rendered_controls: list[RenderedWorkflowControlRead] = Field(default_factory=list)
+    submitted_at: datetime | None
+    completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
     assets: list[MediaAssetRead] = Field(default_factory=list)

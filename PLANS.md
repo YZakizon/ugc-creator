@@ -1744,8 +1744,13 @@ Append decisions here as implementation clarifies unknowns.
 - Workflow preparation validates the complete binding set, deep-copies the
   template, applies typed values, and rejects unknown placeholders before any
   renderer call.
-- The ComfyUI adapter owns `/prompt`, `/history`, `/system_stats`, upload, and
-  interrupt transport details behind the normalized `VideoRenderer` contract.
+- Template bindings expand matching placeholders in place, preserving surrounding
+  model instructions such as the LTX direct-to-camera prompt wrapper.
+- The Rendered settings view expands current workflow variables for inspection
+  without changing configured workflow values such as the seed.
+- The ComfyUI adapter owns `/prompt`, `/history`, `/system_stats`, `/ws` progress,
+  upload, and interrupt transport details behind the normalized `VideoRenderer`
+  contract. Workers persist prompt-scoped percentages for normal API polling.
 - The ComfyUI base URL is server-side configuration and defaults to the host
   gateway for local Docker development; LTX and WAN remain workflow/profile
   choices rather than renderer classes.
@@ -1806,6 +1811,47 @@ Append decisions here as implementation clarifies unknowns.
   saved; enqueue/provider failures leave it available for rendering.
 - Topic history uses API pagination so older Topics remain browsable and deletable.
 
+## 40.8 On-demand Created Video workspace
+
+- Generated audio history shows its voice name, API provider and model beneath
+  each filename. Voice names are snapshotted on new audio assets, so changing the
+  selected voice does not relabel earlier generations.
+
+- MiniMax H3 workflows using a connected ResolutionSelector expose per-video
+  aspect ratio, megapixels and size multiple. These values are validated and
+  snapshotted on the render copy; no model-specific columns or node IDs are added.
+
+- Optional image references are configured by workflow metadata, default off,
+  toggled per Created Video and snapshotted when a render is queued. Secondary
+  images are stored independently and never replaced by the primary image.
+
+- Dashboard Create Video is a separate on-demand workspace for one saved video
+  draft plus its generated audio/video history.
+- Created Videos are stored with a distinct `creation_mode` and are listed through
+  dedicated API/UI paths so they do not appear in normal Topic/Content history.
+- The first implementation reuses the existing TopicJob/RenderAttempt pipeline to
+  avoid a parallel generation system, but normal Topic lists filter them out.
+- Per-video LTX controls are stored as render overrides on the content job and are
+  applied only to the copied render payload during execution.
+
+## 40.9 ElevenLabs model controls and voice samples
+
+- Voice Profiles and Create Video expose Multilingual v2, Turbo v2.5, v3, v4,
+  and v4 Turbo. Create Video persists its model with the other voice settings.
+- Controls follow the selected model: v3 uses Creative/Natural/Robust stability;
+  v4 uses stability and similarity; v2 retains speed, style, and speaker boost.
+  The ElevenLabs adapter excludes unsupported settings from outgoing requests.
+- Public voice catalog samples are cached by sample URL in the browser (up to
+  30 samples), with an in-session fallback when persistent storage is unavailable.
+  Playing a sample never calls paid synthesis. Generated voice previews continue
+  to use persisted media and the existing text/model/settings deduplication.
+- Model behavior reference: https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech
+- Create Video and saved Created Video editors surface asynchronous generation
+  failures as top-of-screen, five-second error notifications. A persistent inline
+  message remains after dismissal. Polling does not repeatedly reopen the same
+  failure, but an explicit retry can notify again. ElevenLabs format-access
+  failures include safe plan requirements and the MP3 128kbps alternative.
+
 Format:
 
 ```text
@@ -1817,6 +1863,20 @@ Consequences:
 ```
 
 Initial decisions:
+
+### 2026-08-10 — Created Videos are separate from Topic history
+**Status: accepted**
+
+**Decision:** On-demand Create Video records use a dedicated `created_video`
+creation mode and dedicated API/UI lists. They do not appear in normal Topic or
+Content history.
+
+**Reason:** Users need a simple saved-video workspace that is not mixed with the
+repeatable Topic/Content production flow.
+
+**Consequences:** The implementation can reuse TopicJob and RenderAttempt for the
+generation pipeline, but repositories and dashboard lists must filter by creation
+mode so Create Video and Topic/Content remain separate user concepts.
 
 ### 2026-08-06 — Provider-neutral renderer abstraction
 **Status: accepted**
@@ -1997,7 +2057,8 @@ Resolve only when the related milestone needs the answer.
   and RenderAttempt outputs. Revisit a ContentItem/RenderJob split only if future
   comparison requirements cannot be represented by existing attempt history.
 - [ ] How imported ComfyUI workflow files/media references are normalized across remote GPU nodes.
-- [ ] Whether ComfyUI WebSocket progress is proxied live or normalized by worker/event publication only.
+- [x] ComfyUI WebSocket progress is normalized and persisted by workers; browser
+  clients read the authoritative render attempt through normal API polling.
 - [ ] Authentication/encryption strategy for user-supplied provider keys.
 - [ ] Current Kling API capabilities/limits when Milestone 12 starts.
 

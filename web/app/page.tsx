@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "next/link";
 
+import { CreateVideoPanel } from "@/components/create-video-panel";
 import { CreateTopicForm } from "@/components/create-batch-form";
 import { CurrentDate, DashboardStats, RecentJobs, RenderLibrary, TopicHistory } from "@/components/dashboard-live-data";
 import { DashboardTabs } from "@/components/dashboard-tabs";
@@ -64,6 +65,7 @@ export default async function HomePage() {
               <DashboardStats />
               <div className="dashboard-grid"><section className="panel jobs-panel" aria-labelledby="overview-jobs-title"><div className="panel-heading"><div><h2 id="overview-jobs-title">Recent content</h2><p>Your latest content and render activity</p></div><Link className="text-link" href="#content">View all <span>→</span></Link></div><RecentJobs contentGenerationReady={openAiReady} speechGenerationReady={elevenLabsReady} /></section><section className="panel health-panel" aria-labelledby="health-title"><div className="panel-heading"><div><h2 id="health-title">Pipeline health</h2><p>Startup configuration is checked before generation.</p></div><span className="healthy-label"><span className={apiConnected ? "pulse-dot" : "pulse-dot offline"} /> {apiConnected ? "API connected" : "API offline"}</span></div><div className="health-list"><div className="health-row"><span className="service-badge blue">⌁</span><span><strong>API service</strong><small>Request routing and content</small></span><b className={apiConnected ? "health-ok" : "health-warning"}>{apiConnected ? "Operational" : "Offline"}</b></div><div className="health-row"><span className="service-badge purple">✦</span><span><strong>OpenAI</strong><small>Content generation</small></span><b className={openAiReady ? "health-ok" : "health-warning"}>{openAiReady ? "Configured" : "Setup required"}</b></div><div className="health-row"><span className="service-badge green">◒</span><span><strong>ElevenLabs</strong><small>Speech generation</small></span><b className={elevenLabsReady ? "health-ok" : "health-warning"}>{elevenLabsReady ? "Configured" : "Setup required"}</b></div></div></section></div>
             </> },
+            { id: "create-video", label: "Create Video", content: <CreateVideoPanel /> },
             { id: "create", label: "Create Topic", content: <CreateTopicForm /> },
             { id: "content", label: "Content", content: <section className="panel jobs-panel" aria-labelledby="content-title"><div className="panel-heading"><div><h2 id="content-title">Topic history</h2><p>Expand a topic to review, regenerate, or delete its content versions.</p></div></div><TopicHistory contentGenerationReady={openAiReady} speechGenerationReady={elevenLabsReady} /></section> },
             { id: "library", label: "Library", content: <section className="panel" aria-labelledby="library-title"><div className="panel-heading"><div><h2 id="library-title">Output library</h2><p>Completed videos ingested from ComfyUI.</p></div></div><RenderLibrary /></section> },

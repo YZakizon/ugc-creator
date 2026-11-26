@@ -12,6 +12,7 @@ from app.providers.tts.contracts import TTSProvider, TTSProviderError, TTSReques
 from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
 from app.providers.tts.fake import FakeTTSProvider
 from app.repositories import SqlAlchemyConfigurationRepository
+from app.services.media_service import probe_audio_duration
 from app.workers.celery_app import celery_app
 from app.workers.retry import retry_provider_error
 
@@ -77,12 +78,12 @@ def generate_job_tts(task: Task, job_id: str) -> dict[str, str]:
             context.topic,
             context.content_number,
             context.audio_number,
-            "audio",
             result.extension,
         )
         object_key = (
             f"topics/{context.batch_id}/contents/{context.job_id}/audio/{filename}"
         )
+        duration_seconds = probe_audio_duration(result.audio, filename)
         LocalStorageProvider().put(object_key, result.audio)
         completed = repo.complete(
             context,
@@ -97,6 +98,7 @@ def generate_job_tts(task: Task, job_id: str) -> dict[str, str]:
             filename=filename,
             content_type=result.content_type,
             size_bytes=len(result.audio),
+            duration_seconds=duration_seconds,
         )
         return {
             "job_id": job_id,
