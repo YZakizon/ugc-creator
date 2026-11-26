@@ -645,7 +645,7 @@ describe("home page", () => {
     expect(within(paramsDialog).getByText("987654")).toBeVisible();
     fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered LTX settings" }));
     fireEvent.click(jobCard.getByRole("tab", { name: "Generate speech" }));
-    fireEvent.click(jobCard.getByRole("button", { name: "Generate audio" }));
+    fireEvent.click(jobCard.getByRole("button", { name: "Generate audio again" }));
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/generate-tts"))).toBe(true));
     fireEvent.change(jobCard.getByRole("combobox", { name: "Voice profile", hidden: true }), { target: { value: "voice-profile-2" } });
     fireEvent.click(jobCard.getByRole("button", { name: "Save voice profile", hidden: true }));
