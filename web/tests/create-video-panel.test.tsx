@@ -421,6 +421,44 @@ describe("CreateVideoPanel", () => {
     expect(screen.queryByText("Deleted")).not.toBeInTheDocument();
   });
 
+  it("deletes failed renders individually and in bulk", async () => {
+    const asset = mediaAsset("video-1", "video", "completed.mp4");
+    let history = [
+      renderAttempt(asset, { id: "failed-1", status: "failed", assets: [], output_filename: null }),
+      renderAttempt(asset, { id: "failed-2", status: "failed", assets: [], output_filename: null }),
+      renderAttempt(asset),
+    ];
+    const requests: string[] = [];
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/topics/topic-1")) return json(topic());
+      if (url.includes("/jobs/job-1/failed-render-attempts") && init?.method === "DELETE") {
+        requests.push(url);
+        const attemptId = url.split("attempt_id=")[1];
+        history = history.filter((attempt) =>
+          attempt.status !== "failed" || (attemptId && attempt.id !== attemptId),
+        );
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes("/render-attempts")) return json({ items: history, total: history.length });
+      return json({ items: [], total: 0 });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+
+    const buttons = await screen.findAllByRole("button", { name: "Delete failed render" });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Delete failed render" })).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "Delete all failed renders" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Delete all failed renders" })).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Delete completed.mp4" })).toBeInTheDocument();
+    expect(requests[0]).toMatch(/failed-render-attempts\?attempt_id=failed-1$/);
+    expect(requests[1]).toMatch(/failed-render-attempts$/);
+    confirm.mockRestore();
+  });
+
   it("requires source image and audio before generating video", async () => {
     const requests: Array<{ url: string; method?: string }> = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -15,6 +15,7 @@ from app.db.models import (
     Batch,
     Character,
     MediaAsset,
+    RenderAttempt,
     RenderProfile,
     TopicJob,
     VoiceProfile,
@@ -645,6 +646,89 @@ def test_render_attempt_queue_is_idempotent_and_completion_persists_asset() -> N
         reset_job = session.get(TopicJob, job_id)
         assert reset_job is not None
         assert reset_job.status == "failed"
+
+
+def test_failed_attempt_deletion_is_scoped_to_the_selected_created_video() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    repo = RenderExecutionRepository(factory)
+    node = repo.create_node(
+        RenderNodeCreate(name="Local", base_url="http://comfyui:8188")
+    )
+
+    with factory() as session:
+        voice = VoiceProfile(
+            name="Voice", provider="elevenlabs", provider_voice_id="voice"
+        )
+        workflow = WorkflowTemplate(
+            name="LTX",
+            renderer_provider="comfyui",
+            workflow_json={},
+            checksum="checksum",
+        )
+        profile = RenderProfile(
+            name="LTX",
+            character=Character(name="Elena", slug="elena"),
+            voice_profile=voice,
+            renderer_provider="comfyui",
+        )
+        selected = TopicJob(
+            batch=Batch(name="Selected video", creation_mode="created_video"),
+            topic="Selected video",
+        )
+        other = TopicJob(
+            batch=Batch(name="Other video", creation_mode="created_video"),
+            topic="Other video",
+        )
+        ordinary = TopicJob(batch=Batch(name="Ordinary topic"), topic="Ordinary topic")
+        session.add_all([workflow, profile, selected, other, ordinary])
+        session.flush()
+
+        def attempt(job: TopicJob, status: str) -> RenderAttempt:
+            return RenderAttempt(
+                job_id=job.id,
+                render_profile_id=profile.id,
+                render_node_id=node.id,
+                workflow_template_id=workflow.id,
+                provider="comfyui",
+                status=status,
+                error_message="Provider failed" if status == "failed" else None,
+            )
+
+        first = attempt(selected, "failed")
+        second = attempt(selected, "failed")
+        completed = attempt(selected, "completed")
+        active = attempt(selected, "rendering")
+        other_failed = attempt(other, "failed")
+        ordinary_failed = attempt(ordinary, "failed")
+        session.add_all(
+            [first, second, completed, active, other_failed, ordinary_failed]
+        )
+        session.commit()
+
+    def deleted_ids() -> set[UUID]:
+        return {
+            entry.id
+            for entry in repo.list_attempts()
+            if entry.output_deleted_at is not None
+        }
+
+    repo.delete_failed_attempts(selected.id, completed.id)
+    repo.delete_failed_attempts(selected.id, other_failed.id)
+    repo.delete_failed_attempts(ordinary.id, None)
+    assert deleted_ids() == set()
+
+    repo.delete_failed_attempts(selected.id, first.id)
+    assert deleted_ids() == {first.id}
+    repo.delete_failed_attempts(selected.id, None)
+    assert deleted_ids() == {first.id, second.id}
+
+    for attempt_id in (first.id, second.id):
+        entry = repo.get_attempt(attempt_id)
+        assert entry is not None
+        assert entry.status == "failed"
+        assert entry.error_message == "Provider failed"
 
 
 def test_cancel_render_attempt_returns_job_to_ready_to_render() -> None:

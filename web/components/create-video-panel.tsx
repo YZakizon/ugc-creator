@@ -14,6 +14,7 @@ import {
   cloneOnDemandVideo,
   createWorkflowTemplate,
   createOnDemandVideo,
+  deleteFailedRenderAttempts,
   deleteMediaAsset,
   deleteTopic,
   generateJobContent,
@@ -342,6 +343,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     () => renderAttempts.filter((attempt) => attempt.job_id === currentJob?.id && !attempt.output_deleted_at),
     [renderAttempts, currentJob?.id],
   );
+  const hasFailedRenders = jobAttempts.some((attempt) => attempt.status === "failed");
   const latestAttempt = jobAttempts[0];
   const latestAttemptId = latestAttempt?.id;
   const latestAttemptStatus = latestAttempt?.status;
@@ -825,6 +827,11 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     if (currentJob && assetId) selectAudio.mutate({ jobId: currentJob.id, assetId, durationOverride });
   }
 
+  const deleteFailedRenders = useMutation({
+    mutationFn: deleteFailedRenderAttempts,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["render-attempts"] }),
+  });
+
   const deleteAsset = useMutation({
     mutationFn: deleteMediaAsset,
     onSuccess: invalidate,
@@ -1033,8 +1040,28 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         </section>
 
         <section className="panel create-video-card">
-          <div className="panel-heading"><div><h3>Completed video history</h3><p>Completed renders for this created video.</p></div></div>
-          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? `${attempt.provider} render`}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button></div>{attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
+          <div className="panel-heading">
+            <div><h3>Render history</h3></div>
+            {hasFailedRenders && currentJob && <button
+              className="button button-danger button-small"
+              type="button"
+              disabled={deleteFailedRenders.isPending}
+              onClick={() => {
+                if (window.confirm("Delete all failed renders for this created video?")) {
+                  deleteFailedRenders.mutate({ jobId: currentJob.id });
+                }
+              }}
+            >Delete all failed renders</button>}
+          </div>
+          {deleteFailedRenders.isError && <p className="form-error" role="alert">Could not delete failed renders. Please try again.</p>}
+          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? `${attempt.provider} render`}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button>
+            {attempt.status === "failed" && <button
+              className="button button-danger button-small"
+              type="button"
+              disabled={deleteFailedRenders.isPending}
+              onClick={() => deleteFailedRenders.mutate({ jobId: attempt.job_id, attemptId: attempt.id })}
+            >Delete failed render</button>}
+          </div>{attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
         </section>
       </div>
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.core.statuses import JobStatus
 from app.db.models import (
+    Batch,
     MediaAsset,
     RenderAttempt,
     RenderNode,
@@ -264,6 +265,23 @@ class RenderExecutionRepository:
             if job_id is not None:
                 query = query.where(RenderAttempt.job_id == job_id)
             return list(session.scalars(query).unique().all())
+
+    def delete_failed_attempts(self, job_id: UUID, attempt_id: UUID | None) -> None:
+        created_video_job = (
+            select(TopicJob.id)
+            .join(Batch, Batch.id == TopicJob.batch_id)
+            .where(TopicJob.id == job_id, Batch.creation_mode == "created_video")
+        )
+        statement = update(RenderAttempt).where(
+            RenderAttempt.job_id.in_(created_video_job),
+            RenderAttempt.status == "failed",
+            RenderAttempt.output_deleted_at.is_(None),
+        )
+        if attempt_id is not None:
+            statement = statement.where(RenderAttempt.id == attempt_id)
+        with self.factory() as session:
+            session.execute(statement.values(output_deleted_at=now()))
+            session.commit()
 
     def execution_context(
         self, attempt_id: UUID
