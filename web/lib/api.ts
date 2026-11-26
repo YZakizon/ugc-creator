@@ -215,6 +215,7 @@ export type MediaAsset = {
     provider?: string;
     voice_profile_id?: string;
     voice_id?: string;
+    voice_name?: string;
     model?: string;
     settings?: Record<string, unknown>;
     provider_request_id?: string | null;
@@ -342,6 +343,7 @@ export function getTopics(limit = 20, offset = 0): Promise<{ items: TopicSummary
 }
 
 export type OnDemandRenderOverrides = {
+  workflow_controls?: Record<string, boolean | number | string>;
   video_prompt?: string | null;
   fps?: number | null;
   duration?: number | null;

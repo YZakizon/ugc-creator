@@ -6,7 +6,82 @@ from app.providers.tts.contracts import (
     TTSProviderOutcomeUnknown,
     TTSRequest,
 )
-from app.providers.tts.elevenlabs import ElevenLabsTTSProvider
+from app.providers.tts.elevenlabs import ElevenLabsTTSProvider, model_voice_settings
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("eleven_v3", {"stability": 0.5}),
+        ("eleven_v4", {"stability": 0.5, "similarity_boost": 0.75}),
+        ("eleven_v4_turbo", {"stability": 0.5, "similarity_boost": 0.75}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_specific_settings_are_sent_to_elevenlabs(
+    model: str, expected: dict[str, object]
+) -> None:
+    settings: dict[str, object] = {
+        "speed": 1.1,
+        "stability": 0.5,
+        "similarity_boost": 0.75,
+        "style": 0.5,
+        "use_speaker_boost": True,
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/user/subscription":
+            return httpx.Response(200, json={})
+        payload = __import__("json").loads(request.content)
+        assert payload["model_id"] == model
+        assert payload["voice_settings"] == expected
+        return httpx.Response(200, content=b"ID3audio")
+
+    provider = ElevenLabsTTSProvider(
+        api_key="test", transport=httpx.MockTransport(handler)
+    )
+    await provider.synthesize(
+        TTSRequest(
+            text="Hello", voice_id="voice-123", model_id=model, voice_settings=settings
+        )
+    )
+    assert settings["speed"] == 1.1
+
+
+def test_v3_rejects_invalid_stability_before_provider_call() -> None:
+    with pytest.raises(TTSProviderError, match="stability must be"):
+        model_voice_settings("eleven_v3", {"stability": 0.55})
+
+
+@pytest.mark.parametrize(
+    ("output_format", "requirement"),
+    [("wav_44100", "Pro tier"), ("mp3_44100_192", "Creator tier")],
+)
+@pytest.mark.asyncio
+async def test_forbidden_formats_have_safe_actionable_errors(
+    output_format: str, requirement: str
+) -> None:
+    provider = ElevenLabsTTSProvider(
+        api_key="test",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                403, json={"detail": "sensitive upstream text"}
+            )
+        ),
+    )
+    with pytest.raises(TTSProviderError) as caught:
+        await provider.synthesize(
+            TTSRequest(
+                text="Hello",
+                voice_id="test",
+                model_id="eleven_v4",
+                output_format=output_format,
+            )
+        )
+    assert requirement in str(caught.value)
+    assert "128kbps" in str(caught.value)
+    assert "sensitive upstream text" not in str(caught.value)
+    assert caught.value.retriable is False
 
 
 @pytest.mark.asyncio

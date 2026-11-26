@@ -100,6 +100,29 @@ async def apply_default_workflow_media(
             values[key] = await renderer.upload(upload_name, content, input_type)
 
 
+async def apply_reference_image_media(
+    workflow: dict[str, object],
+    renderer: ComfyUIRenderer,
+    storage: LocalStorageProvider,
+    attempt_id: UUID,
+) -> None:
+    """Restore each optional image from its own durable asset after overrides."""
+    for raw_node in workflow.values():
+        if not isinstance(raw_node, dict) or raw_node.get("class_type") != "LoadImage":
+            continue
+        metadata = raw_node.get("_meta")
+        inputs = raw_node.get("inputs")
+        asset_key = (
+            metadata.get("ugc_reference_asset") if isinstance(metadata, dict) else None
+        )
+        if isinstance(asset_key, str) and isinstance(inputs, dict):
+            inputs["image"] = await renderer.upload(
+                render_input_filename(PurePath(asset_key).name, attempt_id),
+                storage.get(asset_key),
+                "image",
+            )
+
+
 async def _prepare_and_submit(attempt_id: UUID) -> None:
     repo = repository()
     existing = repo.get_attempt(attempt_id)
@@ -205,6 +228,7 @@ async def _prepare_and_submit(attempt_id: UUID) -> None:
         attempt.workflow_snapshot, attempt.binding_snapshot, values
     )
     apply_explicit_media_loader_overrides(workflow, values)
+    await apply_reference_image_media(workflow, renderer, storage, attempt_id)
     repo.save_prepared(attempt_id, workflow, values)
     if not repo.mark_submission_started(attempt_id):
         submit_render.apply_async(args=[str(attempt_id)], countdown=1)

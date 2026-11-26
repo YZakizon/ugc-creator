@@ -2,7 +2,15 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    field_validator,
+)
 
 from app.core.content_prompts import validate_content_prompt_template
 from app.core.statuses import BatchStatus, JobStatus
@@ -95,6 +103,9 @@ class MediaAssetRead(BaseModel):
 
 
 class OnDemandRenderOverrides(BaseModel):
+    workflow_controls: dict[str, StrictBool | StrictFloat | StrictInt | StrictStr] = (
+        Field(default_factory=dict, max_length=64)
+    )
     video_prompt: str | None = Field(default=None, max_length=20_000)
     fps: int | None = Field(default=None, ge=1, le=120)
     duration: int | None = Field(default=None, ge=1, le=180)

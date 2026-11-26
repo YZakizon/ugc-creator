@@ -1813,6 +1813,18 @@ Append decisions here as implementation clarifies unknowns.
 
 ## 40.8 On-demand Created Video workspace
 
+- Generated audio history shows its voice name, API provider and model beneath
+  each filename. Voice names are snapshotted on new audio assets, so changing the
+  selected voice does not relabel earlier generations.
+
+- MiniMax H3 workflows using a connected ResolutionSelector expose per-video
+  aspect ratio, megapixels and size multiple. These values are validated and
+  snapshotted on the render copy; no model-specific columns or node IDs are added.
+
+- Optional image references are configured by workflow metadata, default off,
+  toggled per Created Video and snapshotted when a render is queued. Secondary
+  images are stored independently and never replaced by the primary image.
+
 - Dashboard Create Video is a separate on-demand workspace for one saved video
   draft plus its generated audio/video history.
 - Created Videos are stored with a distinct `creation_mode` and are listed through
@@ -1821,6 +1833,24 @@ Append decisions here as implementation clarifies unknowns.
   avoid a parallel generation system, but normal Topic lists filter them out.
 - Per-video LTX controls are stored as render overrides on the content job and are
   applied only to the copied render payload during execution.
+
+## 40.9 ElevenLabs model controls and voice samples
+
+- Voice Profiles and Create Video expose Multilingual v2, Turbo v2.5, v3, v4,
+  and v4 Turbo. Create Video persists its model with the other voice settings.
+- Controls follow the selected model: v3 uses Creative/Natural/Robust stability;
+  v4 uses stability and similarity; v2 retains speed, style, and speaker boost.
+  The ElevenLabs adapter excludes unsupported settings from outgoing requests.
+- Public voice catalog samples are cached by sample URL in the browser (up to
+  30 samples), with an in-session fallback when persistent storage is unavailable.
+  Playing a sample never calls paid synthesis. Generated voice previews continue
+  to use persisted media and the existing text/model/settings deduplication.
+- Model behavior reference: https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech
+- Create Video and saved Created Video editors surface asynchronous generation
+  failures as top-of-screen, five-second error notifications. A persistent inline
+  message remains after dismissal. Polling does not repeatedly reopen the same
+  failure, but an explicit retry can notify again. ElevenLabs format-access
+  failures include safe plan requirements and the MP3 128kbps alternative.
 
 Format:
 

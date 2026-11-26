@@ -57,6 +57,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedAudio, setSelectedAudio] = useState<string | null>(null);
   const [mediaAssets, setMediaAssets] = useState<Partial<Record<MediaKey, string>>>({});
+  const [templateMetadata, setTemplateMetadata] = useState<Record<string, unknown>>({});
   const [mediaUploadPending, setMediaUploadPending] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; variant: ToastVariant } | null>(null);
@@ -84,6 +85,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
     setSelectedImage(null);
     setSelectedAudio(null);
     setMediaAssets({});
+    setTemplateMetadata({});
     setLocalError(null);
     mutation.reset();
   }
@@ -123,6 +125,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
   }
 
   const editTemplate = useCallback((template: WorkflowTemplate) => {
+    setTemplateMetadata(template.metadata_json);
     setEditingTemplateId(template.id);
     setName(template.name);
     setWorkflow(JSON.stringify(template.workflow_json, null, 2));
@@ -266,7 +269,7 @@ export function WorkflowTemplateSetup({ initialTemplate, formId = "workflow-edit
         templateId: editingTemplateId,
         payload: {
         name: name.trim() || "ComfyUI workflow",
-        metadata_json: { default_workflow_media: mediaAssets },
+        metadata_json: { ...templateMetadata, default_workflow_media: mediaAssets },
         workflow_json: workflowJson,
         bindings: bindingJson,
         },

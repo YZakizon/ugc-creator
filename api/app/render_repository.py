@@ -17,6 +17,8 @@ from app.db.models import (
     WorkflowTemplate,
 )
 from app.providers.render.comfyui_controls import inferred_ltx_bindings
+from app.providers.render.minimax_controls import configure_minimax_image_size
+from app.providers.render.optional_inputs import configure_optional_images
 from app.schemas import RenderNodeCreate
 
 
@@ -153,6 +155,14 @@ class RenderExecutionRepository:
             ]
             workflow_snapshot = deepcopy(workflow.workflow_json)
             if node.provider == "comfyui":
+                configure_minimax_image_size(
+                    workflow_snapshot, job.render_overrides or {}
+                )
+                configure_optional_images(
+                    workflow_snapshot,
+                    workflow.metadata_json,
+                    job.render_overrides or {},
+                )
                 binding_snapshot.extend(
                     inferred_ltx_bindings(workflow_snapshot, binding_snapshot)
                 )

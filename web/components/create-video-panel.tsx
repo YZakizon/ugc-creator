@@ -4,6 +4,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { HumanDate } from "@/components/date-display";
+import { audioGenerationDetails } from "@/lib/audio-generation-details";
+import { VoiceCatalogPreview } from "@/components/voice-catalog-preview";
+import { ELEVENLABS_MODELS, elevenLabsCapabilities } from "@/lib/elevenlabs-models";
 import { Toast } from "@/components/feedback";
 import {
   attachJobElevenLabsVoice,
@@ -30,13 +33,16 @@ import {
   updateOnDemandVideo,
   uploadJobAudio,
   uploadJobSourceImage,
+  uploadWorkflowMedia,
 } from "@/lib/api";
+import { IMAGE_ASPECT_RATIOS, minimaxImageSize, optionalImageReferences } from "@/lib/workflow-controls";
 import { previewLtxRenderControls } from "@/lib/render-settings-preview";
 import type { ElevenLabsVoice, Job, MediaAsset, OnDemandRenderOverrides, RenderAttempt, RenderedWorkflowControl, Topic, TopicSummary, WorkflowTemplate, WorkflowTemplateInput } from "@/lib/api";
 
 const ACTIVE_STATUSES = new Set(["generating_content", "generating_tts", "queued", "submitting_render", "rendering", "downloading_output"]);
 const CANCELABLE_RENDER_STATUSES = new Set(["queued", "submitting_render", "rendering", "downloading_output"]);
 const TERMINAL_RENDER_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
 const CREATE_VIDEO_LAST_SETTINGS_KEY = "ugc-create-video-last-settings-v1";
 
 type CreateVideoLastSettings = {
@@ -47,8 +53,10 @@ type CreateVideoLastSettings = {
   fps?: string;
   duration?: string;
   seed?: string;
+  workflow_controls?: Record<string, boolean | number | string>;
   audio_controls_open?: boolean;
   voice_speed?: string;
+  voice_model?: string;
   voice_stability?: string;
   voice_similarity?: string;
   voice_style?: string;
@@ -238,6 +246,11 @@ function controlValue(workflow: WorkflowTemplate, label: string, job: Job | null
   return previewLtxRenderControls(workflow, fallbackJob).find((control) => control.label === label)?.value;
 }
 
+function AudioGenerationCaption({ asset, voices }: { asset: MediaAsset; voices: ElevenLabsVoice[] }) {
+  const details = audioGenerationDetails(asset, voices);
+  return <small className="create-video-audio-caption" title={details.subtitle}><span className="create-video-audio-voice">{details.voice}</span>{details.api && <span className="create-video-audio-api">{details.api}</span>}</small>;
+}
+
 export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null; onSaved?: (topicId: string) => void }) {
   const queryClient = useQueryClient();
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(topicId ?? null);
@@ -250,8 +263,11 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const [fps, setFps] = useState("24");
   const [duration, setDuration] = useState("30");
   const [seed, setSeed] = useState("");
+  const [workflowControls, setWorkflowControls] = useState<Record<string, boolean | number | string>>({});
   const [audioControlsOpen, setAudioControlsOpen] = useState(true);
   const [voiceSpeed, setVoiceSpeed] = useState("1");
+  const [voiceModel, setVoiceModel] = useState("eleven_multilingual_v2");
+  const voiceCapabilities = elevenLabsCapabilities(voiceModel);
   const [voiceStability, setVoiceStability] = useState("50");
   const [voiceSimilarity, setVoiceSimilarity] = useState("75");
   const [voiceStyle, setVoiceStyle] = useState("50");
@@ -271,6 +287,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const lastSettingsLoadedRef = useRef(false);
   const lastAutosaveKeyRef = useRef("");
   const awaitingAudioToastRef = useRef(false);
+  const lastFailureNotificationRef = useRef<string | null>(null);
   const audioCountBeforeGenerateRef = useRef(0);
   const audioIdBeforeGenerateRef = useRef<string | null>(null);
   const pendingAudioSelectionRef = useRef<string | null>(null);
@@ -292,8 +309,10 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     if (typeof settings.fps === "string") setFps(settings.fps);
     if (typeof settings.duration === "string") setDuration(settings.duration);
     if (typeof settings.seed === "string") setSeed(settings.seed);
+    if (isRecord(settings.workflow_controls)) setWorkflowControls(settings.workflow_controls as Record<string, boolean | number | string>);
     if (typeof settings.audio_controls_open === "boolean") setAudioControlsOpen(settings.audio_controls_open);
     if (typeof settings.voice_speed === "string") setVoiceSpeed(settings.voice_speed);
+    if (typeof settings.voice_model === "string") setVoiceModel(settings.voice_model);
     if (typeof settings.voice_stability === "string") setVoiceStability(settings.voice_stability);
     if (typeof settings.voice_similarity === "string") setVoiceSimilarity(settings.voice_similarity);
     if (typeof settings.voice_style === "string") setVoiceStyle(settings.voice_style);
@@ -328,6 +347,8 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const latestAttemptStatus = latestAttempt?.status;
   const active = currentJob ? ACTIVE_STATUSES.has(currentJob.status) : false;
   const selectedWorkflow = workflowTemplates.find((workflow) => workflow.id === workflowTemplateId);
+  const imageReferences = optionalImageReferences(selectedWorkflow);
+  const imageSize = minimaxImageSize(selectedWorkflow);
   const firstProfile = renderProfiles.find((profile) => profile.id === renderProfileId);
   const selectedAudioAsset = currentJob?.audio_assets?.find((asset) => asset.id === selectedAudioAssetId) ?? defaultRenderAudioAsset(currentJob);
   const sourceImageDisplayName = pendingSourceImageName || mediaDisplayName(currentJob?.source_image_asset);
@@ -360,7 +381,9 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     setVideoPrompt(String(job?.render_overrides?.video_prompt ?? ""));
     setFps(String(job?.render_overrides?.fps ?? 24));
     setSeed(job?.render_overrides?.seed === undefined ? "" : String(job.render_overrides.seed));
+    setWorkflowControls(isRecord(job?.render_overrides?.workflow_controls) ? job.render_overrides.workflow_controls as Record<string, boolean | number | string> : {});
     if (typeof createVideoSettings.voice_speed === "number") setVoiceSpeed(String(createVideoSettings.voice_speed));
+    setVoiceModel(typeof createVideoSettings.voice_model === "string" ? createVideoSettings.voice_model : "eleven_multilingual_v2");
     if (typeof createVideoSettings.voice_stability === "number") setVoiceStability(String(Math.round(createVideoSettings.voice_stability * 100)));
     if (typeof createVideoSettings.voice_similarity === "number") setVoiceSimilarity(String(Math.round(createVideoSettings.voice_similarity * 100)));
     if (typeof createVideoSettings.voice_style_exaggeration === "number") setVoiceStyle(String(Math.round(createVideoSettings.voice_style_exaggeration * 100)));
@@ -417,10 +440,12 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       fps: Number.parseInt(fps, 10) || null,
       duration: Number.parseInt(effectiveDuration, 10) || null,
       seed: seed.trim() ? Number.parseInt(seed, 10) : null,
+      workflow_controls: workflowControls,
       create_video: {
         workflow_template_id: workflowTemplateId || null,
         voice_id: voiceId || null,
         voice_speed: Number(voiceSpeed),
+        voice_model: voiceModel,
         voice_stability: Number(voiceStability) / 100,
         voice_similarity: Number(voiceSimilarity) / 100,
         voice_style_exaggeration: Number(voiceStyle) / 100,
@@ -428,7 +453,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         voice_speaker_boost: voiceSpeakerBoost,
       },
     };
-  }, [duration, fps, seed, videoPrompt, voiceId, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId]);
+  }, [duration, fps, seed, videoPrompt, voiceId, voiceModel, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId, workflowControls]);
   const currentRenderedControls = useMemo(() => {
     if (!selectedWorkflow || !currentJob) return [];
     return previewLtxRenderControls(selectedWorkflow, {
@@ -475,8 +500,10 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       fps,
       duration,
       seed,
+      workflow_controls: workflowControls,
       audio_controls_open: audioControlsOpen,
       voice_speed: voiceSpeed,
+      voice_model: voiceModel,
       voice_stability: voiceStability,
       voice_similarity: voiceSimilarity,
       voice_style: voiceStyle,
@@ -492,6 +519,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     seed,
     videoPrompt,
     voiceId,
+    voiceModel,
     voiceOutputFormat,
     voiceSimilarity,
     voiceSpeakerBoost,
@@ -499,13 +527,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     voiceStability,
     voiceStyle,
     workflowTemplateId,
+    workflowControls,
   ]);
 
   function elevenLabsPayload(voice: ElevenLabsVoice) {
     return {
       voice_id: voice.voice_id,
       name: voice.name,
-      model: "eleven_multilingual_v2",
+      model: voiceModel,
       speed: Number(voiceSpeed),
       stability: Number(voiceStability) / 100,
       similarity: Number(voiceSimilarity) / 100,
@@ -588,9 +617,15 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       await updateJobScript(job.id, script);
       return generateJobSpeech(job.id);
     },
-    onSuccess: () => {
+    onSuccess: (job) => {
       awaitingAudioToastRef.current = true;
+      lastFailureNotificationRef.current = null;
+      cacheUpdatedJob(job);
       invalidate();
+    },
+    onError: (error) => {
+      awaitingAudioToastRef.current = false;
+      setToast({ message: error.message, variant: "danger" });
     },
   });
 
@@ -648,6 +683,12 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   });
 
   function handleGenerateVideo(): void {
+    if (imageReferences.some((reference) => (workflowControls[reference.key] ?? reference.enabled) === true && !(workflowControls[reference.key + "_asset"] ?? reference.asset_key))) {
+      const message = "Upload a second source image or disable the second image reference.";
+      setRenderPreflightError(message);
+      setToast({ message, variant: "danger" });
+      return;
+    }
     if (!currentJob?.source_image_asset || !selectedAudioAssetId) {
       const message = "Pick source image and audio file before generating video.";
       setRenderPreflightError(message);
@@ -675,6 +716,18 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       applyWorkflowBase(workflow, true);
       void queryClient.invalidateQueries({ queryKey: ["workflow-templates"] });
     },
+  });
+
+  const uploadReferenceImage = useMutation({
+    mutationFn: async ({ file, key }: { file: File; key: string }) => ({
+      key,
+      uploaded: await uploadWorkflowMedia({ filename: file.name, content_base64: await fileToBase64(file), input_type: "image" }),
+    }),
+    onSuccess: ({ key, uploaded }) => {
+      setWorkflowControls((current) => ({ ...current, [key]: true, [key + "_asset"]: uploaded.asset_key }));
+      setToast({ message: "Second source image uploaded.", variant: "success" });
+    },
+    onError: (error: Error) => setToast({ message: error.message, variant: "danger" }),
   });
 
   const uploadSourceImage = useMutation({
@@ -843,6 +896,20 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   }, [currentJob?.speech_script, generateAudio.isPending]);
 
   useEffect(() => {
+    if (!currentJob) return;
+    if (currentJob.status !== "failed") {
+      lastFailureNotificationRef.current = null;
+      return;
+    }
+    awaitingAudioToastRef.current = false;
+    const message = currentJob.error_message || "Generation failed. Please try again.";
+    const key = `${currentJob.id}:${message}`;
+    if (lastFailureNotificationRef.current === key) return;
+    lastFailureNotificationRef.current = key;
+    setToast({ message, variant: "danger" });
+  }, [currentJob]);
+
+  useEffect(() => {
     if (!awaitingAudioToastRef.current || !currentJob) return;
     if ((currentJob.audio_assets?.length ?? 0) > audioCountBeforeGenerateRef.current || (currentJob.audio_asset?.id && currentJob.audio_asset.id !== audioIdBeforeGenerateRef.current)) {
       awaitingAudioToastRef.current = false;
@@ -886,14 +953,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
           <label className="field-label">Video title<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="How high achievers handle micromanagement" /></label>
           {audioControlsOpen && <div className="create-video-collapsible"><label className="field-label">Render engine<select value={renderProfileId} onChange={(event) => setRenderProfileId(event.target.value)}><option value="" disabled>Select render engine</option>{renderProfiles.filter((profile) => profile.is_active).map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>
             <label className="field-label">ElevenLabs voice<select value={voiceId} onChange={(event) => setVoiceId(event.target.value)}><option value="" disabled>Select voice</option>{voices.map((voice) => <option key={voice.voice_id} value={voice.voice_id}>{voiceLabel(voice)}</option>)}</select></label>
-            {selectedVoice?.preview_url && <audio controls preload="none" src={selectedVoice.preview_url}>Your browser does not support audio playback.</audio>}
+            {selectedVoice?.preview_url && <VoiceCatalogPreview key={selectedVoice.preview_url} voice={selectedVoice} />}
             <div className="create-video-voice-controls" aria-label="ElevenLabs parameters">
-              <label className="voice-slider"><span className="control-label-with-tooltip">Speed <InfoTooltip label="Controls speaking speed. Lower is slower; higher is faster." /></span><span>{voiceSpeed}</span><input type="range" min="0.7" max="1.2" step="0.01" value={voiceSpeed} onChange={(event) => setVoiceSpeed(event.target.value)} /></label>
-              <label className="voice-slider"><span className="control-label-with-tooltip">Stability <InfoTooltip label="Controls voice consistency. Lower allows more variation; higher is steadier." /></span><span>{voiceStability}%</span><input type="range" min="0" max="100" step="1" value={voiceStability} onChange={(event) => setVoiceStability(event.target.value)} /></label>
-              <label className="voice-slider"><span className="control-label-with-tooltip">Similarity <InfoTooltip label="Controls how closely the output matches the selected voice." /></span><span>{voiceSimilarity}%</span><input type="range" min="0" max="100" step="1" value={voiceSimilarity} onChange={(event) => setVoiceSimilarity(event.target.value)} /></label>
-              <label className="voice-slider"><span className="control-label-with-tooltip">Style exaggeration <InfoTooltip label="Controls expressiveness. Higher values make delivery more dramatic." /></span><span>{voiceStyle}%</span><input type="range" min="0" max="100" step="1" value={voiceStyle} onChange={(event) => setVoiceStyle(event.target.value)} /></label>
+              <label className="field-label">ElevenLabs model<select value={voiceModel} onChange={(event) => { setVoiceModel(event.target.value); if (event.target.value === "eleven_v3") setVoiceStability("50"); }}>{ELEVENLABS_MODELS.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
+              {voiceCapabilities.speed && <label className="voice-slider"><span className="control-label-with-tooltip">Speed <InfoTooltip label="Controls speaking speed. Lower is slower; higher is faster." /></span><span>{voiceSpeed}</span><input type="range" min="0.7" max="1.2" step="0.01" value={voiceSpeed} onChange={(event) => setVoiceSpeed(event.target.value)} /></label>}
+              {voiceCapabilities.v3 ? <label className="field-label">Stability<select value={voiceStability} onChange={(event) => setVoiceStability(event.target.value)}><option value="0">Creative (0%)</option><option value="50">Natural (50%)</option><option value="100">Robust (100%)</option></select></label> : <label className="voice-slider"><span className="control-label-with-tooltip">Stability <InfoTooltip label="Controls voice consistency. Lower allows more variation; higher is steadier." /></span><span>{voiceStability}%</span><input type="range" min="0" max="100" step="1" value={voiceStability} onChange={(event) => setVoiceStability(event.target.value)} /></label>}
+              {voiceCapabilities.similarity && <label className="voice-slider"><span className="control-label-with-tooltip">Similarity <InfoTooltip label="Controls how closely the output matches the selected voice." /></span><span>{voiceSimilarity}%</span><input type="range" min="0" max="100" step="1" value={voiceSimilarity} onChange={(event) => setVoiceSimilarity(event.target.value)} /></label>}
+              {voiceCapabilities.style && <label className="voice-slider"><span className="control-label-with-tooltip">Style exaggeration <InfoTooltip label="Controls expressiveness. Higher values make delivery more dramatic." /></span><span>{voiceStyle}%</span><input type="range" min="0" max="100" step="1" value={voiceStyle} onChange={(event) => setVoiceStyle(event.target.value)} /></label>}
               <label className="field-label"><span className="control-label-with-tooltip">Output format <InfoTooltip label="Controls audio file type and bitrate for generated speech." /></span><select value={voiceOutputFormat} onChange={(event) => setVoiceOutputFormat(event.target.value)}><option value="mp3_44100_128">MP3 44.1 kHz (128kbps)</option><option value="mp3_44100_192">MP3 44.1 kHz (192kbps)</option><option value="wav_44100">WAV 44.1 kHz</option></select></label>
-              <label className="eleven-toggle-row"><span><strong className="control-label-with-tooltip">Speaker boost <InfoTooltip label="Boosts similarity to the original speaker, sometimes at the cost of variation." /></strong><small>Increase similarity to the original speaker.</small></span><button className={`switch-control${voiceSpeakerBoost ? " active" : ""}`} type="button" role="switch" aria-checked={voiceSpeakerBoost} onClick={() => setVoiceSpeakerBoost((enabled) => !enabled)}><span /></button></label>
+              {voiceCapabilities.speakerBoost && <label className="eleven-toggle-row"><span><strong className="control-label-with-tooltip">Speaker boost <InfoTooltip label="Boosts similarity to the original speaker, sometimes at the cost of variation." /></strong><small>Increase similarity to the original speaker.</small></span><button className={`switch-control${voiceSpeakerBoost ? " active" : ""}`} type="button" role="switch" aria-checked={voiceSpeakerBoost} onClick={() => setVoiceSpeakerBoost((enabled) => !enabled)}><span /></button></label>}
+              {(voiceCapabilities.v3 || voiceCapabilities.v4) && <p className="field-hint">Use audio tags such as [whispers] or [excited] in the Audio Script. SSML break tags are not supported.</p>}
             </div>
             <label className="field-label">Audio Script<textarea rows={10} value={script} onInput={(event) => { scriptDirtyRef.current = true; setScript(event.currentTarget.value); }} onChange={(event) => { scriptDirtyRef.current = true; setScript(event.target.value); }} placeholder="Paste the exact words the avatar should speak." /></label>
             <div className="create-video-actions">
@@ -904,13 +973,13 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Generated audio</h3><p>Select the audio used for the next render.</p></div></div>
-          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><small>{asset.kind === "audio" ? "Active render audio" : "Saved audio"}</small></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><button className="job-media-icon" type="button" aria-label={asset.kind === "audio" ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.kind === "audio" ? "Using audio" : "Use audio"} disabled={asset.kind === "audio" || selectAudio.isPending || active} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
+          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><button className="job-media-icon" type="button" aria-label={asset.kind === "audio" ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.kind === "audio" ? "Using audio" : "Use audio"} disabled={asset.kind === "audio" || selectAudio.isPending || active} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
         </section>
 
         <section className="panel create-video-card create-video-ltx">
-          <div className="panel-heading"><div><h3>LTX 2.3 controls</h3><p>{firstProfile ? `Using ${firstProfile.name}` : "Choose a render profile"}</p></div></div>
+          <div className="panel-heading"><div><h3>Workflow: {selectedWorkflow?.name ?? "Select a workflow"}</h3><p>{firstProfile ? `Using ${firstProfile.name}` : "Choose a render profile"}</p></div></div>
           <div className="create-video-workflow-row">
-            <label className="field-label">Base workflow<select value={workflowTemplateId} onChange={(event) => { const id = event.target.value; setWorkflowTemplateId(id); const workflow = workflowTemplates.find((item) => item.id === id); if (workflow) applyWorkflowBase(workflow); }}><option value="">Use render engine default</option>{workflowTemplates.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
+            <label className="field-label">Base workflow<select value={workflowTemplateId} onChange={(event) => { const id = event.target.value; setWorkflowTemplateId(id); const workflow = workflowTemplates.find((item) => item.id === id); if (workflow) applyWorkflowBase(workflow, true); }}><option value="">Use render engine default</option>{workflowTemplates.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
           </div>
           <div className="create-video-override-group">
             <div className="create-video-override-heading"><div><strong>Workflow overrides</strong><small>Override the base workflow JSON, source image, or audio for this video only.</small></div></div>
@@ -930,12 +999,26 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
                 <label className="create-video-file-control"><input type="file" accept="audio/*" disabled={uploadAudio.isPending || active || !title.trim() || !renderProfileId} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadAudio.mutate(file); event.target.value = ""; }} /><span>{uploadAudio.isPending ? "Uploading audio…" : "Audio file"}</span></label>
                 <small className="field-hint">{audioFileDisplayName ? `Override audio: ${audioFileDisplayName}` : "Using workflow default audio until overridden."}</small>
               </div>
+              {imageReferences.map((reference) => {
+                const enabled = typeof workflowControls[reference.key] === "boolean" ? workflowControls[reference.key] as boolean : reference.enabled;
+                const asset = workflowControls[reference.key + "_asset"] ?? reference.asset_key;
+                return <div className="create-video-override-item" key={reference.key}>
+                  <label className="create-video-reference-toggle"><input type="checkbox" checked={enabled} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, [reference.key]: event.target.checked }))} /> Enable second image reference</label>
+                  <label className="create-video-file-control"><input aria-label="Second source image" type="file" accept="image/*" disabled={uploadReferenceImage.isPending || active} onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadReferenceImage.mutate({ file, key: reference.key }); event.target.value = ""; }} /><span>{uploadReferenceImage.isPending ? "Uploading image…" : "Second source image"}</span></label>
+                  <small className="field-hint">{typeof asset === "string" ? asset.split("/").at(-1) : "No second image selected."} · {enabled ? "Enabled" : "Disabled — not sent to ComfyUI"}</small>
+                </div>;
+              })}
             </div>
             <label className="field-label">Audio source<select value={selectedAudioAssetId} disabled={!currentJob?.audio_assets?.length || selectAudio.isPending || active} onChange={(event) => handleAudioSourceChange(event.target.value)}><option value="">No generated audio selected</option>{currentJob?.audio_assets?.map((asset) => <option key={asset.id} value={asset.id}>{asset.filename}{asset.kind === "audio" ? " · active" : ""}</option>)}</select></label>
           </div>
           <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
           <div className="prompt-template-vars create-video-vars"><small>Supported variable</small><button className="prompt-var" type="button" onClick={() => insertVideoPromptVariable("{{SCRIPT}}")}>{"{{SCRIPT}}"}</button><small>Expands to Audio Script when rendering.</small></div>
           <div className="ltx-control-row">
+            {imageSize && <>
+              <label className="field-label">Aspect ratio<select value={String(workflowControls.image_aspect_ratio ?? imageSize.aspectRatio)} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_aspect_ratio: event.target.value }))}>{IMAGE_ASPECT_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</select></label>
+              <label className="field-label">Image megapixels<input type="number" min="0.1" max="16" step="0.01" value={String(workflowControls.image_megapixels ?? imageSize.megapixels)} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_megapixels: event.target.value === "" ? "" : Number(event.target.value) }))} /></label>
+              <label className="field-label">Size multiple<input type="number" min="8" max="128" step="4" value={String(workflowControls.image_multiple ?? imageSize.multiple)} disabled={active} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_multiple: event.target.value === "" ? "" : Number(event.target.value) }))} /></label>
+            </>}
             <label className="field-label">FPS<input inputMode="numeric" value={fps} onChange={(event) => setFps(event.target.value)} /></label>
             <label className="field-label">Duration<input inputMode="numeric" value={duration} onChange={(event) => setDuration(event.target.value)} /></label>
             <label className="field-label">Seed<input inputMode="numeric" value={seed} onChange={(event) => setSeed(event.target.value)} placeholder="Workflow default" /></label>
@@ -955,6 +1038,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         </section>
       </div>
 
+      {currentJob?.status === "failed" && <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
       {error && <p className="form-error" role="alert">{error.message}</p>}
       {renderPreflightError && <p className="form-error" role="alert">{renderPreflightError}</p>}
       {active && <p className="field-hint">This created video is active. Editing is locked until the current generation step finishes.</p>}

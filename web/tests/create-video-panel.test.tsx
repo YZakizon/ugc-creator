@@ -65,6 +65,38 @@ function topic(overrides: Record<string, unknown> = {}) {
 }
 
 describe("CreateVideoPanel", () => {
+  it("saves an independently uploaded second image and its enabled state", async () => {
+    const requests: Array<{ url: string; body?: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      requests.push({ url, body: init?.body ? String(init.body) : undefined });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      if (url.includes("/workflow-templates")) return json({ items: [{ ...workflowTemplate(), name: "MiniMax H3", workflow_json: { ...workflowTemplate().workflow_json, size: { class_type: "ResolutionSelector", inputs: { aspect_ratio: "9:16 (Portrait Widescreen)", megapixels: 0.5, multiple: 32 } }, generator: { class_type: "MiniMaxH3ReferenceToVideo", inputs: { width: ["size", 0], height: ["size", 1] } } }, metadata_json: { optional_image_references: [{ key: "second_image", label: "Second image reference", enabled: false, asset_key: "workflow-media/original.png" }] } }], total: 1 });
+      if (url.includes("/workflow-media")) return json({ asset_key: "workflow-media/new-reference.png", filename: "new-reference.png", input_type: "image" }, 201);
+      if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [], total: 0 });
+      if (url.includes("/tts-providers/elevenlabs/usage")) return json({ configured: false });
+      if (url.includes("/render-nodes") || url.includes("/render-attempts")) return json({ items: [], total: 0 });
+      if (url.includes("/on-demand-videos")) return json({ items: [], total: 0 });
+      return json(topic());
+    });
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const toggle = await screen.findByRole("checkbox", { name: "Enable second image reference" });
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByRole("heading", { name: "Workflow: MiniMax H3" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Image megapixels")).toHaveValue(0.5);
+    expect(screen.getByLabelText("Size multiple")).toHaveValue(32);
+    fireEvent.change(screen.getByLabelText("Image megapixels"), { target: { value: "1.25" } });
+    fireEvent.change(screen.getByLabelText("Aspect ratio"), { target: { value: "16:9 (Widescreen)" } });
+    fireEvent.change(screen.getByLabelText("Second source image"), { target: { files: [new File(["second image"], "new-reference.png", { type: "image/png" })] } });
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(screen.getByText(/new-reference.png · Enabled/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save LTX controls" }));
+    await waitFor(() => expect(requests.some((request) => request.body?.includes('"second_image_asset":"workflow-media/new-reference.png"') && request.body.includes('"second_image":true'))).toBe(true));
+    expect(requests.some((request) => request.body?.includes('"image_megapixels":1.25') && request.body.includes('"image_aspect_ratio":"16:9 (Widescreen)"'))).toBe(true);
+    fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+  });
+
   afterEach(() => {
     cleanup();
     window.localStorage.clear();
@@ -91,11 +123,13 @@ describe("CreateVideoPanel", () => {
 
     fireEvent.change(await panel.findByLabelText("Video title"), { target: { value: "Created video" } });
     fireEvent.change(await panel.findByLabelText("ElevenLabs voice"), { target: { value: "voice-rachel" } });
+    fireEvent.change(panel.getByLabelText("ElevenLabs model"), { target: { value: "eleven_v4" } });
     fireEvent.change(panel.getByLabelText("Audio Script"), { target: { value: "Manual script" } });
     fireEvent.change(panel.getByLabelText("Video prompt"), { target: { value: "A modern creator speaks" } });
 
     await waitFor(() => expect(requests.some((request) => request.url.endsWith("/api/v1/on-demand-videos") && request.body?.includes("A modern creator speaks"))).toBe(true), { timeout: 2000 });
     expect(requests.some((request) => request.url.endsWith("/api/v1/on-demand-videos") && request.body?.includes('"voice_id":"voice-rachel"'))).toBe(true);
+    expect(requests.some((request) => request.body?.includes('"voice_model":"eleven_v4"'))).toBe(true);
     expect(await panel.findByText("Draft saved")).toBeInTheDocument();
     expect(requests.some((request) => request.url.includes("/api/v1/topics") && request.body)).toBe(false);
   });
@@ -111,6 +145,7 @@ describe("CreateVideoPanel", () => {
       seed: "777",
       audio_controls_open: true,
       voice_speed: "1.08",
+      voice_model: "eleven_v4",
       voice_stability: "33",
       voice_similarity: "66",
       voice_style: "44",
@@ -139,12 +174,15 @@ describe("CreateVideoPanel", () => {
     expect(screen.getByLabelText("Duration")).toHaveValue("45");
     expect(screen.getByLabelText("Seed")).toHaveValue("777");
     expect(screen.getByLabelText(/Output format/)).toHaveValue("mp3_44100_192");
-    expect(screen.getByLabelText(/Speed/)).toHaveValue("1.08");
+    expect(screen.getByLabelText("ElevenLabs model")).toHaveValue("eleven_v4");
+    expect(screen.queryByLabelText(/Speed/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Stability/)).toHaveValue("33");
     expect(screen.getByLabelText(/Similarity/)).toHaveValue("66");
+    expect(screen.queryByLabelText(/Style exaggeration/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Speaker boost/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("ElevenLabs model"), { target: { value: "eleven_multilingual_v2" } });
+    expect(screen.getByLabelText(/Speed/)).toHaveValue("1.08");
     expect(screen.getByLabelText(/Style exaggeration/)).toHaveValue("44");
-    expect(screen.getByTitle("Controls speaking speed. Lower is slower; higher is faster.")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /Speaker boost/ })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText("Workflow overrides")).toBeInTheDocument();
     expect(screen.getByText("Override the base workflow JSON, source image, or audio for this video only.")).toBeInTheDocument();
     expect(screen.queryByText("Pick source image")).not.toBeInTheDocument();
@@ -250,6 +288,7 @@ describe("CreateVideoPanel", () => {
   it("shows a notification when generated audio is available", async () => {
     const audioAsset = mediaAsset("audio-1", "audio", "created-video_content1_0001-audio.mp3");
     let speechRequested = false;
+    let attachedModel: string | undefined;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.includes("/topics/topic-1")) return json({ ...topic(), contents: [{ ...job(), audio_asset: speechRequested ? audioAsset : null, audio_assets: speechRequested ? [audioAsset] : [] }] });
@@ -259,7 +298,11 @@ describe("CreateVideoPanel", () => {
       if (url.includes("/tts-providers/elevenlabs/usage")) return json({ provider: "elevenlabs", configured: true, used_units: 10, limit_units: 100, remaining_units: 90, resets_at_unix: null, unit: "characters" });
       if (url.includes("/render-nodes")) return json({ items: [], total: 0 });
       if (url.includes("/render-attempts")) return json({ items: [], total: 0 });
-      if (url.includes("/elevenlabs-voice") || url.includes("/script")) return json(job());
+      if (url.includes("/elevenlabs-voice")) {
+        attachedModel = JSON.parse(String(init?.body)).model;
+        return json(job());
+      }
+      if (url.includes("/script")) return json(job());
       if (url.includes("/generate-tts") && init?.method === "POST") {
         speechRequested = true;
         return json({ ...job(), status: "generating_tts" });
@@ -271,9 +314,44 @@ describe("CreateVideoPanel", () => {
 
     const generateAudioButton = await screen.findByRole("button", { name: "Generate Audio" });
     await waitFor(() => expect(generateAudioButton).toBeEnabled());
+    fireEvent.change(screen.getByLabelText("ElevenLabs model"), { target: { value: "eleven_v3" } });
     fireEvent.click(generateAudioButton);
 
     expect(await screen.findByText("Audio generated.")).toBeInTheDocument();
+    expect(attachedModel).toBe("eleven_v3");
+  });
+
+  it.each([false, true])("notifies asynchronous audio failures and repeated retries (existing failure: %s)", async (initialFailure) => {
+    const message = "ElevenLabs speech generation failed (403). Try MP3 128kbps.";
+    const existingAudio = mediaAsset("old-audio", "audio", "previous.mp3");
+    let failed = initialFailure;
+    const current = () => ({ ...job(), status: failed ? "failed" : "content_ready", error_message: failed ? message : null, audio_asset: existingAudio, audio_assets: [existingAudio] });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/topics/topic-1") || url.includes("/on-demand-videos/topic-1")) return json({ ...topic(), contents: [current()] });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [{ voice_id: "hope", name: "Hope", category: "saved", description: null, preview_url: null }], total: 1 });
+      if (url.includes("/tts-providers/elevenlabs/usage")) return json({ configured: true, remaining_units: 100, unit: "characters" });
+      if (url.includes("/generate-tts") && init?.method === "POST") {
+        failed = true;
+        return json({ ...current(), status: "generating_tts", error_message: null });
+      }
+      if (url.includes("/elevenlabs-voice") || url.includes("/script")) return json(current());
+      return json({ items: [], total: 0 });
+    });
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    if (initialFailure) {
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    }
+    const generate = await screen.findByRole("button", { name: "Generate Audio" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    fireEvent.click(generate);
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByText("Audio generated.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
   });
 
   it("shows delete icons for generated audio and completed videos", async () => {
