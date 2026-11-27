@@ -1842,6 +1842,8 @@ Append decisions here as implementation clarifies unknowns.
   the queue. The API recovers saved queue heads after restart and retries dispatch
   periodically, resuming monitoring for stale attempts with a saved provider ID.
   Audio and video history expose the metadata stored for each entry.
+- Speech generation can run alongside a Created Video render with snapshotted
+  inputs. Audio deletion stays locked until all active renders finish.
 
 ## 40.9 ElevenLabs model controls and voice samples
 

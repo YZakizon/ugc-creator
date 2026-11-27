@@ -12,14 +12,22 @@ from app.db.models import (
     Batch,
     Character,
     MediaAsset,
+    RenderAttempt,
+    RenderNode,
     RenderProfile,
     TopicJob,
     VoiceProfile,
+    WorkflowTemplate,
 )
 from app.job_tts_repository import JobTTSRepository
 from app.main import app
 from app.providers.tts.fake import FakeTTSProvider
-from app.repositories import InMemoryBatchRepository, InMemoryConfigurationRepository
+from app.render_repository import RenderExecutionRepository
+from app.repositories import (
+    InMemoryBatchRepository,
+    InMemoryConfigurationRepository,
+    SqlAlchemyBatchRepository,
+)
 from app.schemas import BatchCreate
 from app.workers import tts_tasks
 
@@ -371,3 +379,100 @@ def test_failed_tts_replacement_preserves_current_audio() -> None:
         assert saved.error_message == "Provider unavailable"
         assert active_audio is not None
         assert active_audio.filename == "original.mp3"
+
+
+@pytest.mark.parametrize("render_finishes_first", [False, True])
+def test_created_video_speech_and_render_finish_independently(
+    render_finishes_first: bool,
+) -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    with factory() as session:
+        profile = RenderProfile(
+            name="Profile",
+            character=Character(name="Elena", slug="elena"),
+            voice_profile=VoiceProfile(
+                name="Hope", provider="elevenlabs", provider_voice_id="hope"
+            ),
+            renderer_provider="comfyui",
+        )
+        node = RenderNode(name="Local", base_url="http://comfyui:8188")
+        workflow = WorkflowTemplate(
+            name="LTX",
+            renderer_provider="comfyui",
+            checksum="original",
+            workflow_json={},
+        )
+        session.add_all([profile, node, workflow])
+        session.flush()
+        job = TopicJob(
+            batch=Batch(name="Created Video", creation_mode="created_video"),
+            topic="Elena",
+            speech_script="Current speech",
+            render_profile_id=profile.id,
+            status=JobStatus.RENDERING.value,
+            media_assets=[
+                MediaAsset(
+                    kind="audio",
+                    object_key="original.mp3",
+                    filename="original.mp3",
+                    size_bytes=1,
+                )
+            ],
+        )
+        attempt = RenderAttempt(
+            job=job,
+            render_profile_id=profile.id,
+            render_node_id=node.id,
+            workflow_template_id=workflow.id,
+            status="rendering",
+            provider="comfyui",
+            external_job_id="prompt",
+            effective_values={
+                "requested_inputs": {"audio": {"object_key": "original.mp3"}}
+            },
+        )
+        session.add(attempt)
+        session.commit()
+        job_id, attempt_id, audio_id = job.id, attempt.id, job.media_assets[0].id
+
+    batches = SqlAlchemyBatchRepository(factory)
+    tts = JobTTSRepository(factory)
+    renders = RenderExecutionRepository(factory)
+    assert batches.update_job_voice_profile(job_id, profile.voice_profile_id)
+    assert batches.update_job_script(job_id, "Replacement speech")
+    assert batches.queue_job_for_tts(job_id)
+    with pytest.raises(ValueError, match="cannot be deleted"):
+        batches.delete_job_audio_asset(audio_id)
+    assert renders.update_progress(attempt_id, "rendering", 40)
+    context = tts.claim(job_id)
+    assert context is not None
+    assert context.speech_script == "Replacement speech"
+    assert tts.claim(job_id) is None
+
+    if render_finishes_first:
+        assert renders.update_progress(attempt_id, "completed", 100)
+        assert batches.get_job(job_id).status == JobStatus.GENERATING_TTS.value
+
+    saved = tts.complete(
+        context,
+        provider_request_id="speech",
+        model_id="test",
+        settings={},
+        object_key="replacement.mp3",
+        filename="replacement.mp3",
+        content_type="audio/mpeg",
+        size_bytes=1,
+    )
+    assert saved is not None
+    if not render_finishes_first:
+        assert saved.status == JobStatus.RENDERING.value
+        with pytest.raises(ValueError, match="cannot be deleted"):
+            batches.delete_job_audio_asset(audio_id)
+        assert tts.claim(job_id) is None
+        assert renders.update_progress(attempt_id, "completed", 100)
+    else:
+        assert saved.status == JobStatus.READY_TO_RENDER.value
+    assert renders.get_attempt(attempt_id).effective_values == attempt.effective_values
+    assert batches.delete_job_audio_asset(audio_id) is not None

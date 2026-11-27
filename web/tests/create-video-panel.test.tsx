@@ -363,6 +363,30 @@ describe("CreateVideoPanel", () => {
     expect(attachedModel).toBe("eleven_v3");
   });
 
+  it("generates replacement audio during a render and locks audio deletion", async () => {
+    const audio = mediaAsset("audio-1", "audio", "original.mp3");
+    const currentJob = { ...job(), status: "rendering", audio_asset: audio, audio_assets: [audio] };
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method) requests.push(`${init.method} ${url}`);
+      if (url.includes("/topics/topic-1")) return json({ ...topic(), contents: [currentJob] });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile] });
+      if (url.includes("/elevenlabs/voices")) return json({ items: [{ voice_id: "hope", name: "Hope" }] });
+      if (url.includes("/generate-tts")) return json({ ...currentJob, status: "generating_tts" });
+      if (url.includes("/elevenlabs-voice") || url.includes("/script")) return json(currentJob);
+      return json({ items: [] });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const generate = await screen.findByRole("button", { name: "Generate Audio" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Delete original.mp3" })).toBeDisabled();
+    fireEvent.click(generate);
+    await waitFor(() => expect(requests.some((request) => request.endsWith("/generate-tts"))).toBe(true));
+    expect(requests.some((request) => request.startsWith("PUT") && request.includes("/on-demand-videos"))).toBe(false);
+  });
+
   it.each([false, true])("notifies asynchronous audio failures and repeated retries (existing failure: %s)", async (initialFailure) => {
     const message = "ElevenLabs speech generation failed (403). Try MP3 128kbps.";
     const existingAudio = mediaAsset("old-audio", "audio", "previous.mp3");

@@ -377,6 +377,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const latestAttemptId = latestAttempt?.id;
   const latestAttemptStatus = latestAttempt?.status;
   const active = currentJob ? ACTIVE_STATUSES.has(currentJob.status) : false;
+  const renderActive = currentJob != null && (
+    CANCELABLE_RENDER_STATUSES.has(currentJob.status)
+    || jobAttempts.some((attempt) => CANCELABLE_RENDER_STATUSES.has(attempt.status))
+  );
+  const audioGenerationLocked = currentJob != null && (
+    currentJob.status === "generating_content" || currentJob.status === "generating_tts"
+    || currentJob.status === "fitting_duration"
+  );
   const selectedWorkflow = workflowTemplates.find((workflow) => workflow.id === workflowTemplateId);
   const imageReferences = optionalImageReferences(selectedWorkflow);
   const imageSize = minimaxImageSize(selectedWorkflow);
@@ -656,7 +664,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
   const generateAudio = useMutation({
     mutationFn: async () => {
-      const job = await ensureSaved();
+      const job = renderActive && currentJob ? currentJob : await ensureSaved();
       if (!script.trim()) throw new Error("Enter an audio script first.");
       const selectedVoice = voices.find((voice) => voice.voice_id === voiceId);
       if (!selectedVoice) throw new Error("Pick an ElevenLabs voice first.");
@@ -995,6 +1003,9 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       }
       applyAudioDuration(generatedAudio);
       setToast({ message: "Audio generated.", variant: "success" });
+    } else if (currentJob.status !== "generating_tts" && currentJob.error_message) {
+      awaitingAudioToastRef.current = false;
+      setToast({ message: currentJob.error_message, variant: "danger" });
     }
   }, [applyAudioDuration, currentJob]);
 
@@ -1042,13 +1053,13 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             <label className="field-label">Audio Script<textarea rows={10} value={script} onInput={(event) => { scriptDirtyRef.current = true; setScript(event.currentTarget.value); }} onChange={(event) => { scriptDirtyRef.current = true; setScript(event.target.value); }} placeholder="Paste the exact words the avatar should speak." /></label>
             <div className="create-video-actions">
               <button className="button button-secondary button-with-spinner" type="button" disabled={scriptGenerating || !title.trim() || !renderProfileId || active} onClick={() => generateScript.mutate()}>{scriptGenerating && <span className="inline-spinner" aria-hidden="true" />}{scriptGenerating ? "LLM generating audio script…" : "Generate script with AI"}</button>
-              <button className="button button-primary button-with-spinner" type="button" disabled={generateAudio.isPending || !script.trim() || !voiceId || active} onClick={() => generateAudio.mutate()}>{generateAudio.isPending && <span className="inline-spinner" aria-hidden="true" />}{generateAudio.isPending ? "Generating audio…" : "Generate Audio"}</button>
+              <button className="button button-primary button-with-spinner" type="button" disabled={generateAudio.isPending || !script.trim() || !voiceId || audioGenerationLocked} onClick={() => generateAudio.mutate()}>{generateAudio.isPending && <span className="inline-spinner" aria-hidden="true" />}{generateAudio.isPending ? "Generating audio…" : "Generate Audio"}</button>
             </div>{scriptGenerating && <p className="create-video-inline-status" role="status">LLM is writing the audio script. This can take a few seconds.</p>}</div>}
         </section>
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Generated audio</h3><p>Select the audio used for the next render.</p></div></div>
-          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><MetadataButton filename={asset.filename} onClick={(event) => showGenerationMetadata(event.currentTarget, "Audio metadata", { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata })} /><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
+          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><MetadataButton filename={asset.filename} onClick={(event) => showGenerationMetadata(event.currentTarget, "Audio metadata", { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata })} /><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title={renderActive ? "Audio cannot be deleted during a video render" : "Delete audio"} disabled={deleteAsset.isPending || active || renderActive || generateAudio.isPending || generateVideo.isPending} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
         </section>
 
         <section className="panel create-video-card create-video-ltx">
@@ -1151,7 +1162,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       {currentJob?.status === "failed" && <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
       {error && <p className="form-error" role="alert">{error.message}</p>}
       {renderPreflightError && <p className="form-error" role="alert">{renderPreflightError}</p>}
-      {active && <p className="field-hint">This created video is active. Editing is locked until the current generation step finishes.</p>}
+      {active && <p className="field-hint">Some controls are locked while generation is active.</p>}
       {toast && <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} />}
       {generationMetadata && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeGenerationMetadata(); }}>
         <section className="render-params-dialog generation-metadata-dialog" role="dialog" aria-modal="true" aria-labelledby="generation-metadata-title" onKeyDown={(event) => { if (event.key === "Escape") closeGenerationMetadata(); }}>
