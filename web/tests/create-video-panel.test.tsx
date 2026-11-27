@@ -697,6 +697,15 @@ describe("CreateVideoPanel", () => {
     const image = mediaAsset("image-1", "source_image", "source.png");
     const video = mediaAsset("video-1", "video", "done.mp4");
     const completed = renderAttempt(video, { effective_values: { seed: 42 } });
+    const running = renderAttempt(video, {
+      id: "running",
+      status: "rendering",
+      progress: 28,
+      output_filename: null,
+      completed_at: null,
+      assets: [],
+      effective_values: { requested_inputs: { values: { topic: "Elena’s original title" } } },
+    });
     const waiting = renderAttempt(video, { id: "waiting", status: "queued", assets: [], output_filename: null });
     const submissions: unknown[] = [];
     let removed = false;
@@ -717,7 +726,7 @@ describe("CreateVideoPanel", () => {
         removed = true;
         return json({ ...waiting, status: "cancelled" });
       }
-      if (url.includes("/render-attempts")) return json({ items: removed ? [completed] : [waiting, completed] });
+      if (url.includes("/render-attempts")) return json({ items: removed ? [running, completed] : [waiting, running, completed] });
       if (url.includes("/render-nodes")) return json({ items: [{ id: "node-1", is_active: true, health_status: "healthy" }] });
       if (url.includes("/render-profiles")) return json({ items: [renderProfile] });
       return json({ items: [] });
@@ -725,13 +734,23 @@ describe("CreateVideoPanel", () => {
 
     render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
     const audioMetadata = await screen.findByRole("button", { name: "Show metadata for recording.mp3" });
+    expect(audioMetadata).toHaveAttribute("aria-haspopup", "dialog");
+    expect(audioMetadata.querySelector("svg")).toBeInTheDocument();
+    expect(audioMetadata.textContent).toBe("");
     fireEvent.click(audioMetadata);
-    expect(screen.getByRole("dialog", { name: "Audio metadata" })).toHaveTextContent("Captured voice");
-    fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
-    fireEvent.click(screen.getByRole("button", { name: "Show metadata for done.mp4" }));
+    const audioDialog = screen.getByRole("dialog", { name: "Audio metadata" });
+    expect(within(audioDialog).getByLabelText("Metadata JSON")).toHaveTextContent("Captured voice");
+    fireEvent.keyDown(screen.getByRole("button", { name: "Close metadata" }), { key: "Escape" });
+    expect(audioDialog).not.toBeInTheDocument();
+    expect(audioMetadata).toHaveFocus();
+
+    const videoMetadata = screen.getByRole("button", { name: "Show metadata for done.mp4" });
+    expect(videoMetadata.querySelector("svg")).toBeInTheDocument();
+    fireEvent.click(videoMetadata);
     expect(screen.getByRole("dialog", { name: "Video metadata" })).toHaveTextContent('"seed": 42');
     fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
 
+    expect(screen.getByText("rendering · 28%").closest(".create-video-progress")).toHaveTextContent("Elena’s original title");
     const generate = screen.getByRole("button", { name: "Generate Video" });
     const prompt = screen.getByLabelText("Video prompt");
     fireEvent.change(prompt, { target: { value: "First prompt" } });

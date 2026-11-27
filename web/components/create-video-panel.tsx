@@ -75,6 +75,12 @@ function renderProgress(attempt?: RenderAttempt): string {
   return `${attempt.status.replaceAll("_", " ")} · ${attempt.progress}%`;
 }
 
+function renderTitle(attempt: RenderAttempt, fallback: string): string {
+  const requested = attempt.effective_values.requested_inputs;
+  const values = isRecord(requested) && isRecord(requested.values) ? requested.values : attempt.effective_values;
+  return typeof values.topic === "string" && values.topic.trim() ? values.topic : fallback;
+}
+
 function formatElapsedTime(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
   const seconds = totalSeconds % 60;
@@ -252,6 +258,20 @@ function AudioGenerationCaption({ asset, voices }: { asset: MediaAsset; voices: 
   return <small className="create-video-audio-caption" title={details.subtitle}><span className="create-video-audio-voice">{details.voice}</span>{details.api && <span className="create-video-audio-api">{details.api}</span>}</small>;
 }
 
+function MetadataButton({ filename, onClick }: {
+  filename: string;
+  onClick: React.MouseEventHandler<HTMLButtonElement>;
+}) {
+  return (
+    <button className="job-media-icon" type="button" aria-label={`Show metadata for ${filename}`} aria-haspopup="dialog" title="Show metadata" onClick={onClick}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v5m0-8h.01" />
+      </svg>
+    </button>
+  );
+}
+
 export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null; onSaved?: (topicId: string) => void }) {
   const queryClient = useQueryClient();
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(topicId ?? null);
@@ -296,6 +316,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const manualAudioSelectionRef = useRef<string | null>(null);
   const lastAppliedAudioDurationAssetIdRef = useRef<string | null>(null);
   const videoPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const metadataTriggerRef = useRef<HTMLButtonElement | null>(null);
   // An edited prompt belongs to this editor until the user opens another video.
   const editedPromptTopicRef = useRef<string | null | undefined>(undefined);
 
@@ -910,6 +931,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const selectedVoice = voices.find((voice) => voice.voice_id === voiceId);
   const scriptGenerating = generateScript.isPending || currentJob?.status === "generating_content";
 
+  function showGenerationMetadata(trigger: HTMLButtonElement, title: string, values: Record<string, unknown>) {
+    metadataTriggerRef.current = trigger;
+    setGenerationMetadata({ title, values });
+  }
+
+  function closeGenerationMetadata() {
+    setGenerationMetadata(null);
+    metadataTriggerRef.current?.focus();
+  }
+
   function insertVideoPromptVariable(token: string) {
     const textarea = videoPromptRef.current;
     if (!textarea) {
@@ -1017,7 +1048,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Generated audio</h3><p>Select the audio used for the next render.</p></div></div>
-          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><button className="button button-secondary button-small" type="button" aria-label={`Show metadata for ${asset.filename}`} onClick={() => setGenerationMetadata({ title: "Audio metadata", values: { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata } })}>Metadata</button><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
+          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><MetadataButton filename={asset.filename} onClick={(event) => showGenerationMetadata(event.currentTarget, "Audio metadata", { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata })} /><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
         </section>
 
         <section className="panel create-video-card create-video-ltx">
@@ -1073,7 +1104,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             <button className="button button-secondary rendered-settings-action" type="button" disabled={!currentRenderedControls.length} onClick={() => setRenderedLtxParams(currentRenderedControls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg>Rendered LTX params</button>
           </div>
           {(!currentJob?.source_image_asset || !currentJob?.audio_asset) && <p className="field-hint">Source image and audio are required before rendering video.</p>}
-          {latestAttempt && <div className="create-video-progress"><span>{renderProgress(latestAttempt)} <RenderElapsed attempt={latestAttempt} nowMs={renderNowMs} /></span><progress max={100} value={latestAttempt.progress > 1 ? latestAttempt.progress : undefined} />{latestAttempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <button className="job-media-icon danger" type="button" aria-label="Cancel rendering" title="Cancel rendering" disabled={cancelRender.isPending} onClick={() => cancelRender.mutate(latestAttempt.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}</div>}
+          {latestAttempt && <div className="create-video-progress">{CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <strong>{renderTitle(latestAttempt, topic.data?.name ?? title)}</strong>}<span>{renderProgress(latestAttempt)} <RenderElapsed attempt={latestAttempt} nowMs={renderNowMs} /></span><progress max={100} value={latestAttempt.progress > 1 ? latestAttempt.progress : undefined} />{latestAttempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <button className="job-media-icon danger" type="button" aria-label="Cancel rendering" title="Cancel rendering" disabled={cancelRender.isPending} onClick={() => cancelRender.mutate(latestAttempt.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}</div>}
         </section>
 
         <section className="panel create-video-card">
@@ -1091,8 +1122,8 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             >Delete all failed renders</button>}
           </div>
           {deleteFailedRenders.isError && <p className="form-error" role="alert">Could not delete failed renders. Please try again.</p>}
-          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? `${attempt.provider} render`}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button>
-            <button className="button button-secondary button-small" type="button" aria-label={`Show metadata for ${attempt.output_filename ?? attempt.id}`} onClick={() => setGenerationMetadata({ title: "Video metadata", values: {
+          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? renderTitle(attempt, topic.data?.name || title || `${attempt.provider} render`)}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button>
+            <MetadataButton filename={attempt.output_filename ?? attempt.id} onClick={(event) => showGenerationMetadata(event.currentTarget, "Video metadata", {
               provider: attempt.provider,
               render_profile_id: attempt.render_profile_id,
               render_node_id: attempt.render_node_id,
@@ -1100,7 +1131,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
               external_job_id: attempt.external_job_id,
               queued_at: attempt.created_at,
               ...attempt.effective_values,
-            } })}>Metadata</button>
+            })} />
             {attempt.status === "queued" && <button
               className="button button-danger button-small"
               type="button"
@@ -1122,13 +1153,13 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       {renderPreflightError && <p className="form-error" role="alert">{renderPreflightError}</p>}
       {active && <p className="field-hint">This created video is active. Editing is locked until the current generation step finishes.</p>}
       {toast && <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} />}
-      {generationMetadata && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setGenerationMetadata(null); }}>
-        <section className="render-params-dialog" role="dialog" aria-modal="true" aria-labelledby="generation-metadata-title" onKeyDown={(event) => { if (event.key === "Escape") setGenerationMetadata(null); }}>
+      {generationMetadata && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeGenerationMetadata(); }}>
+        <section className="render-params-dialog generation-metadata-dialog" role="dialog" aria-modal="true" aria-labelledby="generation-metadata-title" onKeyDown={(event) => { if (event.key === "Escape") closeGenerationMetadata(); }}>
           <div className="render-params-heading">
             <h2 id="generation-metadata-title">{generationMetadata.title}</h2>
-            <button autoFocus className="toast-close" type="button" aria-label="Close metadata" onClick={() => setGenerationMetadata(null)}>×</button>
+            <button autoFocus className="toast-close" type="button" aria-label="Close metadata" onClick={closeGenerationMetadata}>×</button>
           </div>
-          <div className="render-params-list"><article className="render-param"><pre>{JSON.stringify(generationMetadata.values, null, 2)}</pre></article></div>
+          <pre className="generation-metadata-content" tabIndex={0} aria-label="Metadata JSON">{JSON.stringify(generationMetadata.values, null, 2)}</pre>
         </section>
       </div>}
       <RenderedLtxParamsDialog controls={renderedLtxParams} onClose={() => setRenderedLtxParams(null)} />
