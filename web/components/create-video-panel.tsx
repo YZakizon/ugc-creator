@@ -121,10 +121,14 @@ function voiceLabel(voice: ElevenLabsVoice): string {
   return [voice.name, voice.category].filter(Boolean).join(" · ");
 }
 
-function durationFromAudioAsset(asset: MediaAsset | null | undefined): string | null {
+function audioDurationSeconds(asset: MediaAsset | null | undefined): number | null {
   const seconds = asset?.generation_metadata?.duration_seconds;
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
-  return String(Math.max(1, Math.min(180, Math.ceil(seconds + 1))));
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function durationFromAudioAsset(asset: MediaAsset | null | undefined): string | null {
+  const seconds = audioDurationSeconds(asset);
+  return seconds === null ? null : String(Math.max(1, Math.min(180, Math.ceil(seconds + 1))));
 }
 
 function activeAudioAsset(job: Job | null | undefined): MediaAsset | null {
@@ -253,9 +257,32 @@ function controlValue(workflow: WorkflowTemplate, label: string, job: Job | null
   return previewLtxRenderControls(workflow, fallbackJob).find((control) => control.label === label)?.value;
 }
 
-function AudioGenerationCaption({ asset, voices }: { asset: MediaAsset; voices: ElevenLabsVoice[] }) {
+function GeneratedAudioPlayer({ asset, voices }: { asset: MediaAsset; voices: ElevenLabsVoice[] }) {
   const details = audioGenerationDetails(asset, voices);
-  return <small className="create-video-audio-caption" title={details.subtitle}><span className="create-video-audio-voice">{details.voice}</span>{details.api && <span className="create-video-audio-api">{details.api}</span>}</small>;
+  const savedDuration = audioDurationSeconds(asset);
+  const [loadedDuration, setLoadedDuration] = useState<number | null>(null);
+  const seconds = savedDuration ?? loadedDuration;
+  const duration = seconds === null ? null : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(seconds)} s`;
+
+  return <>
+    <div className="create-video-media-title"><div>
+      <strong>{asset.filename}</strong>
+      <small className="create-video-audio-caption" title={details.subtitle}>
+        {duration && <span className="create-video-audio-duration" aria-label={`Audio length ${duration}`}>{duration}</span>}
+        <span className="create-video-audio-voice">{details.voice}</span>
+        {details.api && <span className="create-video-audio-api">{details.api}</span>}
+      </small>
+    </div></div>
+    <audio
+      controls
+      preload={savedDuration === null ? "metadata" : "none"}
+      src={`${asset.download_url}?inline=true`}
+      onLoadedMetadata={(event) => {
+        const duration = event.currentTarget.duration;
+        if (Number.isFinite(duration) && duration > 0) setLoadedDuration(duration);
+      }}
+    >Your browser does not support audio playback.</audio>
+  </>;
 }
 
 function MetadataButton({ filename, onClick }: {
@@ -1059,7 +1086,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Generated audio</h3><p>Select the audio used for the next render.</p></div></div>
-          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><MetadataButton filename={asset.filename} onClick={(event) => showGenerationMetadata(event.currentTarget, "Audio metadata", { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata })} /><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title={renderActive ? "Audio cannot be deleted during a video render" : "Delete audio"} disabled={deleteAsset.isPending || active || renderActive || generateAudio.isPending || generateVideo.isPending} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
+          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><GeneratedAudioPlayer asset={asset} voices={voices} /><MetadataButton filename={asset.filename} onClick={(event) => showGenerationMetadata(event.currentTarget, "Audio metadata", { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata })} /><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title={renderActive ? "Audio cannot be deleted during a video render" : "Delete audio"} disabled={deleteAsset.isPending || active || renderActive || generateAudio.isPending || generateVideo.isPending} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
         </section>
 
         <section className="panel create-video-card create-video-ltx">

@@ -382,6 +382,11 @@ describe("CreateVideoPanel", () => {
     const generate = await screen.findByRole("button", { name: "Generate Audio" });
     await waitFor(() => expect(generate).toBeEnabled());
     expect(screen.getByRole("button", { name: "Delete original.mp3" })).toBeDisabled();
+    const player = screen.getByText("Your browser does not support audio playback.");
+    expect(player).toHaveAttribute("preload", "metadata");
+    Object.defineProperty(player, "duration", { value: 8.2 });
+    fireEvent.loadedMetadata(player);
+    expect(screen.getByLabelText("Audio length 8.2 s")).toBeVisible();
     fireEvent.click(generate);
     await waitFor(() => expect(requests.some((request) => request.endsWith("/generate-tts"))).toBe(true));
     expect(requests.some((request) => request.startsWith("PUT") && request.includes("/on-demand-videos"))).toBe(false);
@@ -717,7 +722,7 @@ describe("CreateVideoPanel", () => {
   });
 
   it("queues each click with its own inputs and shows saved history metadata", async () => {
-    const audio = { ...mediaAsset("audio-1", "audio", "recording.mp3"), generation_metadata: { voice_name: "Captured voice" } };
+    const audio = { ...mediaAsset("audio-1", "audio", "recording.mp3"), generation_metadata: { voice_name: "Captured voice", duration_seconds: 12.24 } };
     const image = mediaAsset("image-1", "source_image", "source.png");
     const video = mediaAsset("video-1", "video", "done.mp4");
     const completed = renderAttempt(video, { effective_values: { seed: 42 } });
@@ -758,6 +763,7 @@ describe("CreateVideoPanel", () => {
 
     render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
     const audioMetadata = await screen.findByRole("button", { name: "Show metadata for recording.mp3" });
+    expect(screen.getByLabelText("Audio length 12.2 s")).toBeVisible();
     expect(audioMetadata).toHaveAttribute("aria-haspopup", "dialog");
     expect(audioMetadata.querySelector("svg")).toBeInTheDocument();
     expect(audioMetadata.textContent).toBe("");

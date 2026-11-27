@@ -661,6 +661,7 @@ h1 span { color: #f1ab4e; font-size: .7em; vertical-align: top; }
 .create-video-audio strong, .create-video-audio small, .create-video-render strong, .create-video-render small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .create-video-audio strong { font-size: 12px; line-height: 1.15; }
 .create-video-audio small.create-video-audio-caption { display: flex; gap: 5px; min-width: 0; }
+.create-video-audio-duration { flex: 0 0 auto; color: #57586a; font-variant-numeric: tabular-nums; }
 .create-video-audio-voice { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .create-video-audio-api { flex: 0 0 auto; color: #6751b7; }
 .create-video-audio small { font-size: 10px; line-height: 1.1; }
