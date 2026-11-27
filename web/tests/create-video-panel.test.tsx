@@ -189,6 +189,48 @@ describe("CreateVideoPanel", () => {
     expect(screen.queryByText("Pick audio file")).not.toBeInTheDocument();
   });
 
+  it("keeps an in-progress prompt and its caret when an older autosave returns", async () => {
+    let savedPrompt = "Elena speaks";
+    let completeFirstSave: (() => void) | undefined;
+    let serverReads = 0;
+    const writes: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/on-demand-videos/topic-1") || url.endsWith("/topics/topic-1")) {
+        if (init?.method === "PUT") {
+          const nextPrompt: string = JSON.parse(String(init.body)).render_overrides.video_prompt;
+          writes.push(nextPrompt);
+          if (writes.length === 1) {
+            await new Promise<void>((resolve) => { completeFirstSave = resolve; });
+          }
+          savedPrompt = nextPrompt;
+        } else {
+          serverReads += 1;
+        }
+        return json(topic({ video_prompt: savedPrompt }));
+      }
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      return json({ items: [], total: 0 });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const prompt = await screen.findByDisplayValue<HTMLTextAreaElement>("Elena speaks");
+    fireEvent.change(prompt, { target: { value: "Elena speaks softly" } });
+    await waitFor(() => expect(completeFirstSave).toBeDefined(), { timeout: 2000 });
+
+    prompt.focus();
+    fireEvent.change(prompt, { target: { value: "Elena now speaks softly " } });
+    prompt.setSelectionRange(9, 9);
+    const readsBeforeSave = serverReads;
+    completeFirstSave?.();
+
+    await waitFor(() => expect(serverReads).toBeGreaterThan(readsBeforeSave));
+    expect(prompt).toHaveValue("Elena now speaks softly ");
+    expect(prompt.selectionStart).toBe(9);
+    expect(prompt.selectionEnd).toBe(9);
+    await waitFor(() => expect(writes).toEqual(["Elena speaks softly", "Elena now speaks softly"]), { timeout: 2000 });
+  });
+
   it("inserts the SCRIPT variable into the video prompt", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);

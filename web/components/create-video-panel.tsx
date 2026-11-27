@@ -296,6 +296,13 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const manualAudioSelectionRef = useRef<string | null>(null);
   const lastAppliedAudioDurationAssetIdRef = useRef<string | null>(null);
   const videoPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  // An edited prompt belongs to this editor until the user opens another video.
+  const editedPromptTopicRef = useRef<string | null | undefined>(undefined);
+
+  const editVideoPrompt = useCallback((value: string) => {
+    editedPromptTopicRef.current = currentTopicId;
+    setVideoPrompt(value);
+  }, [currentTopicId]);
 
   useEffect(() => setCurrentTopicId(topicId ?? null), [topicId]);
 
@@ -388,7 +395,10 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       syncedScriptRef.current = job?.speech_script ?? null;
       scriptDirtyRef.current = false;
     }
-    setVideoPrompt(String(job?.render_overrides?.video_prompt ?? ""));
+    if (editedPromptTopicRef.current !== topic.data.id) {
+      editedPromptTopicRef.current = undefined;
+      setVideoPrompt(String(job?.render_overrides?.video_prompt ?? ""));
+    }
     setFps(String(job?.render_overrides?.fps ?? 24));
     setSeed(job?.render_overrides?.seed === undefined ? "" : String(job.render_overrides.seed));
     setWorkflowControls(isRecord(job?.render_overrides?.workflow_controls) ? job.render_overrides.workflow_controls as Record<string, boolean | number | string> : {});
@@ -559,11 +569,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     const workflowFps = controlValue(workflow, "FPS", currentJob);
     const workflowDuration = controlValue(workflow, "Duration", currentJob);
     const workflowSeed = controlValue(workflow, "Seed", currentJob);
-    if ((force || !videoPrompt.trim()) && typeof prompt === "string") setVideoPrompt(prompt);
+    if (typeof prompt === "string") {
+      if (force) editVideoPrompt(prompt);
+      else if (editedPromptTopicRef.current !== currentTopicId && !videoPrompt.trim()) setVideoPrompt(prompt);
+    }
     if ((force || !fps.trim()) && typeof workflowFps === "number") setFps(String(workflowFps));
     if ((force || !duration.trim()) && typeof workflowDuration === "number") setDuration(String(workflowDuration));
     if ((force || !seed.trim()) && typeof workflowSeed === "number") setSeed(String(workflowSeed));
-  }, [currentJob, duration, fps, seed, videoPrompt]);
+  }, [currentJob, currentTopicId, duration, editVideoPrompt, fps, seed, videoPrompt]);
 
   useEffect(() => {
     if (selectedWorkflow && !currentJob?.render_overrides) applyWorkflowBase(selectedWorkflow);
@@ -575,11 +588,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       return currentTopicId ? updateOnDemandVideo(currentTopicId, input) : createOnDemandVideo(input);
     },
     onSuccess: (saved) => {
+      if (currentTopicId === null && editedPromptTopicRef.current === null) {
+        editedPromptTopicRef.current = saved.id;
+      }
       setCurrentTopicId(saved.id);
       onSaved?.(saved.id);
       invalidate();
     },
   });
+
+  const { mutate: saveDraft, isPending: savingDraft } = saveMutation;
 
   async function ensureSaved(): Promise<Job> {
     const saved = await saveMutation.mutateAsync();
@@ -856,7 +874,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   });
 
   useEffect(() => {
-    if (active || !title.trim() || !renderProfileId || generateScript.isPending || generateAudio.isPending || generateVideo.isPending || uploadAudio.isPending || uploadSourceImage.isPending || importWorkflow.isPending) return;
+    if (active || savingDraft || !title.trim() || !renderProfileId || generateScript.isPending || generateAudio.isPending || generateVideo.isPending || uploadAudio.isPending || uploadSourceImage.isPending || importWorkflow.isPending) return;
     const input = saveInput();
     const saveKey = JSON.stringify({ topicId: currentTopicId, input });
     if (saveKey === lastAutosaveKeyRef.current) return;
@@ -864,7 +882,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     const timeout = window.setTimeout(() => {
       lastAutosaveKeyRef.current = saveKey;
       setAutosaveState("saving");
-      saveMutation.mutate(undefined, {
+      saveDraft(undefined, {
         onSuccess: () => setAutosaveState("saved"),
         onError: () => {
           lastAutosaveKeyRef.current = "";
@@ -881,8 +899,9 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     generateVideo.isPending,
     importWorkflow.isPending,
     renderProfileId,
+    saveDraft,
     saveInput,
-    saveMutation,
+    savingDraft,
     title,
     uploadAudio.isPending,
     uploadSourceImage.isPending,
@@ -894,13 +913,13 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   function insertVideoPromptVariable(token: string) {
     const textarea = videoPromptRef.current;
     if (!textarea) {
-      setVideoPrompt((current) => `${current}${token}`);
+      editVideoPrompt(`${videoPrompt}${token}`);
       return;
     }
     const start = textarea.selectionStart ?? videoPrompt.length;
     const end = textarea.selectionEnd ?? start;
     const nextValue = `${videoPrompt.slice(0, start)}${token}${videoPrompt.slice(end)}`;
-    setVideoPrompt(nextValue);
+    editVideoPrompt(nextValue);
     window.requestAnimationFrame(() => {
       textarea.focus();
       const cursor = start + token.length;
@@ -1036,7 +1055,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             </div>
             <label className="field-label">Audio source<select value={selectedAudioAssetId} disabled={!currentJob?.audio_assets?.length || selectAudio.isPending} onChange={(event) => handleAudioSourceChange(event.target.value)}><option value="">No generated audio selected</option>{currentJob?.audio_assets?.map((asset) => <option key={asset.id} value={asset.id}>{asset.filename}{asset.kind === "audio" ? " · active" : ""}</option>)}</select></label>
           </div>
-          <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
+          <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => editVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
           <div className="prompt-template-vars create-video-vars"><small>Supported variable</small><button className="prompt-var" type="button" onClick={() => insertVideoPromptVariable("{{SCRIPT}}")}>{"{{SCRIPT}}"}</button><small>Expands to Audio Script when rendering.</small></div>
           <div className="ltx-control-row">
             {imageSize && <>
