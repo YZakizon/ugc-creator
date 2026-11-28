@@ -108,6 +108,8 @@ class OnDemandRenderOverrides(BaseModel):
     )
     video_prompt: str | None = Field(default=None, max_length=20_000)
     fps: int | None = Field(default=None, ge=1, le=120)
+    width: int | None = Field(default=None, gt=0)
+    height: int | None = Field(default=None, gt=0)
     duration: int | None = Field(default=None, ge=1, le=180)
     seed: int | None = Field(default=None, ge=0)
     create_video: dict[str, object] = Field(default_factory=dict)

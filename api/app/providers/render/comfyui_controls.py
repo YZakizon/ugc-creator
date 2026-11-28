@@ -25,8 +25,8 @@ def rendered_ltx_controls(workflow: dict[str, object]) -> list[dict[str, object]
         ("FPS", _numeric_field(fields, r"^frame rate$", "fps")),
         ("Duration", _numeric_field(fields, "duration", "duration")),
         ("Seed", _primary_seed_field(workflow, fields)),
-        ("Width", _numeric_field(fields, r"^width$", "width")),
-        ("Height", _numeric_field(fields, r"^height$", "height")),
+        ("Width", _dimension_field(fields, "width")),
+        ("Height", _dimension_field(fields, "height")),
     ]
     for field in fields:
         if field.class_type == "ResolutionSelector":
@@ -117,6 +117,8 @@ def inferred_ltx_bindings(
             _numeric_field(fields, "duration", "duration"),
         ),
         ("seed", "integer", "Seed", _primary_seed_field(workflow, fields)),
+        ("width", "integer", "Width", _dimension_field(fields, "width")),
+        ("height", "integer", "Height", _dimension_field(fields, "height")),
     ]
     inferred: list[dict[str, object]] = []
     for semantic_key, value_type, _label, field in controls:
@@ -203,6 +205,13 @@ def _prompt_field(fields: list[WorkflowField]) -> WorkflowField | None:
         ),
         None,
     )
+
+
+def _dimension_field(fields: list[WorkflowField], name: str) -> WorkflowField | None:
+    candidates = [
+        field for field in fields if type(field.value) is int and field.value > 0
+    ]
+    return _numeric_field(candidates, rf"^\s*{name}\s*$", name)
 
 
 def _numeric_field(

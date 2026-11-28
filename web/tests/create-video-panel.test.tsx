@@ -587,18 +587,20 @@ describe("CreateVideoPanel", () => {
 
   it("adds uploaded audio to Audio source and selects it", async () => {
     const uploadedAudio = { ...mediaAsset("audio-uploaded", "audio", "created-video_content1_0001-audio.mp3"), generation_metadata: { source: "upload", duration_seconds: 12.2 } };
+    const oldSpeech = { ...mediaAsset("old-speech", "audio", "old-speech.mp3"), generation_metadata: { source: "tts", duration_seconds: 4 } };
+    const archivedSpeech = { ...oldSpeech, kind: "audio_archive" };
     const requests: Array<{ url: string; method?: string; body?: string }> = [];
     let uploaded = false;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       requests.push({ url, method: init?.method, body: init?.body ? String(init.body) : undefined });
-      if (url.includes("/topics/topic-1")) return json({ ...topic({ video_prompt: "Saved prompt" }), contents: [{ ...job({ video_prompt: "Saved prompt" }), audio_asset: uploaded ? uploadedAudio : null, audio_assets: uploaded ? [uploadedAudio] : [] }] });
-      if (url.includes("/on-demand-videos/topic-1")) return json({ ...topic({ video_prompt: "Saved prompt" }), contents: [{ ...job({ video_prompt: "Saved prompt" }), audio_asset: uploaded ? uploadedAudio : null, audio_assets: uploaded ? [uploadedAudio] : [] }] });
+      if (url.includes("/topics/topic-1")) return json({ ...topic({ video_prompt: "Saved prompt" }), contents: [{ ...job({ video_prompt: "Saved prompt" }), audio_asset: uploaded ? uploadedAudio : oldSpeech, audio_assets: uploaded ? [archivedSpeech, uploadedAudio] : [oldSpeech] }] });
+      if (url.includes("/on-demand-videos/topic-1")) return json({ ...topic({ video_prompt: "Saved prompt" }), contents: [{ ...job({ video_prompt: "Saved prompt" }), audio_asset: uploaded ? uploadedAudio : oldSpeech, audio_assets: uploaded ? [archivedSpeech, uploadedAudio] : [oldSpeech] }] });
       if (url.includes("/jobs/job-1/audio") && init?.method === "POST") {
         uploaded = true;
-        return json({ ...job(), audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
+        return json({ ...job(), audio_asset: uploadedAudio, audio_assets: [archivedSpeech, uploadedAudio] });
       }
-      if (url.includes("/jobs/job-1/render-overrides") && init?.method === "PATCH") return json({ ...job({ duration: 14 }), audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
+      if (url.includes("/jobs/job-1/render-overrides") && init?.method === "PATCH") return json({ ...job({ duration: 14 }), audio_asset: uploadedAudio, audio_assets: [archivedSpeech, uploadedAudio] });
       if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
       if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [{ voice_id: "voice-hope", name: "Hope", category: "saved", description: null, preview_url: null }], total: 1 });
       if (url.includes("/tts-providers/elevenlabs/usage")) return json({ provider: "elevenlabs", configured: true, used_units: 10, limit_units: 100, remaining_units: 90, resets_at_unix: null, unit: "characters" });
@@ -609,6 +611,7 @@ describe("CreateVideoPanel", () => {
 
     render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
 
+    await waitFor(() => expect(screen.getByLabelText("Audio source")).toHaveValue("old-speech"));
     const audioInput = await screen.findByLabelText("Audio file", { selector: "input" });
     fireEvent.change(audioInput, { target: { files: [new File(["audio"], "manual.mp3", { type: "audio/mpeg" })] } });
 
@@ -624,6 +627,13 @@ describe("CreateVideoPanel", () => {
     const uploadedImage = { ...mediaAsset("image-new", "source_image", "created-video_0001.png"), generation_metadata: { source: "upload", original_filename: "new-source.png" } };
     const originalAudio = { ...mediaAsset("audio-old", "audio", "old-audio.mp3"), generation_metadata: { source: "upload", duration_seconds: 8 } };
     const uploadedAudio = { ...mediaAsset("audio-new", "audio", "created-video_0001.mp3"), generation_metadata: { source: "upload", duration_seconds: 11, original_filename: "new-audio.mp3" } };
+    const workflow = workflowTemplate();
+    const sizedWorkflow = { ...workflow, workflow_json: {
+      ...workflow.workflow_json,
+      width: { class_type: "PrimitiveInt", _meta: { title: "Width" }, inputs: { value: 768 } },
+      height: { class_type: "PrimitiveInt", _meta: { title: "Height" }, inputs: { value: 512 } },
+    } };
+    const savedOverrides: Record<string, unknown>[] = [];
     let imageUploaded = false;
     let audioUploaded = false;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -641,8 +651,12 @@ describe("CreateVideoPanel", () => {
         audioUploaded = true;
         return json({ ...currentJob, audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
       }
-      if (url.includes("/jobs/job-1/render-overrides") && init?.method === "PATCH") return json({ ...currentJob, audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
-      if (url.includes("/workflow-templates")) return json({ items: [workflowTemplate()], total: 1 });
+      if (url.includes("/jobs/job-1/render-overrides") && init?.method === "PATCH") {
+        const overrides = JSON.parse(String(init.body));
+        savedOverrides.push(overrides);
+        return json({ ...currentJob, render_overrides: overrides, audio_asset: uploadedAudio, audio_assets: [uploadedAudio] });
+      }
+      if (url.includes("/workflow-templates")) return json({ items: [sizedWorkflow], total: 1 });
       if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
       if (url.includes("/tts-providers/elevenlabs/voices")) return json({ items: [{ voice_id: "voice-hope", name: "Hope", category: "saved", description: null, preview_url: null }], total: 1 });
       if (url.includes("/tts-providers/elevenlabs/usage")) return json({ provider: "elevenlabs", configured: true, used_units: 10, limit_units: 100, remaining_units: 90, resets_at_unix: null, unit: "characters" });
@@ -661,6 +675,13 @@ describe("CreateVideoPanel", () => {
 
     await waitFor(() => expect(screen.getByText("Override audio: new-audio.mp3")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByLabelText("Audio source")).toHaveValue("audio-new"));
+    await waitFor(() => expect(savedOverrides).toContainEqual(expect.objectContaining({ duration: 12 })));
+    const resolution = await screen.findByLabelText("Resolution preset");
+    fireEvent.change(resolution, { target: { value: "512x288" } });
+    fireEvent.change(screen.getByLabelText("Aspect ratio"), { target: { value: "9:16" } });
+    expect(resolution).toHaveValue("288x512");
+    expect(within(resolution).getByRole("option", { name: "576 × 1024" })).toBeInTheDocument();
+    expect(within(resolution).queryByRole("option", { name: "1024 × 576" })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Rendered LTX params" }));
 
     const paramsDialog = screen.getByRole("dialog", { name: "Rendered LTX 2.3 params" });
@@ -668,6 +689,11 @@ describe("CreateVideoPanel", () => {
     expect(within(paramsDialog).getByText("new-audio.mp3")).toBeVisible();
     expect(within(paramsDialog).getByText("Elena says Saved script")).toBeVisible();
     expect(within(paramsDialog).getByText("12")).toBeVisible();
+    expect(within(paramsDialog).getByText("Width").closest("article")).toHaveTextContent("288");
+    expect(within(paramsDialog).getByText("Height").closest("article")).toHaveTextContent("512");
+    fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered LTX params" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save LTX controls" }));
+    await waitFor(() => expect(savedOverrides).toContainEqual(expect.objectContaining({ width: 288, height: 512 })));
   });
 
   it("updates LTX duration to selected audio duration plus one second", async () => {

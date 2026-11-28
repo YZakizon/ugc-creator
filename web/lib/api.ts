@@ -346,6 +346,8 @@ export type OnDemandRenderOverrides = {
   workflow_controls?: Record<string, boolean | number | string>;
   video_prompt?: string | null;
   fps?: number | null;
+  width?: number;
+  height?: number;
   duration?: number | null;
   seed?: number | null;
   create_video?: Record<string, unknown>;
