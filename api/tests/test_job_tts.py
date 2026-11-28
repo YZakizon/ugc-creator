@@ -381,7 +381,9 @@ def test_failed_tts_replacement_preserves_current_audio() -> None:
         assert active_audio.filename == "original.mp3"
 
 
-@pytest.mark.parametrize("outcome", ["speech_first", "render_first", "speech_failed"])
+@pytest.mark.parametrize(
+    "outcome", ["speech_first", "render_first", "speech_failed", "both_failed"]
+)
 def test_created_video_speech_and_render_finish_independently(
     outcome: str,
 ) -> None:
@@ -451,18 +453,23 @@ def test_created_video_speech_and_render_finish_independently(
     assert context.speech_script == "Replacement speech"
     assert tts.claim(job_id) is None
 
-    if outcome == "speech_failed":
+    if outcome in {"speech_failed", "both_failed"}:
         tts.fail(context, "Replacement audio failed", None)
         assert renders.update_progress(attempt_id, "rendering", 60)
         job_after_progress = batches.get_job(job_id)
         assert job_after_progress is not None
         assert job_after_progress.status == JobStatus.RENDERING.value
         assert job_after_progress.error_message == "Replacement audio failed"
-        assert renders.update_progress(attempt_id, "completed", 100)
+        render_failed = outcome == "both_failed"
+        terminal = JobStatus.FAILED if render_failed else JobStatus.COMPLETED
+        render_error = "ComfyUI ran out of GPU memory" if render_failed else None
+        assert renders.update_progress(attempt_id, terminal.value, 100, render_error)
         job_after_render = batches.get_job(job_id)
         assert job_after_render is not None
-        assert job_after_render.status == JobStatus.COMPLETED.value
+        assert job_after_render.status == terminal.value
         assert job_after_render.error_message == "Replacement audio failed"
+        saved_attempt = renders.get_attempt(attempt_id)
+        assert saved_attempt is not None and saved_attempt.error_message == render_error
         return
 
     if outcome == "render_first":

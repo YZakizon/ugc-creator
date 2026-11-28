@@ -425,6 +425,30 @@ describe("CreateVideoPanel", () => {
     expect(screen.getByText(message)).toBeInTheDocument();
   });
 
+  it("shows the render error separately from a replacement audio failure", async () => {
+    const audioError = "ElevenLabs could not generate replacement audio";
+    const renderError = "ComfyUI ran out of GPU memory";
+    const attempt = renderAttempt(mediaAsset("video-1", "video", "done.mp4"), {
+      status: "failed", error_message: renderError, output_filename: null, assets: [],
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/topics/topic-1")) {
+        return json({ ...topic(), contents: [{ ...job(), status: "failed", error_message: audioError }] });
+      }
+      if (url.includes("/render-attempts")) return json({ items: [attempt] });
+      return json({ items: [] });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const renderFailure = await screen.findByText(renderError);
+    const historyEntry = renderFailure.closest("article");
+    expect(historyEntry).toBeInTheDocument();
+    expect(historyEntry).toHaveTextContent("failed");
+    expect(within(historyEntry as HTMLElement).queryByText(audioError)).toBeNull();
+    expect(screen.getAllByText(audioError).length).toBeGreaterThan(0);
+  });
+
   it("shows delete icons for generated audio and completed videos", async () => {
     const audioAsset = mediaAsset("audio-1", "audio", "created-video_content1_0001-audio.mp3");
     const archivedAudioAsset = mediaAsset("audio-2", "audio_archive", "created-video_content1_0000-audio.mp3");

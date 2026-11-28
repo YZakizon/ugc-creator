@@ -1204,11 +1204,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
               disabled={deleteFailedRenders.isPending}
               onClick={() => deleteFailedRenders.mutate({ jobId: attempt.job_id, attemptId: attempt.id })}
             >Delete failed render</button>}
-          </div>{attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
+          </div>
+          {attempt.status === "failed" && attempt.error_message && <p className="form-error">{attempt.error_message}</p>}
+          {attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
         </section>
       </div>
 
-      {currentJob?.status === "failed" && <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
+      {currentJob?.status === "failed" && (latestAttempt?.status !== "failed" || currentJob.error_message !== latestAttempt.error_message || !latestAttempt.error_message) &&
+        <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
       {error && <p className="form-error" role="alert">{error.message}</p>}
       {renderPreflightError && <p className="form-error" role="alert">{renderPreflightError}</p>}
       {active && <p className="field-hint">Some controls are locked while generation is active.</p>}
