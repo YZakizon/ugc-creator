@@ -1816,8 +1816,8 @@ Append decisions here as implementation clarifies unknowns.
 
 ## 40.8 On-demand Created Video workspace
 
-- Generated audio history shows its voice name, API provider and model beneath
-  each filename. Voice names are snapshotted on new audio assets, so changing the
+- Generated audio history shows its measured duration, voice name, API provider
+  and model beneath each filename. Voice names are snapshotted on new audio assets, so changing the
   selected voice does not relabel earlier generations.
 
 - MiniMax H3 workflows using a connected ResolutionSelector expose per-video
@@ -1842,6 +1842,8 @@ Append decisions here as implementation clarifies unknowns.
   the queue. The API recovers saved queue heads after restart and retries dispatch
   periodically, resuming monitoring for stale attempts with a saved provider ID.
   Audio and video history expose the metadata stored for each entry.
+- Speech generation can run alongside a Created Video render with snapshotted
+  inputs. Audio deletion stays locked until all active renders finish.
 
 ## 40.9 ElevenLabs model controls and voice samples
 

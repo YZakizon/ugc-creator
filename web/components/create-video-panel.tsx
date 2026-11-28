@@ -75,6 +75,12 @@ function renderProgress(attempt?: RenderAttempt): string {
   return `${attempt.status.replaceAll("_", " ")} · ${attempt.progress}%`;
 }
 
+function renderTitle(attempt: RenderAttempt, fallback: string): string {
+  const requested = attempt.effective_values.requested_inputs;
+  const values = isRecord(requested) && isRecord(requested.values) ? requested.values : attempt.effective_values;
+  return typeof values.topic === "string" && values.topic.trim() ? values.topic : fallback;
+}
+
 function formatElapsedTime(milliseconds: number): string {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
   const seconds = totalSeconds % 60;
@@ -115,10 +121,14 @@ function voiceLabel(voice: ElevenLabsVoice): string {
   return [voice.name, voice.category].filter(Boolean).join(" · ");
 }
 
-function durationFromAudioAsset(asset: MediaAsset | null | undefined): string | null {
+function audioDurationSeconds(asset: MediaAsset | null | undefined): number | null {
   const seconds = asset?.generation_metadata?.duration_seconds;
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return null;
-  return String(Math.max(1, Math.min(180, Math.ceil(seconds + 1))));
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+function durationFromAudioAsset(asset: MediaAsset | null | undefined): string | null {
+  const seconds = audioDurationSeconds(asset);
+  return seconds === null ? null : String(Math.max(1, Math.min(180, Math.ceil(seconds + 1))));
 }
 
 function activeAudioAsset(job: Job | null | undefined): MediaAsset | null {
@@ -247,9 +257,46 @@ function controlValue(workflow: WorkflowTemplate, label: string, job: Job | null
   return previewLtxRenderControls(workflow, fallbackJob).find((control) => control.label === label)?.value;
 }
 
-function AudioGenerationCaption({ asset, voices }: { asset: MediaAsset; voices: ElevenLabsVoice[] }) {
+function GeneratedAudioPlayer({ asset, voices }: { asset: MediaAsset; voices: ElevenLabsVoice[] }) {
   const details = audioGenerationDetails(asset, voices);
-  return <small className="create-video-audio-caption" title={details.subtitle}><span className="create-video-audio-voice">{details.voice}</span>{details.api && <span className="create-video-audio-api">{details.api}</span>}</small>;
+  const savedDuration = audioDurationSeconds(asset);
+  const [loadedDuration, setLoadedDuration] = useState<number | null>(null);
+  const seconds = savedDuration ?? loadedDuration;
+  const duration = seconds === null ? null : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(seconds)} s`;
+
+  return <>
+    <div className="create-video-media-title"><div>
+      <strong>{asset.filename}</strong>
+      <small className="create-video-audio-caption" title={details.subtitle}>
+        {duration && <span className="create-video-audio-duration" aria-label={`Audio length ${duration}`}>{duration}</span>}
+        <span className="create-video-audio-voice">{details.voice}</span>
+        {details.api && <span className="create-video-audio-api">{details.api}</span>}
+      </small>
+    </div></div>
+    <audio
+      controls
+      preload={savedDuration === null ? "metadata" : "none"}
+      src={`${asset.download_url}?inline=true`}
+      onLoadedMetadata={(event) => {
+        const duration = event.currentTarget.duration;
+        if (Number.isFinite(duration) && duration > 0) setLoadedDuration(duration);
+      }}
+    >Your browser does not support audio playback.</audio>
+  </>;
+}
+
+function MetadataButton({ filename, onClick }: {
+  filename: string;
+  onClick: React.MouseEventHandler<HTMLButtonElement>;
+}) {
+  return (
+    <button className="job-media-icon" type="button" aria-label={`Show metadata for ${filename}`} aria-haspopup="dialog" title="Show metadata" onClick={onClick}>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v5m0-8h.01" />
+      </svg>
+    </button>
+  );
 }
 
 export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null; onSaved?: (topicId: string) => void }) {
@@ -296,6 +343,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const manualAudioSelectionRef = useRef<string | null>(null);
   const lastAppliedAudioDurationAssetIdRef = useRef<string | null>(null);
   const videoPromptRef = useRef<HTMLTextAreaElement | null>(null);
+  const metadataTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // An edited prompt belongs to this editor until the user opens another video.
+  const editedPromptTopicRef = useRef<string | null | undefined>(undefined);
+
+  const editVideoPrompt = useCallback((value: string) => {
+    editedPromptTopicRef.current = currentTopicId;
+    setVideoPrompt(value);
+  }, [currentTopicId]);
 
   useEffect(() => setCurrentTopicId(topicId ?? null), [topicId]);
 
@@ -332,7 +387,12 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const elevenVoices = useQuery({ queryKey: ["elevenlabs-voices"], queryFn: getElevenLabsVoices });
   const usage = useQuery({ queryKey: ["elevenlabs-usage"], queryFn: getElevenLabsUsage, refetchInterval: 15000 });
   const nodes = useQuery({ queryKey: ["render-nodes"], queryFn: getRenderNodes });
-  const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
+  const attempts = useQuery({
+    queryKey: ["render-attempts"],
+    queryFn: getRenderAttempts,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
   const workflows = useQuery({ queryKey: ["workflow-templates"], queryFn: getWorkflowTemplates });
   const renderProfiles = useMemo(() => profiles.data?.items ?? [], [profiles.data?.items]);
   const voices = useMemo(() => elevenVoices.data?.items ?? [], [elevenVoices.data?.items]);
@@ -345,10 +405,25 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     [renderAttempts, currentJob?.id],
   );
   const hasFailedRenders = jobAttempts.some((attempt) => attempt.status === "failed");
-  const latestAttempt = jobAttempts.find((attempt) => attempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(attempt.status)) ?? jobAttempts[0];
+  const activeAttempt = jobAttempts.find((attempt) => attempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(attempt.status))
+    ?? jobAttempts.find((attempt) => attempt.status === "queued");
+  const latestAttempt = activeAttempt ?? jobAttempts[0];
+  const tabProgress = activeAttempt
+    ? activeAttempt.progress > 1
+      ? `${activeAttempt.progress}%`
+      : activeAttempt.status.replaceAll("_", " ")
+    : null;
   const latestAttemptId = latestAttempt?.id;
   const latestAttemptStatus = latestAttempt?.status;
   const active = currentJob ? ACTIVE_STATUSES.has(currentJob.status) : false;
+  const renderActive = currentJob != null && (
+    CANCELABLE_RENDER_STATUSES.has(currentJob.status)
+    || jobAttempts.some((attempt) => CANCELABLE_RENDER_STATUSES.has(attempt.status))
+  );
+  const audioGenerationLocked = currentJob != null && (
+    currentJob.status === "generating_content" || currentJob.status === "generating_tts"
+    || currentJob.status === "fitting_duration"
+  );
   const selectedWorkflow = workflowTemplates.find((workflow) => workflow.id === workflowTemplateId);
   const imageReferences = optionalImageReferences(selectedWorkflow);
   const imageSize = minimaxImageSize(selectedWorkflow);
@@ -356,6 +431,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const selectedAudioAsset = currentJob?.audio_assets?.find((asset) => asset.id === selectedAudioAssetId) ?? defaultRenderAudioAsset(currentJob);
   const sourceImageDisplayName = pendingSourceImageName || mediaDisplayName(currentJob?.source_image_asset);
   const audioFileDisplayName = pendingAudioFileName || mediaDisplayName(currentJob?.audio_asset);
+
+  useEffect(() => {
+    if (!tabProgress) return;
+    const pageTitle = document.title;
+    const progressTitle = pageTitle ? `${tabProgress} | ${pageTitle}` : tabProgress;
+    document.title = progressTitle;
+    return () => {
+      if (document.title === progressTitle) document.title = pageTitle;
+    };
+  }, [tabProgress]);
 
   useEffect(() => {
     if (!latestAttemptStatus || !CANCELABLE_RENDER_STATUSES.has(latestAttemptStatus)) return;
@@ -388,7 +473,10 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       syncedScriptRef.current = job?.speech_script ?? null;
       scriptDirtyRef.current = false;
     }
-    setVideoPrompt(String(job?.render_overrides?.video_prompt ?? ""));
+    if (editedPromptTopicRef.current !== topic.data.id) {
+      editedPromptTopicRef.current = undefined;
+      setVideoPrompt(String(job?.render_overrides?.video_prompt ?? ""));
+    }
     setFps(String(job?.render_overrides?.fps ?? 24));
     setSeed(job?.render_overrides?.seed === undefined ? "" : String(job.render_overrides.seed));
     setWorkflowControls(isRecord(job?.render_overrides?.workflow_controls) ? job.render_overrides.workflow_controls as Record<string, boolean | number | string> : {});
@@ -559,11 +647,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     const workflowFps = controlValue(workflow, "FPS", currentJob);
     const workflowDuration = controlValue(workflow, "Duration", currentJob);
     const workflowSeed = controlValue(workflow, "Seed", currentJob);
-    if ((force || !videoPrompt.trim()) && typeof prompt === "string") setVideoPrompt(prompt);
+    if (typeof prompt === "string") {
+      if (force) editVideoPrompt(prompt);
+      else if (editedPromptTopicRef.current !== currentTopicId && !videoPrompt.trim()) setVideoPrompt(prompt);
+    }
     if ((force || !fps.trim()) && typeof workflowFps === "number") setFps(String(workflowFps));
     if ((force || !duration.trim()) && typeof workflowDuration === "number") setDuration(String(workflowDuration));
     if ((force || !seed.trim()) && typeof workflowSeed === "number") setSeed(String(workflowSeed));
-  }, [currentJob, duration, fps, seed, videoPrompt]);
+  }, [currentJob, currentTopicId, duration, editVideoPrompt, fps, seed, videoPrompt]);
 
   useEffect(() => {
     if (selectedWorkflow && !currentJob?.render_overrides) applyWorkflowBase(selectedWorkflow);
@@ -575,11 +666,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       return currentTopicId ? updateOnDemandVideo(currentTopicId, input) : createOnDemandVideo(input);
     },
     onSuccess: (saved) => {
+      if (currentTopicId === null && editedPromptTopicRef.current === null) {
+        editedPromptTopicRef.current = saved.id;
+      }
       setCurrentTopicId(saved.id);
       onSaved?.(saved.id);
       invalidate();
     },
   });
+
+  const { mutate: saveDraft, isPending: savingDraft } = saveMutation;
 
   async function ensureSaved(): Promise<Job> {
     const saved = await saveMutation.mutateAsync();
@@ -617,7 +713,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
 
   const generateAudio = useMutation({
     mutationFn: async () => {
-      const job = await ensureSaved();
+      const job = renderActive && currentJob ? currentJob : await ensureSaved();
       if (!script.trim()) throw new Error("Enter an audio script first.");
       const selectedVoice = voices.find((voice) => voice.voice_id === voiceId);
       if (!selectedVoice) throw new Error("Pick an ElevenLabs voice first.");
@@ -856,7 +952,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   });
 
   useEffect(() => {
-    if (active || !title.trim() || !renderProfileId || generateScript.isPending || generateAudio.isPending || generateVideo.isPending || uploadAudio.isPending || uploadSourceImage.isPending || importWorkflow.isPending) return;
+    if (active || savingDraft || !title.trim() || !renderProfileId || generateScript.isPending || generateAudio.isPending || generateVideo.isPending || uploadAudio.isPending || uploadSourceImage.isPending || importWorkflow.isPending) return;
     const input = saveInput();
     const saveKey = JSON.stringify({ topicId: currentTopicId, input });
     if (saveKey === lastAutosaveKeyRef.current) return;
@@ -864,7 +960,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     const timeout = window.setTimeout(() => {
       lastAutosaveKeyRef.current = saveKey;
       setAutosaveState("saving");
-      saveMutation.mutate(undefined, {
+      saveDraft(undefined, {
         onSuccess: () => setAutosaveState("saved"),
         onError: () => {
           lastAutosaveKeyRef.current = "";
@@ -881,8 +977,9 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     generateVideo.isPending,
     importWorkflow.isPending,
     renderProfileId,
+    saveDraft,
     saveInput,
-    saveMutation,
+    savingDraft,
     title,
     uploadAudio.isPending,
     uploadSourceImage.isPending,
@@ -891,16 +988,26 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const selectedVoice = voices.find((voice) => voice.voice_id === voiceId);
   const scriptGenerating = generateScript.isPending || currentJob?.status === "generating_content";
 
+  function showGenerationMetadata(trigger: HTMLButtonElement, title: string, values: Record<string, unknown>) {
+    metadataTriggerRef.current = trigger;
+    setGenerationMetadata({ title, values });
+  }
+
+  function closeGenerationMetadata() {
+    setGenerationMetadata(null);
+    metadataTriggerRef.current?.focus();
+  }
+
   function insertVideoPromptVariable(token: string) {
     const textarea = videoPromptRef.current;
     if (!textarea) {
-      setVideoPrompt((current) => `${current}${token}`);
+      editVideoPrompt(`${videoPrompt}${token}`);
       return;
     }
     const start = textarea.selectionStart ?? videoPrompt.length;
     const end = textarea.selectionEnd ?? start;
     const nextValue = `${videoPrompt.slice(0, start)}${token}${videoPrompt.slice(end)}`;
-    setVideoPrompt(nextValue);
+    editVideoPrompt(nextValue);
     window.requestAnimationFrame(() => {
       textarea.focus();
       const cursor = start + token.length;
@@ -945,6 +1052,9 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       }
       applyAudioDuration(generatedAudio);
       setToast({ message: "Audio generated.", variant: "success" });
+    } else if (currentJob.status !== "generating_tts" && currentJob.error_message) {
+      awaitingAudioToastRef.current = false;
+      setToast({ message: currentJob.error_message, variant: "danger" });
     }
   }, [applyAudioDuration, currentJob]);
 
@@ -992,13 +1102,13 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             <label className="field-label">Audio Script<textarea rows={10} value={script} onInput={(event) => { scriptDirtyRef.current = true; setScript(event.currentTarget.value); }} onChange={(event) => { scriptDirtyRef.current = true; setScript(event.target.value); }} placeholder="Paste the exact words the avatar should speak." /></label>
             <div className="create-video-actions">
               <button className="button button-secondary button-with-spinner" type="button" disabled={scriptGenerating || !title.trim() || !renderProfileId || active} onClick={() => generateScript.mutate()}>{scriptGenerating && <span className="inline-spinner" aria-hidden="true" />}{scriptGenerating ? "LLM generating audio script…" : "Generate script with AI"}</button>
-              <button className="button button-primary button-with-spinner" type="button" disabled={generateAudio.isPending || !script.trim() || !voiceId || active} onClick={() => generateAudio.mutate()}>{generateAudio.isPending && <span className="inline-spinner" aria-hidden="true" />}{generateAudio.isPending ? "Generating audio…" : "Generate Audio"}</button>
+              <button className="button button-primary button-with-spinner" type="button" disabled={generateAudio.isPending || !script.trim() || !voiceId || audioGenerationLocked} onClick={() => generateAudio.mutate()}>{generateAudio.isPending && <span className="inline-spinner" aria-hidden="true" />}{generateAudio.isPending ? "Generating audio…" : "Generate Audio"}</button>
             </div>{scriptGenerating && <p className="create-video-inline-status" role="status">LLM is writing the audio script. This can take a few seconds.</p>}</div>}
         </section>
 
         <section className="panel create-video-card">
           <div className="panel-heading"><div><h3>Generated audio</h3><p>Select the audio used for the next render.</p></div></div>
-          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><div className="create-video-media-title"><div><strong>{asset.filename}</strong><AudioGenerationCaption asset={asset} voices={voices} /></div></div><audio controls preload="none" src={`${asset.download_url}?inline=true`}>Your browser does not support audio playback.</audio><button className="button button-secondary button-small" type="button" aria-label={`Show metadata for ${asset.filename}`} onClick={() => setGenerationMetadata({ title: "Audio metadata", values: { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata } })}>Metadata</button><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete audio" disabled={deleteAsset.isPending || active} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
+          {currentJob?.audio_assets?.length ? <div className="create-video-audio-list">{currentJob.audio_assets.map((asset) => <article className={`create-video-audio${asset.kind === "audio" ? " active" : ""}`} key={asset.id}><GeneratedAudioPlayer asset={asset} voices={voices} /><MetadataButton filename={asset.filename} onClick={(event) => showGenerationMetadata(event.currentTarget, "Audio metadata", { filename: asset.filename, created_at: asset.created_at, ...asset.generation_metadata })} /><button className="job-media-icon" type="button" aria-label={asset.id === selectedAudioAssetId ? `Using ${asset.filename}` : `Use ${asset.filename}`} title={asset.id === selectedAudioAssetId ? "Using audio" : "Use audio"} disabled={asset.id === selectedAudioAssetId || selectAudio.isPending} onClick={() => handleAudioSourceChange(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true">{asset.kind === "audio" ? <path d="M5 13l4 4L19 7" /> : <path d="M5 12h13m0 0-5-5m5 5-5 5" />}</svg></button><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title={renderActive ? "Audio cannot be deleted during a video render" : "Delete audio"} disabled={deleteAsset.isPending || active || renderActive || generateAudio.isPending || generateVideo.isPending} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></article>)}</div> : <p className="field-hint">Generated audio will appear here.</p>}
         </section>
 
         <section className="panel create-video-card create-video-ltx">
@@ -1036,7 +1146,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             </div>
             <label className="field-label">Audio source<select value={selectedAudioAssetId} disabled={!currentJob?.audio_assets?.length || selectAudio.isPending} onChange={(event) => handleAudioSourceChange(event.target.value)}><option value="">No generated audio selected</option>{currentJob?.audio_assets?.map((asset) => <option key={asset.id} value={asset.id}>{asset.filename}{asset.kind === "audio" ? " · active" : ""}</option>)}</select></label>
           </div>
-          <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => setVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
+          <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => editVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
           <div className="prompt-template-vars create-video-vars"><small>Supported variable</small><button className="prompt-var" type="button" onClick={() => insertVideoPromptVariable("{{SCRIPT}}")}>{"{{SCRIPT}}"}</button><small>Expands to Audio Script when rendering.</small></div>
           <div className="ltx-control-row">
             {imageSize && <>
@@ -1054,7 +1164,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             <button className="button button-secondary rendered-settings-action" type="button" disabled={!currentRenderedControls.length} onClick={() => setRenderedLtxParams(currentRenderedControls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg>Rendered LTX params</button>
           </div>
           {(!currentJob?.source_image_asset || !currentJob?.audio_asset) && <p className="field-hint">Source image and audio are required before rendering video.</p>}
-          {latestAttempt && <div className="create-video-progress"><span>{renderProgress(latestAttempt)} <RenderElapsed attempt={latestAttempt} nowMs={renderNowMs} /></span><progress max={100} value={latestAttempt.progress > 1 ? latestAttempt.progress : undefined} />{latestAttempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <button className="job-media-icon danger" type="button" aria-label="Cancel rendering" title="Cancel rendering" disabled={cancelRender.isPending} onClick={() => cancelRender.mutate(latestAttempt.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}</div>}
+          {latestAttempt && <div className="create-video-progress">{CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <strong>{renderTitle(latestAttempt, topic.data?.name ?? title)}</strong>}<span>{renderProgress(latestAttempt)} <RenderElapsed attempt={latestAttempt} nowMs={renderNowMs} /></span><progress max={100} value={latestAttempt.progress > 1 ? latestAttempt.progress : undefined} />{latestAttempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(latestAttempt.status) && <button className="job-media-icon danger" type="button" aria-label="Cancel rendering" title="Cancel rendering" disabled={cancelRender.isPending} onClick={() => cancelRender.mutate(latestAttempt.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg></button>}</div>}
         </section>
 
         <section className="panel create-video-card">
@@ -1072,8 +1182,8 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
             >Delete all failed renders</button>}
           </div>
           {deleteFailedRenders.isError && <p className="form-error" role="alert">Could not delete failed renders. Please try again.</p>}
-          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? `${attempt.provider} render`}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button>
-            <button className="button button-secondary button-small" type="button" aria-label={`Show metadata for ${attempt.output_filename ?? attempt.id}`} onClick={() => setGenerationMetadata({ title: "Video metadata", values: {
+          {jobAttempts.length ? <div className="create-video-video-list">{jobAttempts.map((attempt) => <article className="create-video-render" key={attempt.id}><div><div><strong>{attempt.output_filename ?? renderTitle(attempt, topic.data?.name || title || `${attempt.provider} render`)}</strong><small>{renderProgress(attempt)} · <RenderElapsed attempt={attempt} /> · <HumanDate value={attempt.updated_at} /></small></div><button className="job-media-icon" type="button" aria-label={`Show rendered LTX params for ${attempt.output_filename ?? attempt.id}`} title="Rendered LTX params" onClick={() => setRenderedLtxParams(attempt.rendered_controls)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10m4 0h2M4 17h2m4 0h10M14 4v6M6 14v6" /></svg></button>
+            <MetadataButton filename={attempt.output_filename ?? attempt.id} onClick={(event) => showGenerationMetadata(event.currentTarget, "Video metadata", {
               provider: attempt.provider,
               render_profile_id: attempt.render_profile_id,
               render_node_id: attempt.render_node_id,
@@ -1081,7 +1191,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
               external_job_id: attempt.external_job_id,
               queued_at: attempt.created_at,
               ...attempt.effective_values,
-            } })}>Metadata</button>
+            })} />
             {attempt.status === "queued" && <button
               className="button button-danger button-small"
               type="button"
@@ -1094,22 +1204,25 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
               disabled={deleteFailedRenders.isPending}
               onClick={() => deleteFailedRenders.mutate({ jobId: attempt.job_id, attemptId: attempt.id })}
             >Delete failed render</button>}
-          </div>{attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
+          </div>
+          {attempt.status === "failed" && attempt.error_message && <p className="form-error">{attempt.error_message}</p>}
+          {attempt.assets.length ? attempt.assets.map((asset) => <div className="create-video-video" key={asset.id}><video controls preload="metadata" src={`${asset.download_url}?inline=true`}>Your browser does not support video playback.</video><div className="create-video-video-actions"><a className="job-media-icon" href={asset.download_url} download={asset.filename} aria-label={`Download ${asset.filename}`} title="Download video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" /></svg></a><button className="job-media-icon danger" type="button" aria-label={`Delete ${asset.filename}`} title="Delete video" disabled={deleteAsset.isPending || attempt.status !== "completed"} onClick={() => deleteAsset.mutate(asset.id)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-2h4l1 2m-9 0 1 14h8l1-14" /></svg></button></div></div>) : <p className="field-hint">{attempt.output_deleted_at ? "Deleted" : "No output file yet."}</p>}</article>)}</div> : <p className="field-hint">Generated videos will appear here.</p>}
         </section>
       </div>
 
-      {currentJob?.status === "failed" && <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
+      {currentJob?.status === "failed" && (latestAttempt?.status !== "failed" || currentJob.error_message !== latestAttempt.error_message || !latestAttempt.error_message) &&
+        <p className="form-error">{currentJob.error_message || "Generation failed. Please try again."}</p>}
       {error && <p className="form-error" role="alert">{error.message}</p>}
       {renderPreflightError && <p className="form-error" role="alert">{renderPreflightError}</p>}
-      {active && <p className="field-hint">This created video is active. Editing is locked until the current generation step finishes.</p>}
+      {active && <p className="field-hint">Some controls are locked while generation is active.</p>}
       {toast && <Toast message={toast.message} variant={toast.variant} onClose={() => setToast(null)} />}
-      {generationMetadata && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setGenerationMetadata(null); }}>
-        <section className="render-params-dialog" role="dialog" aria-modal="true" aria-labelledby="generation-metadata-title" onKeyDown={(event) => { if (event.key === "Escape") setGenerationMetadata(null); }}>
+      {generationMetadata && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeGenerationMetadata(); }}>
+        <section className="render-params-dialog generation-metadata-dialog" role="dialog" aria-modal="true" aria-labelledby="generation-metadata-title" onKeyDown={(event) => { if (event.key === "Escape") closeGenerationMetadata(); }}>
           <div className="render-params-heading">
             <h2 id="generation-metadata-title">{generationMetadata.title}</h2>
-            <button autoFocus className="toast-close" type="button" aria-label="Close metadata" onClick={() => setGenerationMetadata(null)}>×</button>
+            <button autoFocus className="toast-close" type="button" aria-label="Close metadata" onClick={closeGenerationMetadata}>×</button>
           </div>
-          <div className="render-params-list"><article className="render-param"><pre>{JSON.stringify(generationMetadata.values, null, 2)}</pre></article></div>
+          <pre className="generation-metadata-content" tabIndex={0} aria-label="Metadata JSON">{JSON.stringify(generationMetadata.values, null, 2)}</pre>
         </section>
       </div>}
       <RenderedLtxParamsDialog controls={renderedLtxParams} onClose={() => setRenderedLtxParams(null)} />

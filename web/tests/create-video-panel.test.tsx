@@ -189,6 +189,48 @@ describe("CreateVideoPanel", () => {
     expect(screen.queryByText("Pick audio file")).not.toBeInTheDocument();
   });
 
+  it("keeps an in-progress prompt and its caret when an older autosave returns", async () => {
+    let savedPrompt = "Elena speaks";
+    let completeFirstSave: (() => void) | undefined;
+    let serverReads = 0;
+    const writes: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/on-demand-videos/topic-1") || url.endsWith("/topics/topic-1")) {
+        if (init?.method === "PUT") {
+          const nextPrompt: string = JSON.parse(String(init.body)).render_overrides.video_prompt;
+          writes.push(nextPrompt);
+          if (writes.length === 1) {
+            await new Promise<void>((resolve) => { completeFirstSave = resolve; });
+          }
+          savedPrompt = nextPrompt;
+        } else {
+          serverReads += 1;
+        }
+        return json(topic({ video_prompt: savedPrompt }));
+      }
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile], total: 1 });
+      return json({ items: [], total: 0 });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const prompt = await screen.findByDisplayValue<HTMLTextAreaElement>("Elena speaks");
+    fireEvent.change(prompt, { target: { value: "Elena speaks softly" } });
+    await waitFor(() => expect(completeFirstSave).toBeDefined(), { timeout: 2000 });
+
+    prompt.focus();
+    fireEvent.change(prompt, { target: { value: "Elena now speaks softly " } });
+    prompt.setSelectionRange(9, 9);
+    const readsBeforeSave = serverReads;
+    completeFirstSave?.();
+
+    await waitFor(() => expect(serverReads).toBeGreaterThan(readsBeforeSave));
+    expect(prompt).toHaveValue("Elena now speaks softly ");
+    expect(prompt.selectionStart).toBe(9);
+    expect(prompt.selectionEnd).toBe(9);
+    await waitFor(() => expect(writes).toEqual(["Elena speaks softly", "Elena now speaks softly"]), { timeout: 2000 });
+  });
+
   it("inserts the SCRIPT variable into the video prompt", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -321,6 +363,35 @@ describe("CreateVideoPanel", () => {
     expect(attachedModel).toBe("eleven_v3");
   });
 
+  it("generates replacement audio during a render and locks audio deletion", async () => {
+    const audio = mediaAsset("audio-1", "audio", "original.mp3");
+    const currentJob = { ...job(), status: "rendering", audio_asset: audio, audio_assets: [audio] };
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method) requests.push(`${init.method} ${url}`);
+      if (url.includes("/topics/topic-1")) return json({ ...topic(), contents: [currentJob] });
+      if (url.includes("/render-profiles")) return json({ items: [renderProfile] });
+      if (url.includes("/elevenlabs/voices")) return json({ items: [{ voice_id: "hope", name: "Hope" }] });
+      if (url.includes("/generate-tts")) return json({ ...currentJob, status: "generating_tts" });
+      if (url.includes("/elevenlabs-voice") || url.includes("/script")) return json(currentJob);
+      return json({ items: [] });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const generate = await screen.findByRole("button", { name: "Generate Audio" });
+    await waitFor(() => expect(generate).toBeEnabled());
+    expect(screen.getByRole("button", { name: "Delete original.mp3" })).toBeDisabled();
+    const player = screen.getByText("Your browser does not support audio playback.");
+    expect(player).toHaveAttribute("preload", "metadata");
+    Object.defineProperty(player, "duration", { value: 8.2 });
+    fireEvent.loadedMetadata(player);
+    expect(screen.getByLabelText("Audio length 8.2 s")).toBeVisible();
+    fireEvent.click(generate);
+    await waitFor(() => expect(requests.some((request) => request.endsWith("/generate-tts"))).toBe(true));
+    expect(requests.some((request) => request.startsWith("PUT") && request.includes("/on-demand-videos"))).toBe(false);
+  });
+
   it.each([false, true])("notifies asynchronous audio failures and repeated retries (existing failure: %s)", async (initialFailure) => {
     const message = "ElevenLabs speech generation failed (403). Try MP3 128kbps.";
     const existingAudio = mediaAsset("old-audio", "audio", "previous.mp3");
@@ -352,6 +423,30 @@ describe("CreateVideoPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it("shows the render error separately from a replacement audio failure", async () => {
+    const audioError = "ElevenLabs could not generate replacement audio";
+    const renderError = "ComfyUI ran out of GPU memory";
+    const attempt = renderAttempt(mediaAsset("video-1", "video", "done.mp4"), {
+      status: "failed", error_message: renderError, output_filename: null, assets: [],
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/topics/topic-1")) {
+        return json({ ...topic(), contents: [{ ...job(), status: "failed", error_message: audioError }] });
+      }
+      if (url.includes("/render-attempts")) return json({ items: [attempt] });
+      return json({ items: [] });
+    });
+
+    render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
+    const renderFailure = await screen.findByText(renderError);
+    const historyEntry = renderFailure.closest("article");
+    expect(historyEntry).toBeInTheDocument();
+    expect(historyEntry).toHaveTextContent("failed");
+    expect(within(historyEntry as HTMLElement).queryByText(audioError)).toBeNull();
+    expect(screen.getAllByText(audioError).length).toBeGreaterThan(0);
   });
 
   it("shows delete icons for generated audio and completed videos", async () => {
@@ -651,13 +746,23 @@ describe("CreateVideoPanel", () => {
   });
 
   it("queues each click with its own inputs and shows saved history metadata", async () => {
-    const audio = { ...mediaAsset("audio-1", "audio", "recording.mp3"), generation_metadata: { voice_name: "Captured voice" } };
+    const audio = { ...mediaAsset("audio-1", "audio", "recording.mp3"), generation_metadata: { voice_name: "Captured voice", duration_seconds: 12.24 } };
     const image = mediaAsset("image-1", "source_image", "source.png");
     const video = mediaAsset("video-1", "video", "done.mp4");
     const completed = renderAttempt(video, { effective_values: { seed: 42 } });
+    const running = renderAttempt(video, {
+      id: "running",
+      status: "rendering",
+      progress: 28,
+      output_filename: null,
+      completed_at: null,
+      assets: [],
+      effective_values: { requested_inputs: { values: { topic: "Elena’s original title" } } },
+    });
     const waiting = renderAttempt(video, { id: "waiting", status: "queued", assets: [], output_filename: null });
     const submissions: unknown[] = [];
     let removed = false;
+    document.title = "UGC Creator";
     let acceptFirst = () => {};
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
@@ -675,7 +780,7 @@ describe("CreateVideoPanel", () => {
         removed = true;
         return json({ ...waiting, status: "cancelled" });
       }
-      if (url.includes("/render-attempts")) return json({ items: removed ? [completed] : [waiting, completed] });
+      if (url.includes("/render-attempts")) return json({ items: removed ? [completed] : [waiting, { ...running, progress: submissions.length === 2 ? 64 : 28 }, completed] });
       if (url.includes("/render-nodes")) return json({ items: [{ id: "node-1", is_active: true, health_status: "healthy" }] });
       if (url.includes("/render-profiles")) return json({ items: [renderProfile] });
       return json({ items: [] });
@@ -683,13 +788,25 @@ describe("CreateVideoPanel", () => {
 
     render(<Providers><CreateVideoPanel topicId="topic-1" /></Providers>);
     const audioMetadata = await screen.findByRole("button", { name: "Show metadata for recording.mp3" });
+    expect(screen.getByLabelText("Audio length 12.2 s")).toBeVisible();
+    expect(audioMetadata).toHaveAttribute("aria-haspopup", "dialog");
+    expect(audioMetadata.querySelector("svg")).toBeInTheDocument();
+    expect(audioMetadata.textContent).toBe("");
     fireEvent.click(audioMetadata);
-    expect(screen.getByRole("dialog", { name: "Audio metadata" })).toHaveTextContent("Captured voice");
-    fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
-    fireEvent.click(screen.getByRole("button", { name: "Show metadata for done.mp4" }));
+    const audioDialog = screen.getByRole("dialog", { name: "Audio metadata" });
+    expect(within(audioDialog).getByLabelText("Metadata JSON")).toHaveTextContent("Captured voice");
+    fireEvent.keyDown(screen.getByRole("button", { name: "Close metadata" }), { key: "Escape" });
+    expect(audioDialog).not.toBeInTheDocument();
+    expect(audioMetadata).toHaveFocus();
+
+    const videoMetadata = screen.getByRole("button", { name: "Show metadata for done.mp4" });
+    expect(videoMetadata.querySelector("svg")).toBeInTheDocument();
+    fireEvent.click(videoMetadata);
     expect(screen.getByRole("dialog", { name: "Video metadata" })).toHaveTextContent('"seed": 42');
     fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
 
+    expect(screen.getByText("rendering · 28%").closest(".create-video-progress")).toHaveTextContent("Elena’s original title");
+    expect(document.title).toBe("28% | UGC Creator");
     const generate = screen.getByRole("button", { name: "Generate Video" });
     const prompt = screen.getByLabelText("Video prompt");
     fireEvent.change(prompt, { target: { value: "First prompt" } });
@@ -706,8 +823,10 @@ describe("CreateVideoPanel", () => {
     });
     expect(submissions[1]).toMatchObject({ render_overrides: { video_prompt: "Second prompt" } });
 
+    await waitFor(() => expect(document.title).toBe("64% | UGC Creator"));
     fireEvent.click(screen.getByRole("button", { name: "Remove from queue" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Remove from queue" })).not.toBeInTheDocument());
+    expect(document.title).toBe("UGC Creator");
   });
 
   it("shows a cancel icon beside active render progress", async () => {

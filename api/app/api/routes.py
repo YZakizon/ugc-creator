@@ -1120,7 +1120,10 @@ def update_job_voice_profile(
     )
     if current_voice_id == voice.id:
         return JobRead.model_validate(job_to_dict(job))
-    updated = repo.update_job_voice_profile(job_id, voice.id)
+    try:
+        updated = repo.update_job_voice_profile(job_id, voice.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if updated is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return JobRead.model_validate(job_to_dict(updated))

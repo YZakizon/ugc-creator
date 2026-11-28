@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.core.statuses import JobStatus
 from app.db.models import MediaAsset, RenderProfile, TopicJob, VoiceProfile
+from app.render_repository import active_render_status
 
 CLAIM_DURATION = timedelta(minutes=5)
 
@@ -38,16 +39,11 @@ class JobTTSRepository:
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
                 .where(TopicJob.id == job_id)
+                .with_for_update()
             )
             if job is None:
                 raise LookupError("Job not found")
-            if any(asset.kind == "audio" for asset in job.media_assets) and (
-                job.status != JobStatus.GENERATING_TTS.value
-            ):
-                job.status = JobStatus.READY_TO_RENDER.value
-                job.tts_claim_token = None
-                job.tts_claim_expires_at = None
-                session.commit()
+            if job.status != JobStatus.GENERATING_TTS.value:
                 return None
             if not job.speech_script:
                 raise ValueError("Job has no generated speech script")
@@ -60,7 +56,7 @@ class JobTTSRepository:
                     has_current_audio = any(
                         asset.kind == "audio" for asset in job.media_assets
                     )
-                    job.status = (
+                    job.status = active_render_status(session, job.id) or (
                         JobStatus.READY_TO_RENDER.value
                         if has_current_audio
                         else JobStatus.FAILED.value
@@ -150,6 +146,7 @@ class JobTTSRepository:
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
                 .where(TopicJob.id == context.job_id)
+                .with_for_update()
             )
             if job is None or job.tts_claim_token != context.claim_token:
                 return None
@@ -191,7 +188,9 @@ class JobTTSRepository:
             job.tts_generated_at = completed_at
             job.tts_claim_token = None
             job.tts_claim_expires_at = None
-            job.status = JobStatus.READY_TO_RENDER.value
+            job.status = (
+                active_render_status(session, job.id) or JobStatus.READY_TO_RENDER.value
+            )
             job.error_message = None
             session.commit()
             session.refresh(job)
@@ -229,10 +228,11 @@ class JobTTSRepository:
                     TopicJob.id == context.job_id,
                     TopicJob.tts_claim_token == context.claim_token,
                 )
+                .with_for_update()
             )
             if job is None:
                 return
-            job.status = (
+            job.status = active_render_status(session, job.id) or (
                 JobStatus.READY_TO_RENDER.value
                 if any(asset.kind == "audio" for asset in job.media_assets)
                 else JobStatus.FAILED.value

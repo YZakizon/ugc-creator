@@ -8,7 +8,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
-from app.core.statuses import BatchStatus, JobStatus
+from app.core.statuses import ACTIVE_RENDER_JOB_STATUSES, BatchStatus, JobStatus
 from app.db.models import (
     Batch,
     Character,
@@ -22,6 +22,7 @@ from app.db.models import (
     WorkflowParameterBinding,
     WorkflowTemplate,
 )
+from app.render_repository import active_render_status
 from app.schemas import (
     BatchCreate,
     CharacterCreate,
@@ -54,6 +55,28 @@ ACTIVE_CONTENT_STATUSES = {
     JobStatus.RENDERING.value,
     JobStatus.DOWNLOADING_OUTPUT.value,
 }
+
+
+def _created_video_rendering(job: TopicJob, batch: Batch) -> bool:
+    return (
+        batch.creation_mode == "created_video"
+        and job.status in ACTIVE_RENDER_JOB_STATUSES
+    )
+
+
+def _can_edit_audio_during_render(session: Session, job: TopicJob) -> bool:
+    if not _created_video_rendering(job, job.batch):
+        return False
+    attempts = session.execute(
+        select(RenderAttempt.effective_values, RenderAttempt.external_job_id).where(
+            RenderAttempt.job_id == job.id,
+            RenderAttempt.status.in_(ACTIVE_RENDER_JOB_STATUSES),
+        )
+    ).all()
+    return bool(attempts) and all(
+        "requested_inputs" in values or external_job_id is not None
+        for values, external_job_id in attempts
+    )
 
 
 def voice_preview_is_stale(preview: VoicePreview, now: datetime) -> bool:
@@ -429,7 +452,7 @@ class InMemoryBatchRepository:
             JobStatus.TTS_READY.value,
             JobStatus.READY_TO_RENDER.value,
             JobStatus.COMPLETED.value,
-        }:
+        } and not _created_video_rendering(job, self.batches[job.batch_id]):
             raise ValueError(f"Job cannot generate speech from status {job.status}")
         job.status = JobStatus.GENERATING_TTS.value
         job.error_message = None
@@ -487,6 +510,11 @@ class InMemoryBatchRepository:
     ) -> TopicJob | None:
         job = self.jobs.get(job_id)
         if job is not None:
+            if _created_video_rendering(job, self.batches[job.batch_id]):
+                job.voice_profile_id = voice_profile_id
+                return job
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError("Voice cannot change while generation is active")
             job.voice_profile_id = voice_profile_id
             job.error_message = None
             if job.speech_script and job.status in {
@@ -511,6 +539,9 @@ class InMemoryBatchRepository:
         job = self.jobs.get(job_id)
         if job is None:
             return None
+        if _created_video_rendering(job, self.batches[job.batch_id]):
+            job.speech_script = speech_script
+            return job
         if job.status in ACTIVE_CONTENT_STATUSES:
             raise ValueError("Audio script cannot change while generation is active")
         if speech_script != job.speech_script:
@@ -1197,7 +1228,7 @@ class SqlAlchemyBatchRepository:
                 JobStatus.TTS_READY.value,
                 JobStatus.READY_TO_RENDER.value,
                 JobStatus.COMPLETED.value,
-            }:
+            } and not _can_edit_audio_during_render(session, job):
                 raise ValueError(f"Job cannot generate speech from status {job.status}")
             job.status = JobStatus.GENERATING_TTS.value
             job.error_message = None
@@ -1216,10 +1247,16 @@ class SqlAlchemyBatchRepository:
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
                 .where(TopicJob.id == job_id)
+                .with_for_update()
             )
             if job is None:
                 return None
-            job.status = (
+            if (
+                job.status != JobStatus.GENERATING_TTS.value
+                or job.tts_claim_token is not None
+            ):
+                return job
+            job.status = active_render_status(session, job.id) or (
                 JobStatus.READY_TO_RENDER.value
                 if any(asset.kind == "audio" for asset in job.media_assets)
                 else JobStatus.CONTENT_READY.value
@@ -1278,9 +1315,16 @@ class SqlAlchemyBatchRepository:
                 select(TopicJob)
                 .options(selectinload(TopicJob.media_assets))
                 .where(TopicJob.id == job_id)
+                .with_for_update()
             )
             if job is None:
                 return None
+            if _can_edit_audio_during_render(session, job):
+                job.voice_profile_id = voice_profile_id
+                session.commit()
+                return job
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError("Voice cannot change while generation is active")
             job.voice_profile_id = voice_profile_id
             job.error_message = None
             if job.speech_script and job.status in {
@@ -1315,6 +1359,10 @@ class SqlAlchemyBatchRepository:
             )
             if job is None:
                 return None
+            if _can_edit_audio_during_render(session, job):
+                job.speech_script = speech_script
+                session.commit()
+                return job
             if job.status in ACTIVE_CONTENT_STATUSES:
                 raise ValueError(
                     "Audio script cannot change while generation is active"
@@ -1405,21 +1453,23 @@ class SqlAlchemyBatchRepository:
 
     def delete_job_audio_asset(self, asset_id: UUID) -> tuple[str, TopicJob] | None:
         with self.factory() as session:
-            asset = session.scalar(
-                select(MediaAsset)
-                .join(TopicJob, TopicJob.id == MediaAsset.job_id)
-                .options(
-                    selectinload(MediaAsset.job).selectinload(TopicJob.media_assets)
-                )
-                .where(MediaAsset.id == asset_id)
-                .with_for_update()
+            job_id = session.scalar(
+                select(MediaAsset.job_id).where(MediaAsset.id == asset_id)
             )
-            if asset is None:
+            if job_id is None:
+                return None
+            # Lock the job first, as in TTS completion.
+            job = session.scalar(
+                select(TopicJob).where(TopicJob.id == job_id).with_for_update()
+            )
+            asset = session.get(MediaAsset, asset_id)
+            if job is None or asset is None:
                 return None
             if asset.kind not in {"audio", "audio_archive"}:
                 raise ValueError("Only generated audio can be deleted here")
-            job = asset.job
-            if job.status in ACTIVE_CONTENT_STATUSES:
+            if job.status in ACTIVE_CONTENT_STATUSES or active_render_status(
+                session, job.id
+            ):
                 raise ValueError("Audio cannot be deleted while generation is active")
             was_active = asset.kind == "audio"
             object_key = asset.object_key

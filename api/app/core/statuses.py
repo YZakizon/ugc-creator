@@ -23,3 +23,11 @@ class JobStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+ACTIVE_RENDER_JOB_STATUSES = {
+    JobStatus.QUEUED.value,
+    JobStatus.SUBMITTING_RENDER.value,
+    JobStatus.RENDERING.value,
+    JobStatus.DOWNLOADING_OUTPUT.value,
+}

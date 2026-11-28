@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select, tuple_, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased, selectinload, sessionmaker
 
-from app.core.statuses import JobStatus
+from app.core.statuses import ACTIVE_RENDER_JOB_STATUSES, JobStatus
 from app.db.models import (
     Batch,
     MediaAsset,
@@ -28,12 +28,34 @@ def now() -> datetime:
 
 
 SUBMISSION_CLAIM_DURATION = timedelta(minutes=5)
-ACTIVE_RENDER_JOB_STATUSES = {
-    JobStatus.QUEUED.value,
-    JobStatus.SUBMITTING_RENDER.value,
-    JobStatus.RENDERING.value,
-    JobStatus.DOWNLOADING_OUTPUT.value,
-}
+
+
+def active_render_status(session: Session, job_id: UUID) -> str | None:
+    return session.scalar(
+        select(RenderAttempt.status)
+        .where(
+            RenderAttempt.job_id == job_id,
+            RenderAttempt.status.in_(ACTIVE_RENDER_JOB_STATUSES),
+        )
+        .order_by(RenderAttempt.created_at, RenderAttempt.id)
+        .limit(1)
+    )
+
+
+def _publish_render_status(
+    session: Session, job_id: UUID, status: str, error: str | None = None
+) -> None:
+    statement = (
+        update(TopicJob)
+        .where(
+            TopicJob.id == job_id,
+            TopicJob.status != JobStatus.GENERATING_TTS.value,
+        )
+        .values(status=status)
+    )
+    if error is not None:
+        statement = statement.values(error_message=error)
+    session.execute(statement)
 
 
 class RenderExecutionRepository:
@@ -110,7 +132,7 @@ class RenderExecutionRepository:
                 raise LookupError("Job not found")
             if requested is not None and job.batch.creation_mode != "created_video":
                 raise ValueError("Only created videos support queued render snapshots")
-            if requested is not None and job.status in {
+            if job.status in {
                 JobStatus.GENERATING_CONTENT.value,
                 JobStatus.GENERATING_TTS.value,
                 JobStatus.FITTING_DURATION.value,
@@ -279,18 +301,13 @@ class RenderExecutionRepository:
         )
         if job is None:
             return
-        remaining = session.scalar(
-            select(RenderAttempt.status)
-            .where(
-                RenderAttempt.job_id == job.id,
-                RenderAttempt.id != attempt.id,
-                RenderAttempt.status.in_(ACTIVE_RENDER_JOB_STATUSES),
-            )
-            .order_by(RenderAttempt.created_at, RenderAttempt.id)
-            .limit(1)
-        )
+        if job.status == JobStatus.GENERATING_TTS.value:
+            return
+        remaining = active_render_status(session, job.id)
         job.status = remaining or fallback
-        job.error_message = None if remaining else error
+        # A replacement speech failure stays visible after a snapshotted render ends.
+        if not (job.error_message and "requested_inputs" in attempt.effective_values):
+            job.error_message = None if remaining else error
 
     def recoverable_created_video_heads(self) -> list[tuple[UUID, bool]]:
         checked_at = now()
@@ -385,7 +402,9 @@ class RenderExecutionRepository:
             if claimed.rowcount == 1:
                 attempt = session.get(RenderAttempt, attempt_id)
                 if attempt is not None:
-                    attempt.job.status = JobStatus.SUBMITTING_RENDER.value
+                    _publish_render_status(
+                        session, attempt.job_id, JobStatus.SUBMITTING_RENDER.value
+                    )
                 session.commit()
                 return True, 0
             session.rollback()
@@ -505,7 +524,9 @@ class RenderExecutionRepository:
                 else values
             )
             attempt.status = "submitting_render"
-            attempt.job.status = JobStatus.SUBMITTING_RENDER.value
+            _publish_render_status(
+                session, attempt.job_id, JobStatus.SUBMITTING_RENDER.value
+            )
             session.commit()
             session.refresh(attempt)
             return attempt
@@ -545,7 +566,7 @@ class RenderExecutionRepository:
             if saved.rowcount != 1:
                 session.rollback()
                 return False
-            attempt.job.status = JobStatus.RENDERING.value
+            _publish_render_status(session, attempt.job_id, JobStatus.RENDERING.value)
             session.commit()
             return True
 
@@ -604,8 +625,7 @@ class RenderExecutionRepository:
             if status in {"failed", "completed", "cancelled"}:
                 self._set_job_render_status(session, attempt, job_status, error)
             else:
-                attempt.job.status = job_status
-                attempt.job.error_message = error
+                _publish_render_status(session, attempt.job_id, job_status, error)
             session.commit()
             return True
 
@@ -798,6 +818,7 @@ class RenderExecutionRepository:
                 job is not None
                 and remaining is None
                 and job.status not in ACTIVE_RENDER_JOB_STATUSES
+                and job.status != JobStatus.GENERATING_TTS.value
             ):
                 job.status = JobStatus.READY_TO_RENDER.value
                 job.error_message = None
