@@ -513,8 +513,8 @@ class InMemoryBatchRepository:
             if _created_video_rendering(job, self.batches[job.batch_id]):
                 job.voice_profile_id = voice_profile_id
                 return job
-            if job.status == JobStatus.GENERATING_TTS.value:
-                raise ValueError("Voice cannot change while speech is generating")
+            if job.status in ACTIVE_CONTENT_STATUSES:
+                raise ValueError("Voice cannot change while generation is active")
             job.voice_profile_id = voice_profile_id
             job.error_message = None
             if job.speech_script and job.status in {

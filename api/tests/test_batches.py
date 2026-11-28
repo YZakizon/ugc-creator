@@ -816,6 +816,49 @@ async def test_job_voice_and_workflow_can_override_profile_defaults() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_changed_after_read", [False, True])
+async def test_voice_profile_change_during_content_generation_returns_conflict(
+    monkeypatch: pytest.MonkeyPatch, status_changed_after_read: bool
+) -> None:
+    batches = InMemoryBatchRepository()
+    configuration = InMemoryConfigurationRepository()
+    monkeypatch.setattr(app.state, "batch_repository", batches, raising=False)
+    monkeypatch.setattr(
+        app.state, "configuration_repository", configuration, raising=False
+    )
+    voice = configuration.create_voice_profile(
+        VoiceProfileCreate(
+            name="New voice", provider="elevenlabs", provider_voice_id="voice"
+        )
+    )
+    job = batches.create_batch(BatchCreate(name="Draft", topics=["Elena"])).jobs[0]
+    if status_changed_after_read:
+        update_profile = batches.update_job_voice_profile
+
+        def change_status_then_update(job_id, voice_id):
+            job.status = "generating_content"
+            return update_profile(job_id, voice_id)
+
+        monkeypatch.setattr(
+            batches, "update_job_voice_profile", change_status_then_update
+        )
+    else:
+        job.status = "generating_content"
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.patch(
+            f"/api/v1/jobs/{job.id}/voice-profile",
+            json={"voice_profile_id": str(voice.id)},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Voice cannot change while generation is active"
+    assert job.voice_profile_id is None
+
+
+@pytest.mark.asyncio
 async def test_job_audio_upload_becomes_render_input(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

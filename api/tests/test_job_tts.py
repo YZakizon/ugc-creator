@@ -381,9 +381,9 @@ def test_failed_tts_replacement_preserves_current_audio() -> None:
         assert active_audio.filename == "original.mp3"
 
 
-@pytest.mark.parametrize("render_finishes_first", [False, True])
+@pytest.mark.parametrize("outcome", ["speech_first", "render_first", "speech_failed"])
 def test_created_video_speech_and_render_finish_independently(
-    render_finishes_first: bool,
+    outcome: str,
 ) -> None:
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -451,7 +451,21 @@ def test_created_video_speech_and_render_finish_independently(
     assert context.speech_script == "Replacement speech"
     assert tts.claim(job_id) is None
 
-    if render_finishes_first:
+    if outcome == "speech_failed":
+        tts.fail(context, "Replacement audio failed", None)
+        assert renders.update_progress(attempt_id, "rendering", 60)
+        job_after_progress = batches.get_job(job_id)
+        assert job_after_progress is not None
+        assert job_after_progress.status == JobStatus.RENDERING.value
+        assert job_after_progress.error_message == "Replacement audio failed"
+        assert renders.update_progress(attempt_id, "completed", 100)
+        job_after_render = batches.get_job(job_id)
+        assert job_after_render is not None
+        assert job_after_render.status == JobStatus.COMPLETED.value
+        assert job_after_render.error_message == "Replacement audio failed"
+        return
+
+    if outcome == "render_first":
         assert renders.update_progress(attempt_id, "completed", 100)
         assert batches.get_job(job_id).status == JobStatus.GENERATING_TTS.value
 
@@ -466,7 +480,7 @@ def test_created_video_speech_and_render_finish_independently(
         size_bytes=1,
     )
     assert saved is not None
-    if not render_finishes_first:
+    if outcome == "speech_first":
         assert saved.status == JobStatus.RENDERING.value
         with pytest.raises(ValueError, match="cannot be deleted"):
             batches.delete_job_audio_asset(audio_id)

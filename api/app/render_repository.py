@@ -45,14 +45,17 @@ def active_render_status(session: Session, job_id: UUID) -> str | None:
 def _publish_render_status(
     session: Session, job_id: UUID, status: str, error: str | None = None
 ) -> None:
-    session.execute(
+    statement = (
         update(TopicJob)
         .where(
             TopicJob.id == job_id,
             TopicJob.status != JobStatus.GENERATING_TTS.value,
         )
-        .values(status=status, error_message=error)
+        .values(status=status)
     )
+    if error is not None:
+        statement = statement.values(error_message=error)
+    session.execute(statement)
 
 
 class RenderExecutionRepository:
@@ -302,7 +305,9 @@ class RenderExecutionRepository:
             return
         remaining = active_render_status(session, job.id)
         job.status = remaining or fallback
-        job.error_message = None if remaining else error
+        # A replacement speech failure stays visible after a snapshotted render ends.
+        if not (job.error_message and "requested_inputs" in attempt.effective_values):
+            job.error_message = None if remaining else error
 
     def recoverable_created_video_heads(self) -> list[tuple[UUID, bool]]:
         checked_at = now()
