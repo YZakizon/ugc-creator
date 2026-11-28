@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from collections.abc import Mapping
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
@@ -145,8 +145,15 @@ class ComfyUIRenderer(VideoRenderer):
         return _find_client_prompt_in_history(history, client_id)
 
     async def cancel(self, external_job_id: str) -> None:
-        del external_job_id  # ComfyUI's interrupt endpoint is process-wide.
-        await self._request("POST", "/interrupt", json_body={})
+        path = f"/api/jobs/{quote(external_job_id, safe='')}/cancel"
+        result = _json_object(await self._request("POST", path, json_body={}))
+        if result.get("cancelled") is True:
+            return
+        if result.get("cancelled") is False:
+            queue = _json_object(await self._request("GET", "/queue"))
+            if not _prompt_id_in_queue(queue, external_job_id):
+                return
+        raise ComfyUIProviderError("ComfyUI did not cancel the requested prompt")
 
     async def fetch_outputs(self, external_job_id: str) -> list[RenderOutput]:
         response = await self._request("GET", f"/history/{external_job_id}")

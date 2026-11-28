@@ -456,18 +456,30 @@ async def cancel_render_attempt(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if attempt.status in {"completed", "failed", "cancelled"}:
         return render_attempt_read(attempt)
-    if attempt.external_job_id:
+    external_job_id = attempt.external_job_id
+    if external_job_id or attempt.submission_started_at:
+        renderer = ComfyUIRenderer(
+            base_url=node.base_url,
+            client_id=attempt.client_id,
+        )
         try:
-            await ComfyUIRenderer(
-                base_url=node.base_url,
-                client_id=attempt.client_id,
-            ).cancel(attempt.external_job_id)
+            if not external_job_id and attempt.client_id:
+                external_job_id = await renderer.find_submission(attempt.client_id)
+                if external_job_id:
+                    repo.save_submission(attempt_id, external_job_id, attempt.client_id)
+            if external_job_id:
+                await renderer.cancel(external_job_id)
         except ComfyUIProviderError as exc:
             raise HTTPException(
                 status_code=503,
                 detail="ComfyUI render cancellation failed. Try again.",
             ) from exc
-    cancelled = repo.cancel_attempt(attempt_id)
+    try:
+        cancelled = repo.cancel_attempt(
+            attempt_id, upstream_cancelled=external_job_id is not None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if cancelled is None:
         raise HTTPException(status_code=404, detail="Render attempt not found")
     return render_attempt_read(cancelled)

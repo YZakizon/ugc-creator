@@ -327,3 +327,41 @@ async def test_comfyui_rejected_submit_is_a_known_failure() -> None:
             )
 
     assert not isinstance(error.value, ComfyUISubmissionOutcomeUnknown)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cancelled, still_active", [(True, False), (False, False), (False, True)]
+)
+async def test_cancel_targets_only_the_requested_comfyui_prompt(
+    cancelled: bool,
+    still_active: bool,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path == "/api/jobs/target-prompt/cancel":
+            return httpx.Response(200, json={"cancelled": cancelled})
+        if request.url.path == "/queue":
+            return httpx.Response(
+                200,
+                json={
+                    "queue_running": [[1, "unrelated-prompt"]],
+                    "queue_pending": [[2, "target-prompt"]] if still_active else [],
+                },
+            )
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        renderer = ComfyUIRenderer(base_url="http://comfyui:8188", client=client)
+        if still_active:
+            with pytest.raises(ComfyUIProviderError, match="did not cancel"):
+                await renderer.cancel("target-prompt")
+        else:
+            await renderer.cancel("target-prompt")
+
+    expected = [("POST", "/api/jobs/target-prompt/cancel")]
+    if not cancelled:
+        expected.append(("GET", "/queue"))
+    assert calls == expected

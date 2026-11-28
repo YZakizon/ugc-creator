@@ -630,7 +630,11 @@ class RenderExecutionRepository:
             return True
 
     def cancel_attempt(
-        self, attempt_id: UUID, *, queued_only: bool = False
+        self,
+        attempt_id: UUID,
+        *,
+        queued_only: bool = False,
+        upstream_cancelled: bool = False,
     ) -> RenderAttempt | None:
         cancelled_at = now()
         with self.factory() as session:
@@ -641,24 +645,21 @@ class RenderExecutionRepository:
                 raise ValueError("This render has already left the queue")
             if attempt.status in {"completed", "failed", "cancelled"}:
                 return attempt
+            cancellable = update(RenderAttempt).where(
+                RenderAttempt.id == attempt_id,
+                RenderAttempt.status.in_(
+                    {"queued"} if queued_only else ACTIVE_RENDER_JOB_STATUSES
+                ),
+            )
+            if not upstream_cancelled:
+                cancellable = cancellable.where(
+                    RenderAttempt.submission_started_at.is_(None),
+                    RenderAttempt.external_job_id.is_(None),
+                )
             changed = cast(
                 CursorResult[Any],
                 session.execute(
-                    update(RenderAttempt)
-                    .where(
-                        RenderAttempt.id == attempt_id,
-                        RenderAttempt.status.in_(
-                            {
-                                "queued",
-                                "submitting_render",
-                                "rendering",
-                                "downloading_output",
-                            }
-                            if not queued_only
-                            else {"queued"}
-                        ),
-                    )
-                    .values(
+                    cancellable.values(
                         status="cancelled",
                         error_message="Render cancelled.",
                         submission_claim_expires_at=None,
@@ -672,7 +673,12 @@ class RenderExecutionRepository:
                 session.rollback()
                 if queued_only:
                     raise ValueError("This render has already left the queue")
-                return session.get(RenderAttempt, attempt_id)
+                current = session.get(RenderAttempt, attempt_id)
+                if current is not None and current.status in ACTIVE_RENDER_JOB_STATUSES:
+                    raise ValueError(
+                        "ComfyUI submission is in progress. Try cancelling again."
+                    )
+                return current
             self._set_job_render_status(
                 session, attempt, JobStatus.READY_TO_RENDER.value
             )

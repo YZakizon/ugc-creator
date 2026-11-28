@@ -626,6 +626,7 @@ Implement adapter features:
 - output discovery
 - upload/reference of source image/audio
 - cancellation if supported
+  through ComfyUI’s prompt-specific job endpoint for queued and running prompts
 - error normalization
 
 ## 10.5 Multiple GPU nodes
