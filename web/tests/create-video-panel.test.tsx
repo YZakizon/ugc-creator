@@ -738,6 +738,7 @@ describe("CreateVideoPanel", () => {
     const waiting = renderAttempt(video, { id: "waiting", status: "queued", assets: [], output_filename: null });
     const submissions: unknown[] = [];
     let removed = false;
+    document.title = "UGC Creator";
     let acceptFirst = () => {};
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
@@ -755,7 +756,7 @@ describe("CreateVideoPanel", () => {
         removed = true;
         return json({ ...waiting, status: "cancelled" });
       }
-      if (url.includes("/render-attempts")) return json({ items: removed ? [running, completed] : [waiting, running, completed] });
+      if (url.includes("/render-attempts")) return json({ items: removed ? [completed] : [waiting, { ...running, progress: submissions.length === 2 ? 64 : 28 }, completed] });
       if (url.includes("/render-nodes")) return json({ items: [{ id: "node-1", is_active: true, health_status: "healthy" }] });
       if (url.includes("/render-profiles")) return json({ items: [renderProfile] });
       return json({ items: [] });
@@ -781,6 +782,7 @@ describe("CreateVideoPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close metadata" }));
 
     expect(screen.getByText("rendering · 28%").closest(".create-video-progress")).toHaveTextContent("Elena’s original title");
+    expect(document.title).toBe("28% | UGC Creator");
     const generate = screen.getByRole("button", { name: "Generate Video" });
     const prompt = screen.getByLabelText("Video prompt");
     fireEvent.change(prompt, { target: { value: "First prompt" } });
@@ -797,8 +799,10 @@ describe("CreateVideoPanel", () => {
     });
     expect(submissions[1]).toMatchObject({ render_overrides: { video_prompt: "Second prompt" } });
 
+    await waitFor(() => expect(document.title).toBe("64% | UGC Creator"));
     fireEvent.click(screen.getByRole("button", { name: "Remove from queue" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Remove from queue" })).not.toBeInTheDocument());
+    expect(document.title).toBe("UGC Creator");
   });
 
   it("shows a cancel icon beside active render progress", async () => {

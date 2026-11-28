@@ -387,7 +387,12 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const elevenVoices = useQuery({ queryKey: ["elevenlabs-voices"], queryFn: getElevenLabsVoices });
   const usage = useQuery({ queryKey: ["elevenlabs-usage"], queryFn: getElevenLabsUsage, refetchInterval: 15000 });
   const nodes = useQuery({ queryKey: ["render-nodes"], queryFn: getRenderNodes });
-  const attempts = useQuery({ queryKey: ["render-attempts"], queryFn: getRenderAttempts, refetchInterval: 5000 });
+  const attempts = useQuery({
+    queryKey: ["render-attempts"],
+    queryFn: getRenderAttempts,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+  });
   const workflows = useQuery({ queryKey: ["workflow-templates"], queryFn: getWorkflowTemplates });
   const renderProfiles = useMemo(() => profiles.data?.items ?? [], [profiles.data?.items]);
   const voices = useMemo(() => elevenVoices.data?.items ?? [], [elevenVoices.data?.items]);
@@ -400,7 +405,14 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     [renderAttempts, currentJob?.id],
   );
   const hasFailedRenders = jobAttempts.some((attempt) => attempt.status === "failed");
-  const latestAttempt = jobAttempts.find((attempt) => attempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(attempt.status)) ?? jobAttempts[0];
+  const activeAttempt = jobAttempts.find((attempt) => attempt.status !== "queued" && CANCELABLE_RENDER_STATUSES.has(attempt.status))
+    ?? jobAttempts.find((attempt) => attempt.status === "queued");
+  const latestAttempt = activeAttempt ?? jobAttempts[0];
+  const tabProgress = activeAttempt
+    ? activeAttempt.progress > 1
+      ? `${activeAttempt.progress}%`
+      : activeAttempt.status.replaceAll("_", " ")
+    : null;
   const latestAttemptId = latestAttempt?.id;
   const latestAttemptStatus = latestAttempt?.status;
   const active = currentJob ? ACTIVE_STATUSES.has(currentJob.status) : false;
@@ -419,6 +431,16 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const selectedAudioAsset = currentJob?.audio_assets?.find((asset) => asset.id === selectedAudioAssetId) ?? defaultRenderAudioAsset(currentJob);
   const sourceImageDisplayName = pendingSourceImageName || mediaDisplayName(currentJob?.source_image_asset);
   const audioFileDisplayName = pendingAudioFileName || mediaDisplayName(currentJob?.audio_asset);
+
+  useEffect(() => {
+    if (!tabProgress) return;
+    const pageTitle = document.title;
+    const progressTitle = pageTitle ? `${tabProgress} | ${pageTitle}` : tabProgress;
+    document.title = progressTitle;
+    return () => {
+      if (document.title === progressTitle) document.title = pageTitle;
+    };
+  }, [tabProgress]);
 
   useEffect(() => {
     if (!latestAttemptStatus || !CANCELABLE_RENDER_STATUSES.has(latestAttemptStatus)) return;
