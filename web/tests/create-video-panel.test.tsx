@@ -449,7 +449,7 @@ describe("CreateVideoPanel", () => {
     expect(screen.getAllByText(audioError).length).toBeGreaterThan(0);
   });
 
-  it("shows delete icons for generated audio and completed videos", async () => {
+  it("offers downloads for generated audio and shows delete icons for audio and completed videos", async () => {
     const audioAsset = mediaAsset("audio-1", "audio", "created-video_content1_0001-audio.mp3");
     const archivedAudioAsset = mediaAsset("audio-2", "audio_archive", "created-video_content1_0000-audio.mp3");
     const videoAsset = mediaAsset("video-1", "video", "created-video_content1_0001-video.mp4");
@@ -474,6 +474,11 @@ describe("CreateVideoPanel", () => {
 
     expect(await screen.findByRole("button", { name: "Using created-video_content1_0001-audio.mp3" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Use created-video_content1_0000-audio.mp3" })).toBeEnabled();
+    for (const asset of [audioAsset, archivedAudioAsset]) {
+      const download = screen.getByRole("link", { name: `Download ${asset.filename}` });
+      expect(download).toHaveAttribute("href", asset.download_url);
+      expect(download).toHaveAttribute("download", asset.filename);
+    }
     const deleteVideoButton = await screen.findByRole("button", { name: "Delete created-video_content1_0001-video.mp4" });
     expect(deleteVideoButton.closest("article")).toHaveTextContent("elapsed 1m 30s");
     fireEvent.click(await screen.findByRole("button", { name: "Delete created-video_content1_0001-audio.mp3" }));
