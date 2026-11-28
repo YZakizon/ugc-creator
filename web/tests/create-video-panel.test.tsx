@@ -630,6 +630,8 @@ describe("CreateVideoPanel", () => {
     const workflow = workflowTemplate();
     const sizedWorkflow = { ...workflow, workflow_json: {
       ...workflow.workflow_json,
+      imageResize: { class_type: "ImageScale", inputs: { width: 640, height: 480 } },
+      video: { class_type: "EmptyLTXVLatentVideo", inputs: { width: ["width", 0], height: ["height", 0] } },
       width: { class_type: "PrimitiveInt", _meta: { title: "Width" }, inputs: { value: 768 } },
       height: { class_type: "PrimitiveInt", _meta: { title: "Height" }, inputs: { value: 512 } },
     } };
@@ -677,6 +679,7 @@ describe("CreateVideoPanel", () => {
     await waitFor(() => expect(screen.getByLabelText("Audio source")).toHaveValue("audio-new"));
     await waitFor(() => expect(savedOverrides).toContainEqual(expect.objectContaining({ duration: 12 })));
     const resolution = await screen.findByLabelText("Resolution preset");
+    expect(within(resolution).getByRole("option", { name: "Workflow default (768 × 512)" })).toBeInTheDocument();
     fireEvent.change(resolution, { target: { value: "512x288" } });
     fireEvent.change(screen.getByLabelText("Aspect ratio"), { target: { value: "9:16" } });
     expect(resolution).toHaveValue("288x512");
@@ -691,6 +694,8 @@ describe("CreateVideoPanel", () => {
     expect(within(paramsDialog).getByText("12")).toBeVisible();
     expect(within(paramsDialog).getByText("Width").closest("article")).toHaveTextContent("288");
     expect(within(paramsDialog).getByText("Height").closest("article")).toHaveTextContent("512");
+    expect(within(paramsDialog).getByText("width.value")).toBeVisible();
+    expect(within(paramsDialog).getByText("height.value")).toBeVisible();
     fireEvent.click(within(paramsDialog).getByRole("button", { name: "Close rendered LTX params" }));
     fireEvent.click(screen.getByRole("button", { name: "Save LTX controls" }));
     await waitFor(() => expect(savedOverrides).toContainEqual(expect.objectContaining({ width: 288, height: 512 })));

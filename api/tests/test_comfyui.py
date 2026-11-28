@@ -74,6 +74,10 @@ async def test_comfyui_submit_status_and_outputs() -> None:
 
 def test_resolution_overrides_bind_to_dimension_controls() -> None:
     workflow = {
+        "image_resize": {
+            "class_type": "ImageScale",
+            "inputs": {"width": 640, "height": 480},
+        },
         "width": {
             "class_type": "PrimitiveInt",
             "_meta": {"title": "Width"},
@@ -99,8 +103,20 @@ def test_resolution_overrides_bind_to_dimension_controls() -> None:
         ("Width", 288),
         ("Height", 512),
     ]
+    assert prepared["image_resize"] == workflow["image_resize"]
     assert prepared["video"] == workflow["video"]
     assert workflow["width"]["inputs"] == {"value": 768}
+
+
+def test_resolution_is_not_inferred_for_image_only_workflows() -> None:
+    workflow = {
+        "image_resize": {
+            "class_type": "ImageScale",
+            "inputs": {"width": 640, "height": 480},
+        },
+    }
+    assert inferred_ltx_bindings(workflow, []) == []
+    assert rendered_ltx_controls(workflow) == []
 
 
 def test_rendered_ltx_controls_use_prepared_workflow_values() -> None:
@@ -149,6 +165,10 @@ def test_rendered_ltx_controls_use_prepared_workflow_values() -> None:
             "_meta": {"title": "Height"},
             "class_type": "PrimitiveInt",
             "inputs": {"value": 1024},
+        },
+        "video": {
+            "class_type": "EmptyLTXVLatentVideo",
+            "inputs": {"width": ["width", 0], "height": ["height", 0]},
         },
     }
 
