@@ -7,11 +7,12 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from kombu.exceptions import OperationalError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api.routes import render_attempt_read
+from app.api.routes import cancel_render_attempt, render_attempt_read
 from app.db.base import Base
 from app.db.models import (
     Batch,
@@ -952,7 +953,14 @@ def test_failed_attempt_deletion_is_scoped_to_the_selected_created_video() -> No
         assert entry.error_message == "Provider failed"
 
 
-def test_cancel_render_attempt_returns_job_to_ready_to_render() -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage", ["local", "submitting", "discovered", "submitted", "provider_error"]
+)
+async def test_cancel_render_attempt_returns_job_to_ready_to_render(
+    stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -1000,14 +1008,43 @@ def test_cancel_render_attempt_returns_job_to_ready_to_render() -> None:
         RenderNodeCreate(name="Local", base_url="http://comfyui:8188")
     )
     attempt = repo.queue_attempt(job_id, node.id)
+    assert repo.claim_submission(attempt.id) == (True, 0)
     repo.save_prepared(
         attempt.id,
         {"1": {"class_type": "Text", "inputs": {"text": "Topic"}}},
         {"script": "Topic"},
     )
+    if stage != "local":
+        assert repo.mark_submission_started(attempt.id)
+    if stage in {"submitted", "provider_error"}:
+        assert repo.save_submission(attempt.id, "prompt-id", attempt.client_id)
+    upstream = AsyncMock()
+    upstream.find_submission.return_value = (
+        "prompt-id" if stage == "discovered" else None
+    )
+    if stage == "provider_error":
+        upstream.cancel.side_effect = ComfyUIProviderError("unavailable")
+    monkeypatch.setattr("app.api.routes.ComfyUIRenderer", lambda **_: upstream)
 
-    cancelled = repo.cancel_attempt(attempt.id)
+    if stage in {"submitting", "provider_error"}:
+        with pytest.raises(HTTPException) as exc:
+            await cancel_render_attempt(attempt.id, repo=repo)
+        assert exc.value.status_code == (409 if stage == "submitting" else 503)
+        persisted = repo.get_attempt(attempt.id)
+        assert persisted is not None
+        assert persisted.status == (
+            "submitting_render" if stage == "submitting" else "rendering"
+        )
+        return
 
+    cancelled = await cancel_render_attempt(attempt.id, repo=repo)
+    if stage == "local":
+        upstream.cancel.assert_not_awaited()
+    else:
+        upstream.cancel.assert_awaited_once_with("prompt-id")
+    if stage == "discovered":
+        upstream.find_submission.assert_awaited_once_with(attempt.client_id)
+        assert cancelled.external_job_id == "prompt-id"
     assert cancelled is not None
     assert cancelled.status == "cancelled"
     assert cancelled.error_message == "Render cancelled."
