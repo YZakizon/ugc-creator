@@ -15,9 +15,12 @@ class WorkflowField:
     value: ScalarValue
 
 
-def rendered_ltx_controls(workflow: dict[str, object]) -> list[dict[str, object]]:
+def rendered_ltx_controls(
+    workflow: dict[str, object], bindings: list[dict[str, object]] | None = None
+) -> list[dict[str, object]]:
     """Extract compact LTX controls from a prepared ComfyUI workflow."""
     fields = _scalar_fields(workflow)
+    width, height = _video_dimensions(workflow, fields, bindings or [])
     controls = [
         ("Image source", _find(fields, "loadimage", "image")),
         ("Audio source", _find(fields, "loadaudio", "audio")),
@@ -25,8 +28,8 @@ def rendered_ltx_controls(workflow: dict[str, object]) -> list[dict[str, object]
         ("FPS", _numeric_field(fields, r"^frame rate$", "fps")),
         ("Duration", _numeric_field(fields, "duration", "duration")),
         ("Seed", _primary_seed_field(workflow, fields)),
-        ("Width", _numeric_field(fields, r"^width$", "width")),
-        ("Height", _numeric_field(fields, r"^height$", "height")),
+        ("Width", width),
+        ("Height", height),
     ]
     for field in fields:
         if field.class_type == "ResolutionSelector":
@@ -107,6 +110,7 @@ def inferred_ltx_bindings(
         if isinstance(binding.get("semantic_key"), str)
     }
     fields = _scalar_fields(workflow)
+    width, height = _video_dimensions(workflow, fields, existing_bindings)
     controls: list[tuple[str, str, str, WorkflowField | None]] = [
         ("video_prompt", "template", "Prompt", _prompt_field(fields)),
         ("fps", "integer", "FPS", _numeric_field(fields, r"^frame rate$", "fps")),
@@ -117,6 +121,8 @@ def inferred_ltx_bindings(
             _numeric_field(fields, "duration", "duration"),
         ),
         ("seed", "integer", "Seed", _primary_seed_field(workflow, fields)),
+        ("width", "integer", "Width", width),
+        ("height", "integer", "Height", height),
     ]
     inferred: list[dict[str, object]] = []
     for semantic_key, value_type, _label, field in controls:
@@ -203,6 +209,52 @@ def _prompt_field(fields: list[WorkflowField]) -> WorkflowField | None:
         ),
         None,
     )
+
+
+def _video_dimensions(
+    workflow: dict[str, object],
+    fields: list[WorkflowField],
+    bindings: list[dict[str, object]],
+) -> tuple[WorkflowField | None, WorkflowField | None]:
+    candidates = {
+        (field.node_id, field.input_name): field
+        for field in fields
+        if type(field.value) is int and field.value > 0
+    }
+    latents = [
+        (node_id, node["inputs"])
+        for node_id, node in workflow.items()
+        if isinstance(node, dict)
+        and node.get("class_type") == "EmptyLTXVLatentVideo"
+        and isinstance(node.get("inputs"), dict)
+    ]
+
+    def dimension(name: str) -> WorkflowField | None:
+        binding = next(
+            (item for item in bindings if item.get("semantic_key") == name), None
+        )
+        if binding is not None:
+            return candidates.get(
+                (str(binding.get("node_id")), str(binding.get("input_name")))
+            )
+        if len(latents) != 1:
+            return None
+        node_id, inputs = latents[0]
+        value = inputs.get(name)
+        if (
+            isinstance(value, list)
+            and len(value) == 2
+            and value[1] == 0
+            and isinstance(value[0], str)
+        ):
+            source = candidates.get((value[0], "value"))
+            return source if source and source.class_type == "PrimitiveInt" else None
+        return candidates.get((node_id, name))
+
+    width, height = dimension("width"), dimension("height")
+    if width is None or height is None or width == height:
+        return None, None
+    return width, height
 
 
 def _numeric_field(

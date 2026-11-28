@@ -318,7 +318,8 @@ def render_attempt_read(attempt: object) -> RenderAttemptRead:
         for asset in getattr(attempt, "assets", [])
     ]
     data["rendered_controls"] = rendered_ltx_controls(
-        getattr(attempt, "workflow_snapshot", {})
+        getattr(attempt, "workflow_snapshot", {}),
+        getattr(attempt, "binding_snapshot", None),
     )
     return RenderAttemptRead.model_validate(data)
 

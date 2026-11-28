@@ -37,7 +37,7 @@ import {
   uploadWorkflowMedia,
 } from "@/lib/api";
 import { IMAGE_ASPECT_RATIOS, minimaxImageSize, optionalImageReferences } from "@/lib/workflow-controls";
-import { previewLtxRenderControls } from "@/lib/render-settings-preview";
+import { previewLtxRenderControls, workflowVideoSize } from "@/lib/render-settings-preview";
 import type { ElevenLabsVoice, Job, MediaAsset, OnDemandRenderOverrides, RenderAttempt, RenderedWorkflowControl, Topic, TopicSummary, WorkflowTemplate, WorkflowTemplateInput } from "@/lib/api";
 
 const ACTIVE_STATUSES = new Set(["generating_content", "generating_tts", "queued", "submitting_render", "rendering", "downloading_output"]);
@@ -140,7 +140,7 @@ function latestGeneratedAudioAsset(job: Job | null | undefined): MediaAsset | nu
 }
 
 function defaultRenderAudioAsset(job: Job | null | undefined): MediaAsset | null {
-  return latestGeneratedAudioAsset(job) ?? activeAudioAsset(job);
+  return activeAudioAsset(job) ?? latestGeneratedAudioAsset(job);
 }
 
 function mediaDisplayName(asset: MediaAsset | null | undefined): string {
@@ -299,6 +299,13 @@ function MetadataButton({ filename, onClick }: {
   );
 }
 
+const VIDEO_RESOLUTION_PRESETS = {
+  "16:9": [[512, 288], [1024, 576], [1536, 864]],
+  "9:16": [[288, 512], [576, 1024], [864, 1536]],
+} as const;
+
+type VideoAspectRatio = keyof typeof VIDEO_RESOLUTION_PRESETS;
+
 export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null; onSaved?: (topicId: string) => void }) {
   const queryClient = useQueryClient();
   const [currentTopicId, setCurrentTopicId] = useState<string | null>(topicId ?? null);
@@ -311,6 +318,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const [fps, setFps] = useState("24");
   const [duration, setDuration] = useState("30");
   const [seed, setSeed] = useState("");
+  const [videoSizeOverride, setVideoSizeOverride] = useState<{ width: number; height: number } | null>(null);
   const [workflowControls, setWorkflowControls] = useState<Record<string, boolean | number | string>>({});
   const [audioControlsOpen, setAudioControlsOpen] = useState(true);
   const [voiceSpeed, setVoiceSpeed] = useState("1");
@@ -427,6 +435,11 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
   const selectedWorkflow = workflowTemplates.find((workflow) => workflow.id === workflowTemplateId);
   const imageReferences = optionalImageReferences(selectedWorkflow);
   const imageSize = minimaxImageSize(selectedWorkflow);
+  const workflowSize = useMemo(() => selectedWorkflow && !minimaxImageSize(selectedWorkflow) ? workflowVideoSize(selectedWorkflow) : null, [selectedWorkflow]);
+  const videoSize = videoSizeOverride ?? workflowSize;
+  const aspectRatio = videoSize && videoSize.height > videoSize.width ? "9:16" : "16:9";
+  const resolutionPresets = VIDEO_RESOLUTION_PRESETS[aspectRatio];
+  const selectedResolution = videoSizeOverride ? `${videoSizeOverride.width}x${videoSizeOverride.height}` : "";
   const firstProfile = renderProfiles.find((profile) => profile.id === renderProfileId);
   const selectedAudioAsset = currentJob?.audio_assets?.find((asset) => asset.id === selectedAudioAssetId) ?? defaultRenderAudioAsset(currentJob);
   const sourceImageDisplayName = pendingSourceImageName || mediaDisplayName(currentJob?.source_image_asset);
@@ -479,6 +492,8 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     }
     setFps(String(job?.render_overrides?.fps ?? 24));
     setSeed(job?.render_overrides?.seed === undefined ? "" : String(job.render_overrides.seed));
+    const { width, height } = job?.render_overrides ?? {};
+    setVideoSizeOverride(typeof width === "number" && typeof height === "number" ? { width, height } : null);
     setWorkflowControls(isRecord(job?.render_overrides?.workflow_controls) ? job.render_overrides.workflow_controls as Record<string, boolean | number | string> : {});
     if (typeof createVideoSettings.voice_speed === "number") setVoiceSpeed(String(createVideoSettings.voice_speed));
     setVoiceModel(typeof createVideoSettings.voice_model === "string" ? createVideoSettings.voice_model : "eleven_multilingual_v2");
@@ -538,6 +553,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
       fps: Number.parseInt(fps, 10) || null,
       duration: Number.parseInt(effectiveDuration, 10) || null,
       seed: seed.trim() ? Number.parseInt(seed, 10) : null,
+      ...(workflowSize ? videoSizeOverride : null),
       workflow_controls: workflowControls,
       create_video: {
         workflow_template_id: workflowTemplateId || null,
@@ -551,7 +567,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         voice_speaker_boost: voiceSpeakerBoost,
       },
     };
-  }, [duration, fps, seed, videoPrompt, voiceId, voiceModel, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId, workflowControls]);
+  }, [duration, fps, seed, videoPrompt, voiceId, voiceModel, voiceOutputFormat, voiceSimilarity, voiceSpeakerBoost, voiceSpeed, voiceStability, voiceStyle, workflowTemplateId, workflowControls, workflowSize, videoSizeOverride]);
   const currentRenderedControls = useMemo(() => {
     if (!selectedWorkflow || !currentJob) return [];
     return previewLtxRenderControls(selectedWorkflow, {
@@ -828,6 +844,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     },
     onSuccess: (workflow) => {
       setWorkflowTemplateId(workflow.id);
+      setVideoSizeOverride(null);
       applyWorkflowBase(workflow, true);
       void queryClient.invalidateQueries({ queryKey: ["workflow-templates"] });
     },
@@ -888,8 +905,12 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
     },
     onSuccess: (updatedJob) => {
       setRenderPreflightError(null);
-      const nextDuration = applyAudioDuration(activeAudioAsset(updatedJob));
-      setPendingAudioFileName(mediaDisplayName(activeAudioAsset(updatedJob)));
+      const uploadedAudio = activeAudioAsset(updatedJob);
+      manualAudioSelectionRef.current = null;
+      pendingAudioSelectionRef.current = uploadedAudio?.id ?? null;
+      setSelectedAudioAssetId(uploadedAudio?.id ?? "");
+      const nextDuration = applyAudioDuration(uploadedAudio);
+      setPendingAudioFileName(mediaDisplayName(uploadedAudio));
       cacheUpdatedJob(updatedJob);
       if (nextDuration) {
         void updateJobRenderOverrides(updatedJob.id, renderOverrides(nextDuration)).then((savedJob) => {
@@ -1114,7 +1135,7 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
         <section className="panel create-video-card create-video-ltx">
           <div className="panel-heading"><div><h3>Workflow: {selectedWorkflow?.name ?? "Select a workflow"}</h3><p>{firstProfile ? `Using ${firstProfile.name}` : "Choose a render profile"}</p></div></div>
           <div className="create-video-workflow-row">
-            <label className="field-label">Base workflow<select value={workflowTemplateId} onChange={(event) => { const id = event.target.value; setWorkflowTemplateId(id); const workflow = workflowTemplates.find((item) => item.id === id); if (workflow) applyWorkflowBase(workflow, true); }}><option value="">Use render engine default</option>{workflowTemplates.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
+            <label className="field-label">Base workflow<select value={workflowTemplateId} onChange={(event) => { const id = event.target.value; setWorkflowTemplateId(id); setVideoSizeOverride(null); const workflow = workflowTemplates.find((item) => item.id === id); if (workflow) applyWorkflowBase(workflow, true); }}><option value="">Use render engine default</option>{workflowTemplates.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select></label>
           </div>
           <div className="create-video-override-group">
             <div className="create-video-override-heading"><div><strong>Workflow overrides</strong><small>Override the base workflow JSON, source image, or audio for this video only.</small></div></div>
@@ -1149,6 +1170,23 @@ export function CreateVideoPanel({ topicId, onSaved }: { topicId?: string | null
           <label className="field-label">Video prompt<textarea ref={videoPromptRef} rows={7} value={videoPrompt} onChange={(event) => editVideoPrompt(event.target.value)} placeholder="Describe the visual style and movement for LTX 2.3." /></label>
           <div className="prompt-template-vars create-video-vars"><small>Supported variable</small><button className="prompt-var" type="button" onClick={() => insertVideoPromptVariable("{{SCRIPT}}")}>{"{{SCRIPT}}"}</button><small>Expands to Audio Script when rendering.</small></div>
           <div className="ltx-control-row">
+            {workflowSize && <>
+              <label className="field-label">Aspect ratio<select value={aspectRatio} onChange={(event) => {
+                const ratio = event.target.value as VideoAspectRatio;
+                const index = resolutionPresets.findIndex(([width, height]) => `${width}x${height}` === selectedResolution);
+                const [width, height] = VIDEO_RESOLUTION_PRESETS[ratio][index < 0 ? 1 : index];
+                setVideoSizeOverride({ width, height });
+              }}>{Object.keys(VIDEO_RESOLUTION_PRESETS).map((ratio) => <option key={ratio}>{ratio}</option>)}</select></label>
+              <label className="field-label">Resolution preset<select value={selectedResolution} onChange={(event) => {
+                const preset = resolutionPresets.find(([width, height]) => `${width}x${height}` === event.target.value);
+                setVideoSizeOverride(preset ? { width: preset[0], height: preset[1] } : null);
+              }}>
+                <option value="">Workflow default ({workflowSize.width} × {workflowSize.height})</option>
+                {videoSizeOverride && !resolutionPresets.some(([width, height]) => width === videoSizeOverride.width && height === videoSizeOverride.height) &&
+                  <option value={selectedResolution}>{videoSizeOverride.width} × {videoSizeOverride.height}</option>}
+                {resolutionPresets.map(([width, height]) => <option key={width} value={`${width}x${height}`}>{width} × {height}</option>)}
+              </select></label>
+            </>}
             {imageSize && <>
               <label className="field-label">Aspect ratio<select value={String(workflowControls.image_aspect_ratio ?? imageSize.aspectRatio)} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_aspect_ratio: event.target.value }))}>{IMAGE_ASPECT_RATIOS.map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</select></label>
               <label className="field-label">Image megapixels<input type="number" min="0.1" max="16" step="0.01" value={String(workflowControls.image_megapixels ?? imageSize.megapixels)} onChange={(event) => setWorkflowControls((current) => ({ ...current, image_megapixels: event.target.value === "" ? "" : Number(event.target.value) }))} /></label>

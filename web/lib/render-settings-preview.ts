@@ -36,8 +36,8 @@ function expand(value: Scalar, values: Record<string, string | number | undefine
   });
 }
 
-function fields(workflow: WorkflowTemplate, job: Job): Field[] {
-  const values = {
+function fields(workflow: WorkflowTemplate, job?: Job): Field[] {
+  const values = job ? {
     SCRIPT: job.speech_script ?? job.topic,
     TOPIC: job.topic,
     HOOK: job.hook ?? "",
@@ -45,7 +45,7 @@ function fields(workflow: WorkflowTemplate, job: Job): Field[] {
     DURATION: numericOverride(job, "duration") ?? job.target_duration_seconds,
     AUDIO: assetDisplayName(job.audio_asset) ?? storedMediaName(workflow, "audio"),
     SOURCE_IMAGE: assetDisplayName(job.source_image_asset) ?? storedMediaName(workflow, "source_image"),
-  };
+  } : {};
   return Object.entries(workflow.workflow_json).flatMap(([nodeId, rawNode]) => {
     if (!isRecord(rawNode) || typeof rawNode.class_type !== "string" || !isRecord(rawNode.inputs)) return [];
     const title = isRecord(rawNode._meta) && typeof rawNode._meta.title === "string" ? rawNode._meta.title : "";
@@ -61,6 +61,39 @@ function fields(workflow: WorkflowTemplate, job: Job): Field[] {
       }];
     });
   });
+}
+
+function videoDimensionFields(workflow: WorkflowTemplate, items: Field[]) {
+  const candidates = items.filter((field) => typeof field.value === "number" && Number.isInteger(field.value) && field.value > 0);
+  const latents = Object.entries(workflow.workflow_json).flatMap(([id, node]) => (
+    isRecord(node) && node.class_type === "EmptyLTXVLatentVideo" && isRecord(node.inputs)
+      ? [{ id, inputs: node.inputs }]
+      : []
+  ));
+
+  function dimension(name: "width" | "height") {
+    const binding = workflow.bindings.find((item) => item.semantic_key === name);
+    if (binding) return candidates.find((field) => field.node_id === binding.node_id && field.input_name === binding.input_name);
+
+    if (latents.length !== 1) return undefined;
+    const [{ id, inputs }] = latents;
+    const value = inputs[name];
+    if (Array.isArray(value) && value.length === 2 && value[1] === 0 && typeof value[0] === "string") {
+      return candidates.find((field) => field.node_id === value[0] && field.input_name === "value" && field.classType === "PrimitiveInt");
+    }
+    return candidates.find((field) => field.node_id === id && field.input_name === name);
+  }
+
+  const width = dimension("width");
+  const height = dimension("height");
+  return width && height && width !== height ? { width, height } : null;
+}
+
+export function workflowVideoSize(workflow: WorkflowTemplate) {
+  const dimensions = videoDimensionFields(workflow, fields(workflow));
+  const width = dimensions?.width.value;
+  const height = dimensions?.height.value;
+  return typeof width === "number" && typeof height === "number" ? { width, height } : null;
 }
 
 function first(items: Field[], predicate: (field: Field) => boolean): Field | undefined {
@@ -101,6 +134,7 @@ function primarySeedField(workflow: WorkflowTemplate, items: Field[]): Field | u
 
 export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): RenderedWorkflowControl[] {
   const items = fields(workflow, job);
+  const dimensions = videoDimensionFields(workflow, items);
   const numeric = (field: Field) => typeof field.value === "number";
   const prompt = stringOverride(job, "video_prompt");
   const fps = numericOverride(job, "fps");
@@ -116,8 +150,8 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
     ["FPS", first(items, (field) => numeric(field) && (/^frame rate$/i.test(field.title.trim()) || /^fps$/i.test(field.input_name)))],
     ["Duration", first(items, (field) => numeric(field) && (/duration/i.test(field.title) || /^duration$/i.test(field.input_name)))],
     ["Seed", primarySeedField(workflow, items)],
-    ["Width", first(items, (field) => numeric(field) && (/^width$/i.test(field.title.trim()) || /^width$/i.test(field.input_name)))],
-    ["Height", first(items, (field) => numeric(field) && (/^height$/i.test(field.title.trim()) || /^height$/i.test(field.input_name)))],
+    ["Width", dimensions?.width],
+    ["Height", dimensions?.height],
   ];
   const rendered = controls.flatMap(([label, field]) => {
     if (!field) return [];
@@ -136,6 +170,8 @@ export function previewLtxRenderControls(workflow: WorkflowTemplate, job: Job): 
     if (label === "FPS" && fps !== undefined) value = fps;
     if (label === "Duration" && duration !== undefined) value = duration;
     if (label === "Seed" && seed !== undefined) value = seed;
+    if (label === "Width") value = numericOverride(job, "width") ?? value;
+    if (label === "Height") value = numericOverride(job, "height") ?? value;
     return [{ label, node_id: field.node_id, input_name: field.input_name, value }];
   });
   const overrides = isRecord(job.render_overrides?.workflow_controls) ? job.render_overrides.workflow_controls : {};
